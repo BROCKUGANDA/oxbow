@@ -1,0 +1,11 @@
+# Line endings are normalised to LF in the repository and on checkout.
+# This is not cosmetic: `make verify-determinism` compares artifact bytes and the P9
+# packet gate requires two renders to be byte-identical, so a platform-dependent
+# checkout of a text artifact would fail a gate that the code passes.
+* text=auto eol=lf
+*.parquet binary
+*.zip binary
+*.csv text eol=lf
+*.svg text eol=lf
+*.png binary
+*.jar binary

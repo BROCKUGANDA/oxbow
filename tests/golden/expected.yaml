@@ -1,0 +1,794 @@
+# OXBOW golden fixture - hand-computed expectations (P3b, plan SS9)
+#
+# Every expected value in this file was derived ON PAPER from the rule
+# definitions and defaults in plan SS9 / config/rules.yaml, BEFORE any rule
+# code exists. 00 SB: "a fixture whose expected value came from the code it
+# tests proves nothing." Row ordinals below are the integer part of the
+# namespaced txn_id (golden:000057 -> 57).
+#
+# Loader: tests/golden/loader.py. Regenerate the rows:
+#   uv run python tests/golden/build_fixture.py   (seed 1337, byte-stable)
+
+schema_version: golden-v1.0
+fixture: tests/golden/transactions.csv
+generated_by: tests/golden/build_fixture.py
+seed: 1337
+source_dataset: golden
+
+counts:
+  rows: 534
+  distinct_accounts: 319
+  scenarios: 59
+  usd_rows: 2
+
+# --- pinned rule parameters (mirror of config/rules.yaml; the self-check test
+#     fails if the committed config drifts from this table) ---
+rule_params:
+  R1: { p: 0.80, delta_minutes: 60, min_amount_minor: 10000 }
+  R2: { k: 8, window_hours: 24, tau_source: corpus_percentile, tau_percentile: 25 }
+  R3: { k: 8, window_hours: 24 }
+  R4: { retention: 0.6, min_length: 3, max_length: 6, require_strict_time_increase: true,
+        down_weight_periodic: true, periodic_period_hours: 168, periodic_down_weight: 0.3 }
+  R5: { n: 3, window_days: 7, threshold_band_low: 0.80, threshold_band_high: 1.00, synthetic: true }
+  R6: { z: 3.0, baseline_days: 30, min_baseline_days: 5, robust_scale: mad }
+  R7: { dormant_days: 30, k: 5, window_hours: 24 }
+  R8: { q: 0.40, min_transactions: 10, quiet_hours_source: account_decile }
+  R9: { m: 4, recent_days: 7, baseline_days: 30 }
+  R10: { s: 0.70, holding_hours: 6 }
+  R11: { g: 0.80, c: 6, window_hours: 48 }
+  R12: { min_length: 3, delta_hours: 24, decay: 0.95, require_non_increasing: true }
+
+# --- fixture-level synthetic assumptions (see DEVIATIONS block at bottom) ---
+assumptions:
+  structuring_threshold_minor: 2_500_000   # T for R5; band 2_000_000..2_500_000
+  tau_expectation_minor: 22_000            # corpus p25 of amount_minor (EUR-only identical)
+  tau_design_bracket: "2*4125 < tau < 240000/2, i.e. 8250 < tau < 120000"
+  reversal_encoding: "txn_type == REVERSAL marks a reversal (guards.exclude_reversals_from)"
+  dormant_gap_reading: >
+    R7 dormancy is calendar days between last activity and next activity
+    (Jan 5 -> Feb 9 = 35 days by date subtraction; 34 fully empty days).
+    The 29d near-miss (Jan 5 -> Feb 3) fails under BOTH readings (28 full /
+    29 by subtraction), so the expectation is interpretation-proof.
+  odd_hour_quiet_set: >
+    quiet hours = the account's own lowest-volume hours (config
+    quiet_hours_source: account_decile). Every planted night-hour txn sits in
+    an hour with ZERO baseline volume, so ANY decile rule (2.4h strict, or
+    every zero-volume hour) puts them in the quiet set; every must-not-fire
+    variant is below q under either reading.
+
+conventions:
+  r5_direction: >
+    R5 is evaluated on transactions ORIGINATED by the account. Under a
+    direction-blind count the shared ACC-AGENT-S1 (receives the whole ladder)
+    would also appear - the self-check tolerates either reading for AGENT-S1
+    only; every other R5 statement is direction-independent.
+  r6_baseline: >
+    z = (max daily count - median of active-day daily counts) /
+    (1.4826 * MAD of active-day daily counts). "Daily txn count" is the
+    account's own activity in any direction, matching the committed
+    txn_count_in_24h feature (features.yaml), so a one-counterparty burst
+    scores identically on both sides of the pair. Active-day count <
+    min_baseline_days -> never evaluated. MAD == 0 -> not significant (no
+    hit). Near-misses are additionally proven below z=3 under the unscaled
+    raw-MAD convention where that changes the verdict (S38).
+  r11_counting: >
+    count = distinct counterparties whose FIRST pair-transaction with the
+    account falls inside W=48h is the fresh numerator; denominator = distinct
+    counterparties ACTIVE in W. All must-not-fire R11 accounts fail under
+    every alternative reading except the four hubs declared as intended
+    R11 positives/collateral hits.
+  r12_gate: >
+    min_length 3 = at least 3 hops; gate is non-increasing amounts
+    (require_non_increasing); decay enters severity only. S28 fires under a
+    decay-gate reading too (every hop is exactly x0.95), so the planted
+    positive is interpretation-proof.
+  zero_and_reversal: >
+    zero-value rows excluded from value rules (guards); reversals excluded
+    from R4/R12/R1 (guards).
+
+# ===========================================================================
+# EXPECTED RULE HIT MATRIX (hand-derived; account -> rules that MUST fire)
+# ===========================================================================
+expected_hits:
+  R1: [ACC-MULE-01, ACC-MULE-02, ACC-MULE-07]
+  R2: [ACC-GATHER-01, ACC-GATHER-BIG]
+  R3: [ACC-SCATTER-01, ACC-SCATTER-BIG]
+  R4: [ACC-CYCA-1, ACC-CYCA-2, ACC-CYCA-3, ACC-CYCA-4,
+       ACC-CYCB-1, ACC-CYCB-2, ACC-CYCB-3,
+       ACC-EMP-01, ACC-MERCH-01, ACC-PAY-01, ACC-SUPP-01]   # last four DOWN-WEIGHTED
+  R5: [ACC-SMURF-A, ACC-SMURF-B]
+  R6: [ACC-VEL-01, ACC-VEL-B1]
+  R7: [ACC-SLEEP-01, ACC-SLEEP-B]
+  R8: [ACC-NIGHT-01]
+  R9: [ACC-REGIME-01]
+  R10: [ACC-CASH-01, ACC-MULE-07]
+  R11: [ACC-NEO-01, ACC-GATHER-01, ACC-GATHER-BIG, ACC-SCATTER-01, ACC-SCATTER-BIG]
+  R12: [ACC-CHN-1, ACC-CHN-2, ACC-CHN-3, ACC-CHN-4, ACC-CHN-5]
+
+expected_non_hits_any_rule: >
+  Every account NOT listed in expected_hits must produce zero hits across
+  R1-R12. That covers all planted near-misses (MULE-04/05/06, CASH-02/03,
+  GATHER-NM7/NMW/NMT, SCATTER-NM7, CYCN-*, CYCL7-*, CYCT-*, SELF-01, RA-*,
+  RV-*, CHNX-*, CHNS-*, CHNT-*, CHND-*, SMURF-NM1/NM2, VEL-NM1/NM2, B2, B3,
+  SLEEP-NM29/NM4, NIGHT-NM, NIGHT-FEW, DAWN-01, REGIME-NM, NEO-02, NEO-03,
+  XCUR-01, BURST-A/B, RAIL-AGENT, RAIL-MARKET, LONER, EXT-001, EXT-002,
+  ZERO-01/02, IMBAL-01/02, FUND-*, PAYOUT-*, WHALE-* except via NMT,
+  RPT-*, NR/NNM/NFW/DRW/RGA/RGB/RGN/SL*/S29/S4/NEO-N|M|P, CYCL7 decoys,
+  RS-*, MK-*, BUR-H/BUR-S) and all 50 noise accounts ACC-N001..N050.
+
+severity_orderings:
+  - rule: R1
+    order: [ACC-MULE-01, ACC-MULE-07, ACC-MULE-02]
+    justification: "severity scales with the share above p: 0.92 (0.12 over) > 0.88 (0.08) > 0.85 (0.05)"
+  - rule: R2
+    order: [ACC-GATHER-BIG, ACC-GATHER-01]
+    justification: "k above threshold: 11 senders > 9 senders (saturates at 2k=16)"
+  - rule: R3
+    order: [ACC-SCATTER-BIG, ACC-SCATTER-01]
+    justification: "11 distinct receivers > 9"
+  - rule: R5
+    order: [ACC-SMURF-A, ACC-SMURF-B]
+    justification: "count above n: A holds 4 in-band txns in one 7d window (n+1), B exactly 3 (n); severity scales with count above n"
+  - rule: R7
+    order: [ACC-SLEEP-B, ACC-SLEEP-01]
+    justification: "k ties at 6; dormancy length 91 calendar days > 35; severity scales with dormancy"
+  - rule: R10
+    order: [ACC-MULE-07, ACC-CASH-01]
+    justification: "cash share above s: 0.88 - 0.70 = 0.18 > 0.775 - 0.70 = 0.075"
+  - rule: R6
+    order: [ACC-VEL-01, ACC-VEL-B1]
+    justification: "TIE - same 27 paired events observed from both ends; z = 6.74 both; equal severity is the expected result"
+  - rule: R11
+    order: [ACC-GATHER-BIG, ACC-GATHER-01, ACC-SCATTER-BIG, ACC-SCATTER-01, ACC-NEO-01]
+    justification: "all share 1.0; count above c: 12 > 10, 11 > 9, NEO-01 lowest positive at 8; ordering only asserted pairwise within each (BIG > named hub); NO cross-family claim beyond that"
+
+overlap_group_expectations:
+  - account: ACC-MULE-07
+    rules: [R1, R10]
+    group: extraction
+    expectation: >
+      R1 (0.88 >= 0.80 within 35min) and R10 (cash share 0.88 >= 0.70 within
+      6h) fire on the SAME receive->cash-out event pair. The evidence display
+      must collapse them into ONE extraction group and the score counts the
+      group once (test_overlapping_rules_counted_once).
+  - accounts: [ACC-GATHER-01, ACC-GATHER-BIG]
+    rules: [R2, R11]
+    group: aggregation
+    expectation: "fan-in and new-counterparty surge describe the same gather pattern: one aggregation group"
+  - accounts: [ACC-SCATTER-01, ACC-SCATTER-BIG]
+    rules: [R3, R11]
+    group: none-in-config
+    expectation: "R3 is not in any overlap group; both hits remain separate - stated so the grouping is trusted to be config-driven, not a blanket dedupe"
+  - rules: [R4, R12]
+    group: layering
+    expectation: "the fixture DELIBERATELY has no account firing both R4 and R12 (cycles were bump-protected against chain rotations), so layering-group co-firing is NOT exercised here; recorded as a fixture gap in README, not silently claimed"
+
+cycle_expectations:
+  - name: CYC-A
+    nodes: [ACC-CYCA-1, ACC-CYCA-2, ACC-CYCA-3, ACC-CYCA-4]
+    edges: ["309: CYCA-1->CYCA-2 1000000 @2024-03-01T09:00Z",
+            "311: CYCA-2->CYCA-3 1020000 @10:10Z",
+            "312: CYCA-3->CYCA-4 1050000 @11:50Z",
+            "314: CYCA-4->CYCA-1 850000 @12:30Z"]
+    length: 4
+    retention: "850000/1000000 = 0.8500 (alt min/max 850000/1050000 = 0.8095) >= 0.6"
+    time_respecting: "09:00 < 10:10 < 11:50 < 12:30 strictly increasing"
+    expected_return: "one cycle, node list above (canonical rotation from smallest node key ACC-CYCA-1)"
+    must_not: [R1, R12]
+    r12_must_not_reason: >
+      rotations e2,e3 (1020000<1050000 increase) and e3,e4,e1 (1050000,850000,
+      1000000: 850000->1000000 increase) and e4,e1,e2 (850000,1000000,1020000:
+      increases) - no >=3 consecutive non-increasing edge run exists.
+  - name: CYC-B
+    nodes: [ACC-CYCB-1, ACC-CYCB-2, ACC-CYCB-3]
+    edges: ["335: 700000 @2024-03-03T10:00Z", "336: 720000 @12:00Z", "337: 670000 @14:00Z"]
+    retention: "670000/700000 = 0.9571 (min/max 670000/720000 = 0.9306) >= 0.6"
+    length: 3
+    must_not: [R1, R12]
+  - name: PAYROLL
+    nodes: [ACC-EMP-01, ACC-MERCH-01, ACC-SUPP-01, ACC-PAY-01]
+    edges_by_lap: "laps start 2024-03-04/11/18T08:00Z; lap1 edges 346, 350, 365, 371; lap2 396, 399, 402, 406; lap3 419, 421, 424, 425"
+    retention_lap: "786000/800000 = 0.9825 >= 0.6"
+    period_hours: 168
+    expectation: >
+      ONE pattern-signature hit (guards.deduplicate_by pattern_signature
+      collapses the three laps and the lap-mixing walks a time-respecting
+      search may find) on the 4 nodes, with severity multiplied by the
+      configured periodic_down_weight 0.3 - a real cycle, down-weighted, not
+      suppressed (test_periodic_cycle_downweighted).
+  - name: RETENTION-NEAR-MISS
+    nodes: [ACC-CYCN-1, ACC-CYCN-2, ACC-CYCN-3]
+    arithmetic: "590000/1000000 = 0.590 < 0.6 (min/max 590000/1200000 = 0.492)"
+    expectation: "must return NOTHING"
+  - name: LENGTH-7
+    nodes: "ACC-CYCL7-1..7"
+    arithmetic: "retention 700000/1000000 = 0.70 >= 0.6, times strictly increase, but loop uses 7 distinct nodes > max_length 6"
+    expectation: "must return NOTHING (and no R12 rotation: bumps at e2, e4, e6 + e1 > e7 kill every 3-run)"
+  - name: TIME-REVERSED
+    edges: "C->A 780000 @2024-03-06T10:00Z; B->C 750000 @11:00Z; A->B 700000 @12:00Z"
+    expectation: "cycle enumeration must return NOTHING (plan SS9 gate: a test with a time-reversed loop returns nothing)"
+    proof: >
+      start A: leave 12:00, next leg out of B is 11:00 < 12:00, dead. start B:
+      11:00 then C->A 10:00 < 11:00, dead. start C: 10:00 -> A (A->B 12:00 ok)
+      -> B (B->C 11:00 < 12:00), dead. Every rotation fails.
+  - name: SELF-TRANSFER
+    row: 378
+    expectation: "no cycle, no fan; contributes self_transfer_count = 1 only"
+  - name: REVERSAL-TRIANGLE
+    rows: [389, 391, 392]
+    naive_arithmetic: "if 392 were a transfer: P->Q->R->P, times 08:00<09:30<11:00, retention 600000/600000 = 1.00 -> false R4 AND a 3-hop non-increasing false R12"
+    expectation: "R4 and R12 must both return NOTHING (guards.exclude_reversals_from)"
+  - name: REVERSAL-PAIR
+    rows: [386, 387]
+    expectation: "typed reversal linked to the original; no cycle (residual loop would be 2 nodes < min_length), no R1 (3h apart), kept visible"
+
+# ===========================================================================
+# SCENARIOS: plant -> rows -> arithmetic -> expected hits / non-hits
+# rows are txn ordinals (golden:NNNNNN)
+# ===========================================================================
+scenarios:
+
+  - id: S01_r1_pass_through_092
+    rule: R1
+    kind: positive
+    rows: [56, 57]
+    plant: "FUND-01 -> MULE-01 500000 @2024-02-01T04:00Z; MULE-01 -> EXT-001 460000 @04:40Z"
+    arithmetic: "A=500000 >= min 10000; dt=40min <= 60; ratio 460000/500000 = 0.9200 >= p=0.80 -> R1 fires"
+    expect_fire: [R1@ACC-MULE-01]
+    expect_silent: [R12@ACC-MULE-01, R10@ACC-MULE-01, R2@EXT-001]
+
+  - id: S02_r1_pass_through_088_overlap_r10
+    rule: R1+R10
+    kind: positive, overlap-group entity
+    rows: [58, 59]
+    plant: "FUND-01 -> MULE-07 1000000 @06:00Z; MULE-07 --CASH_OUT--> EXT-001 880000 @06:35Z"
+    arithmetic: "R1: 880000/1000000 = 0.88 >= 0.80 within 35min. R10: cash share 880000/1000000 = 0.88 >= 0.70 within 35min <= 6h. Both on the same event pair -> extraction group counts as one piece of evidence"
+    expect_fire: [R1@ACC-MULE-07, R10@ACC-MULE-07]
+    evidence_group: {extraction: one}
+
+  - id: S03_r1_pass_through_085
+    rule: R1
+    kind: positive (severity low end)
+    rows: [60, 62]
+    arithmetic: "255000/300000 = 0.8500 >= 0.80 within 25min -> fires; ranks below MULE-07 and MULE-01"
+    expect_fire: [R1@ACC-MULE-02]
+
+  - id: S04_r1_near_miss_ratio_079
+    rule: R1
+    kind: near-miss
+    rows: [69, 70]
+    arithmetic: "316000/400000 = 0.7900 < p=0.80 -> MUST NOT fire"
+    expect_fire: []
+
+  - id: S05_r1_near_miss_min_amount
+    rule: R1
+    kind: near-miss
+    rows: [71, 72]
+    arithmetic: "ratio 8500/9000 = 0.9444 >= 0.80 within 20min, BUT received A=9000 < min_amount_minor=10000 (the 100-EUR floor in config) -> MUST NOT fire"
+    expect_fire: []
+
+  - id: S06_r1_near_miss_window_61min
+    rule: R1
+    kind: near-miss
+    rows: [73, 74]
+    arithmetic: "ratio 570000/600000 = 0.95 >= 0.80, but send at 07:01Z is 61min after receipt 06:00Z; 61 > dt=60 -> MUST NOT fire"
+    expect_fire: []
+
+  - id: S07_r10_fast_cash_out_0775
+    rule: R10
+    kind: positive
+    rows: [83, 84, 87]
+    plant: "FUND-05 -> CASH-01 800000 @2024-02-03T06:00Z; CASH_OUT 320000 @08:00Z; CASH_OUT 300000 @10:00Z"
+    arithmetic: "cash-out within holding: 320000 + 300000 = 620000; 620000/800000 = 0.7750 >= s=0.70; longest hold 4h <= h=6h -> fires. R1 stays out: first exit 120min > 60min after receipt"
+    expect_fire: [R10@ACC-CASH-01]
+    expect_silent: [R1@ACC-CASH-01]
+
+  - id: S08_r10_near_miss_share_069
+    rule: R10
+    kind: near-miss
+    rows: [90, 92]
+    arithmetic: "690000/1000000 = 0.6900 < s=0.70 -> MUST NOT fire"
+    expect_fire: []
+
+  - id: S09_r10_near_miss_holding_7h
+    rule: R10
+    kind: near-miss
+    rows: [94, 96]
+    arithmetic: "900000/1000000 = 0.90 >= s, but cash-out 2024-02-04T03:10Z is 7h10m after the 20:00Z receipt; 7h10m > h=6h -> MUST NOT fire"
+    expect_fire: []
+
+  - id: S10_cross_currency_no_sum
+    rule: R1
+    kind: structural edge case (cross-currency)
+    rows: [100, 101, 102, 103]
+    plant: "XCUR-01 receives 500000 EUR @07:00Z and 700000 USD @07:05Z; sends 450000 USD @07:20Z and 200000 EUR @07:25Z"
+    arithmetic: >
+      Correct per-currency pass-through: EUR 200000/500000 = 0.400 < 0.8;
+      USD 450000/700000 = 0.643 < 0.8 -> no R1. A currency-blind pairing of
+      the USD out against the EUR in would see 450000/500000 = 0.90 and fire
+      - that is the defect this scenario exists to catch
+      (test_cross_currency_sum_raises).
+    expect_fire: []
+
+  - id: S11_r2_fan_in_positive
+    rule: R2
+    kind: positive (+collateral R11)
+    rows: [130, 131, 132, 133, 135, 136, 137, 138, 139, 140]
+    plant: "9 distinct POOL senders -> GATHER-01 between 05:30Z and 14:26Z on Feb 10 (all inside 24h); one payout GATHER-01 -> RPT-02 3000 @20:00Z"
+    arithmetic: >
+      distinct senders in 24h = 9 >= k=8. Sender amounts 1500,2000,...,5500;
+      sorted median (9 values) = 3500. tau = fixture amount p25 = 22000 by
+      construction (noise floor 20000; only ~50 rows below it) -> 3500 <
+      22000 -> R2 fires. Payout is 5h+ after any receipt and 3000 <
+      0.8*3500=2800... (2800 <= 3000? ratio 3000/1500 = 2.0 would pair with
+      the SMALLEST receipt 1500, but the payout is 5h34m after even that
+      receipt) -> R1 blocked by time on every pairing. R11 collateral: 9 of 9
+      senders first-time + payout account first-time -> fires in the
+      aggregation group.
+    expect_fire: [R2@ACC-GATHER-01, R11@ACC-GATHER-01]
+
+  - id: S12_r2_fan_in_severity
+    rule: R2
+    kind: positive (higher severity than S11)
+    rows: [141, 142, 143, 144, 145, 147, 148, 149, 150, 151, 152, 153]
+    arithmetic: "11 distinct senders in 11h <= 24h, median of 1500..6500 = 4000 < 22000 -> fires; k=11 > k=9 so severity ranks above S11"
+    expect_fire: [R2@ACC-GATHER-BIG, R11@ACC-GATHER-BIG]
+
+  - id: S13_r2_near_miss_k7
+    rule: R2
+    kind: near-miss
+    rows: [18, 22, 24, 26, 28, 30, 154, 155, 156, 157, 159, 160, 161, 162]
+    arithmetic: "busy 24h window Feb 12: 7 distinct senders; 7 < k=8 -> MUST NOT fire. R11 blocked: fresh share 2/8 (only POOL[6] and RPT-01 are first-time; POOL[0..5] are returning from Jan 10-20 history, spread <=2 new per 48h)"
+    expect_fire: []
+
+  - id: S14_r2_near_miss_window
+    rule: R2
+    kind: near-miss (window, not count)
+    rows: [33, 34, 35, 36, 163, 164, 166, 167, 168, 169, 170, 173, 175, 180]
+    arithmetic: >
+      9 distinct senders exist Feb 13-14 but arrival is 2 @h0, 5 @h13, 2 @h26;
+      any 24h window holds 2+5=7 or 5+2=7 -> max 7 < 8 -> MUST NOT fire.
+      R11: fresh counterparties in the 48h Feb 12-14 window = 6 of 10
+      (POOL[4..8] + RPT-02) -> share 0.60 < g=0.80.
+    expect_fire: []
+
+  - id: S15_r2_near_miss_tau
+    rule: R2
+    kind: near-miss (tau, not k)
+    rows: [20, 23, 25, 27, 29, 32, 38, 40, 44, 171, 172, 174, 177, 178, 179, 181, 182, 183, 190]
+    arithmetic: >
+      9 distinct whale senders inside Feb 14 06:00-14:00Z: k=9 >= 8 is
+      satisfied; amounts 200000..280000, sorted median (5th of 9) = 240000.
+      tau = 22000: the median must be BELOW tau to fire; 240000 >= 22000 ->
+      MUST NOT fire. This is the second R2 condition doing its job.
+    expect_fire: []
+
+  - id: S16_r3_fan_out_positive
+    rule: R3
+    kind: positive (+collateral R11)
+    rows: [248, 251, 252, 253, 254, 255, 257, 258, 259]
+    arithmetic: "Feb 20 08:00Z-17:28Z (all inside 24h): 9 distinct receivers >= k=8 -> fires; amounts 30000..46000 irrelevant to R3. R11 collateral: 9/9 first-time, share 1.0, count 9 >= 6 -> fires (no overlap group with R3 - declared above)"
+    expect_fire: [R3@ACC-SCATTER-01, R11@ACC-SCATTER-01]
+
+  - id: S17_r3_fan_out_severity
+    rule: R3
+    kind: positive (higher severity)
+    rows: [261, 262, 264, 265, 266, 267, 268, 270, 271, 272, 273]
+    arithmetic: "11 distinct receivers in 11h -> fires, ranks above S16 (11 > 9)"
+    expect_fire: [R3@ACC-SCATTER-BIG, R11@ACC-SCATTER-BIG]
+
+  - id: S18_r3_near_miss_k7
+    rule: R3
+    kind: near-miss
+    rows: [47, 51, 54, 66, 81, 98, 276, 277, 278, 279, 281, 282, 283]
+    arithmetic: "Feb 22 window: 7 distinct receivers < 8 -> MUST NOT fire. R11 share 1/7 (six returning Jan 28 - Feb 6). R7 gap Feb 6 -> Feb 22 = 16d < 30d"
+    expect_fire: []
+
+  - id: S19_r4_cycle_4
+    rule: R4
+    kind: positive
+    rows: [309, 311, 312, 314]
+    arithmetic: "see cycle_expectations.CYC-A: length 4, retention 0.85, strictly increasing times"
+    expect_fire: [R4@ACC-CYCA-1, R4@ACC-CYCA-2, R4@ACC-CYCA-3, R4@ACC-CYCA-4]
+    expect_silent: [R1@all four (every hop 70min > 60), R12@all four (two bumps, see cycle_expectations)]
+
+  - id: S20_r4_cycle_3
+    rule: R4
+    kind: positive
+    rows: [335, 336, 337]
+    expect_fire: [R4@ACC-CYCB-1, R4@ACC-CYCB-2, R4@ACC-CYCB-3]
+    expect_silent: [R1@all three (2h hops), R12@all three]
+
+  - id: S21_r4_near_miss_retention_059
+    rule: R4
+    kind: near-miss
+    rows: [345, 347, 349]
+    arithmetic: "590000/1000000 = 0.590 < r=0.60 (also min/max 0.492) -> MUST NOT fire; R12 MUST NOT fire (1200000 bump breaks every 3-run)"
+    expect_fire: []
+
+  - id: S22_r4_near_miss_length_7
+    rule: R4
+    kind: near-miss
+    rows: [352, 356, 359, 361, 362, 363, 364]
+    arithmetic: "loop of 7 distinct nodes with retention 0.70 and increasing times; 7 > max_length=6 -> MUST NOT fire; bump pattern [1000000, 1050000, 900000, 950000, 800000, 830000, 700000] leaves no 3 consecutive non-increasing cyclic edges -> R12 MUST NOT fire; 75min hops -> R1 MUST NOT fire"
+    expect_fire: []
+
+  - id: S23_r4_time_reversed
+    rule: R4
+    kind: "near-miss (gate-named: time-reversed loop returns nothing)"
+    rows: [370, 372, 373]
+    expect_fire: []
+
+  - id: S24_r4_periodic_payroll
+    rule: R4
+    kind: positive, DOWN-WEIGHTED (legitimate recurring cycle)
+    rows: [346, 350, 365, 371, 396, 399, 402, 406, 419, 421, 424, 425]
+    arithmetic: "lap starts Feb.. Mar 04/11/18T08:00Z: exactly 168h apart = periodic_period_hours; per-lap retention 786000/800000 = 0.9825 >= 0.6 -> real cycle; severity x periodic_down_weight 0.3, one pattern-signature hit"
+    expect_fire: ["R4(down-weighted 0.3)@ACC-EMP-01, ACC-MERCH-01, ACC-PAY-01, ACC-SUPP-01"]
+    expect_silent: [R12@all four (810000 hop + 786->800 wrap increase), R1@all four (>=10h gaps)]
+
+  - id: S25_r4_self_transfer
+    rule: R4/R2/R3 exclusion
+    kind: structural edge case
+    rows: [378]
+    arithmetic: "SELF-01 -> SELF-01 45000: the only self-transfer in the corpus; excluded from cycle and fan detection, counted as self_transfer_count=1; must produce no hit"
+    expect_fire: []
+
+  - id: S26_reversal_pair
+    rule: guards
+    kind: structural edge case
+    rows: [386, 387]
+    expect_fire: []
+
+  - id: S27_reversal_triangle
+    rule: R4/R12 exclusion
+    kind: structural edge case (reversal must not be a cycle)
+    rows: [389, 391, 392]
+    expect_fire: []
+
+  - id: S28_chain_positive
+    rule: R12
+    kind: positive (pass-through chain)
+    rows: [301, 313, 315, 316]
+    arithmetic: >
+      CHN-1->2 1000000 @Mar01T06:00Z; 2->3 950000 @12:00Z; 3->4 902500
+      @18:00Z; 4->5 857375 @Mar02T00:00Z. 4 hops >= min_length 3; every hop
+      6h < dt=24h; 950000 = 0.95*1000000, 902500 = 0.95*950000, 857375 =
+      0.95*902500: non-increasing AND decay-exact, so the hit holds under
+      either gate reading. R1 MUST NOT fire: each relay send is >= 0.8 of the
+      receipt (0.95) but 6h >> 60min - the window is the only guard here.
+    expect_fire: [R12@ACC-CHN-1..5]
+    expected_path: "[ACC-CHN-1, ACC-CHN-2, ACC-CHN-3, ACC-CHN-4, ACC-CHN-5] amounts [1000000, 950000, 902500, 857375]"
+
+  - id: S29_chain_near_miss_increasing
+    rule: R12
+    kind: near-miss
+    rows: [318, 323, 325]
+    arithmetic: "500000 -> 600000 -> 400000: the 600000 hop breaks require_non_increasing -> MUST NOT fire; 2h hops -> R1 MUST NOT fire"
+    expect_fire: []
+
+  - id: S30_chain_near_miss_slow
+    rule: R12
+    kind: near-miss
+    rows: [328, 348, 366]
+    arithmetic: "non-increasing 3-hop path but every hop spans 30h; 30h > dt=24h -> MUST NOT fire"
+    expect_fire: []
+
+  - id: S31_chain_near_miss_short
+    rule: R12
+    kind: near-miss
+    rows: [339, 340]
+    arithmetic: "2 hops < min_length 3 -> MUST NOT fire; 790000/1000000 = 0.79 also sits just under R1's p, and the 30min gap keeps R1 honest only via the ratio (0.79 < 0.80) -> R1 MUST NOT fire"
+    expect_fire: []
+
+  - id: S32_chain_decoy_2hop
+    rule: R12
+    kind: structural decoy
+    rows: [303, 308]
+    arithmetic: "clean 90min, 990000 -> 985000 2-hop sub-chain adjacent in time to S28 but disjoint node-set; must never appear as a chain hit (length 2), and must not pollute the CHN path"
+    expect_fire: []
+
+  - id: S33_r5_structuring_a
+    rule: R5
+    kind: positive
+    rows: [250, 256, 263, 269, 280, 284, 286, 287]
+    arithmetic: >
+      SMURF-A CASH_OUTs 2450000, 2300000, 2100000, 2455000 on Feb 20, 21, 22,
+      23 (same-day 3000000 deposits at 15:00Z are decoys). Band = [0.80,1.00]
+      x T=2500000 = [2000000, 2500000]: all four inside; window 7d holds 4 >=
+      n=3 -> fires. R1: every cash-out is 18h or 30h from the nearest
+      deposit -> window-blocked. R10: cash-out within 6h AFTER any inflow =
+      0 (deposits land at 15:00, withdrawals at 09:00 the NEXT morning are
+      18h later) -> blocked. R6: max 2 active txns/day, spread over 4 days <
+      min_baseline_days=5.
+    expect_fire: [R5@ACC-SMURF-A]
+    expect_silent: [R1@ACC-SMURF-A, R10@ACC-SMURF-A, R6@ACC-SMURF-A]
+
+  - id: S34_r5_structuring_b
+    rule: R5
+    kind: positive (lower severity than S33)
+    rows: [310, 334, 360]
+    arithmetic: "2200000, 2250000, 2300000 on Mar 1, 3, 5: 3 in-band in a 7d window == n=3 -> fires; ranks below SMURF-A (4)"
+    expect_fire: [R5@ACC-SMURF-B]
+
+  - id: S35_r5_near_miss_count
+    rule: R5
+    kind: near-miss (79% of threshold)
+    rows: [293, 296, 298]
+    arithmetic: "2050000 and 2480000 in band; 1975000 = 79.00% of T < band_low 80% -> in-band 2 < n=3 -> MUST NOT fire"
+    expect_fire: []
+
+  - id: S36_r5_near_miss_window
+    rule: R5
+    kind: near-miss (window)
+    rows: [324, 379, 401]
+    arithmetic: "three in-band amounts on Mar 2, 7, 12: any 7d window covers at most two (days 0 and 5; days 5 and 10) -> 2 < 3 -> MUST NOT fire"
+    expect_fire: []
+
+  - id: S37_r6_velocity_positive
+    rule: R6
+    kind: positive (fires on BOTH sides of the pair)
+    rows: [452, 453, 454, 456, 457, 458, 461, 462, 466, 470, 472, 473, 475, 477, 481, 500, 501, 502, 503, 504, 505, 506, 507, 508, 509, 510, 511]
+    arithmetic: >
+      VEL-01 active-day counts Mar 25-Apr 2: [1,2,3,2,1,3,2,1]: median 2,
+      deviations [1,0,1,0,1,1,0,1,1] sorted -> MAD 1, sigma 1.4826. Spike Apr
+      3: 12 txns to ONE counterparty: z = (12-2)/1.4826 = 6.74 >= 3.0 ->
+      fires. Under the unscaled convention z_raw = 10 >= 3.0 -> fires too.
+      VEL-B1 observes the identical daily series from the receiving side ->
+      fires with equal severity (declared tie, not an error).
+    expect_fire: [R6@ACC-VEL-01, R6@ACC-VEL-B1]
+
+  - id: S38_r6_near_miss_z
+    rule: R6
+    kind: near-miss
+    rows: [455, 459, 460, 463, 464, 465, 468, 469, 474, 478, 479, 480, 492, 493, 497, 512, 513, 514, 515]
+    arithmetic: "same baseline; spike count 4: z = (4-2)/1.4826 = 1.35 and z_raw = 2.0: below 3.0 under BOTH conventions -> MUST NOT fire"
+    expect_fire: []
+
+  - id: S39_r6_near_miss_baseline
+    rule: R6
+    kind: near-miss (floor)
+    rows: [467, 471, 476, 482, 483, 484, 485, 486, 487, 488, 489, 490, 491]
+    arithmetic: "spike count 10 (baseline counts [1,2,1]: only 3 active days) - 3 < min_baseline_days=5 -> NEVER scored; and even past the floor its MAD would be 0 -> not significant. MUST NOT fire on either guard"
+    expect_fire: []
+
+  - id: S40_r7_dormant_positive
+    rule: R7
+    kind: positive
+    rows: [2, 5, 8, 122, 123, 125, 126, 127, 129]
+    arithmetic: >
+      last pre-txn Jan 5, first post-txn Feb 9: gap = 35 by date subtraction
+      (34 fully empty days); both >= d=30. Post burst: 6 txns Feb 9
+      04:00-17:00Z in a 20h window >= k=5 -> fires. R11 share 4/6 = 0.667 <
+      0.80; R3 distinct receivers 6 < 8; R6 active baseline days 3 < 5.
+    expect_fire: [R7@ACC-SLEEP-01]
+
+  - id: S41_r7_dormant_severity
+    rule: R7
+    kind: positive (ranks above S40)
+    rows: [3, 6, 516, 519, 520, 521, 522, 523]
+    arithmetic: "gap Jan 4 -> Apr 4 = 91 by subtraction (90 empty) >= 30; burst 6 in 24h; k ties at 6, dormancy longer -> higher severity"
+    expect_fire: [R7@ACC-SLEEP-B]
+
+  - id: S42_r7_near_miss_gap_29d
+    rule: R7
+    kind: near-miss
+    rows: [4, 7, 82, 85, 89, 91, 93, 95]
+    arithmetic: "gap Jan 5 -> Feb 3 = 29 by subtraction (28 empty) < d=30 under BOTH readings; burst 6 >= k is satisfied -> only the gap saves it: MUST NOT fire. R11 share 4/6 < 0.8 -> silent."
+    expect_fire: []
+
+  - id: S43_r7_near_miss_k4
+    rule: R7
+    kind: near-miss
+    rows: [10, 186, 192, 196, 199]
+    arithmetic: "gap Jan 6 -> Feb 15 = 40 days >= d, but only 4 txns in the 24h window < k=5 -> MUST NOT fire"
+    expect_fire: []
+
+  - id: S44_r8_odd_hour_positive
+    rule: R8
+    kind: positive
+    rows: [305, 319, 330, 341, 354, 368, 428, 429, 430, 432, 440, 441, 442, 443, 450, 451]
+    arithmetic: >
+      reads local_hour (config uses_local_hour): baseline Mar 1-6, 6 txns all
+      local hour 10 -> quietest hours are those with zero volume, including
+      local 0-1. Recent Mar 20-24, 10 txns, 8 of them local hours 00:00-01:30
+      (21:00-22:30Z) -> quiet share 8/10 = 0.80; jump 0.80 - 0.00 = 0.80 >=
+      q=0.40 with 10 recent >= min 10 -> fires. Receivers ACC-NR-01..04 hold
+      <= 5 txns each -> cannot inherit an R8 hit.
+    expect_fire: [R8@ACC-NIGHT-01]
+
+  - id: S45_r8_near_miss_share
+    rule: R8
+    kind: near-miss
+    rows: [307, 322, 333, 344, 357, 435, 438, 439, 444, 445, 446, 448, 449]
+    arithmetic: "recent 10 txns, 3 at local 03:00/05:00/07:00: even the broadest quiet set gives share 0.30; jump 0.30 < q=0.40 -> MUST NOT fire"
+    expect_fire: []
+
+  - id: S46_r8_near_miss_min_txn
+    rule: R8
+    kind: near-miss
+    rows: [306, 320, 331, 342, 431, 433, 434, 436, 437]
+    arithmetic: "night jump = 5/5 = 1.0 >= q, but recent count 5 < min 10 (lifetime 9 < 10 under either denominator) -> MUST NOT fire"
+    expect_fire: []
+
+  - id: S47_r8_local_hour_guard
+    rule: R8
+    kind: near-miss (the UTC-trap case)
+    rows: [300, 317, 327, 338, 351, 367, 374, 380, 382, 388]
+    arithmetic: >
+      every txn at 05:00Z = 08:00 local Kampala (daytime). A rule reading the
+      UTC hour sees a suspicious 05:00 cluster; reading local_hour (as the
+      rule must, 03 SC test_odd_hour_uses_local_hour) sees ordinary business
+      hours -> MUST NOT fire.
+    expect_fire: []
+
+  - id: S48_r9_regime_positive
+    rule: R9
+    kind: positive
+    rows: [302, 329, 353, 375, 383, 393, 403, 409, 495, 498, 517, 524, 527, 529]
+    arithmetic: >
+      prior-30d amounts 55000..62000 (8 txns, Mar 1-15): median (58000+59000)/2
+      = 58500. recent-7d 270000..295000 (6 txns, Apr 2-7): median (280000 +
+      285000)/2 = 282500. ratio 282500/58500 = 4.829 > m=4 -> fires.
+    expect_fire: [R9@ACC-REGIME-01]
+    expect_silent: [R6@ACC-REGIME-01 (every day count 1 -> MAD 0 -> not significant)]
+
+  - id: S49_r9_near_miss
+    rule: R9
+    kind: near-miss
+    rows: [355, 376, 384, 394, 404, 410, 417, 422, 496, 499, 518, 525, 528]
+    arithmetic: "prior median (59500+60000)/2 = 59750; recent 5 values 210000..230000 median 220000; ratio 220000/59750 = 3.682 < 4 -> MUST NOT fire"
+    expect_fire: []
+
+  - id: S50_r11_positive
+    rule: R11
+    kind: positive
+    rows: [1, 19, 61, 64, 67, 68, 76, 78, 79, 80]
+    arithmetic: >
+      Feb 1 08:00Z - Feb 2 14:00Z (42h <= 48h): 8 txns to 8 counterparties
+      whose pair-history with NEO-01 is empty -> fresh share 8/8 = 1.0 >=
+      g=0.80; distinct count 8 >= c=6 -> fires. R3 MUST NOT fire: 6h spacing
+      puts at most 5 distinct receivers in any 24h window.
+    expect_fire: [R11@ACC-NEO-01]
+
+  - id: S51_r11_near_miss_share
+    rule: R11
+    kind: near-miss
+    rows: [9, 12, 14, 15, 99, 105, 106, 107, 109, 110, 111, 112, 114]
+    arithmetic: "Feb 5 06:00-17:00Z window: 6 distinct counterparties >= c=6 (RP-08, RP-09 returning from Jan 5-8 + four first-time): share 4/6 = 0.667 < g=0.80 -> MUST NOT fire despite the count"
+    expect_fire: []
+
+  - id: S52_r11_near_miss_count
+    rule: R11
+    kind: near-miss
+    rows: [115, 117, 118, 120, 121]
+    arithmetic: "44h: 5 first-time counterparties: share 1.0 >= g but count 5 < c=6 -> MUST NOT fire"
+    expect_fire: []
+
+  - id: S53_burst_parallel_edges
+    rule: none
+    kind: structural edge case (test_parallel_edges_preserved)
+    rows: [31, 37, 39, 43, 48, 50, 52, 55, 207, 208, 209, 210, 211, 212, 213, 214, 215, 216, 217, 218, 219, 220, 221, 222, 223, 224, 225, 226, 227, 229, 230, 231, 232, 233, 234, 235, 236, 237, 238, 239, 240, 241, 242, 243, 244, 245, 246, 247]
+    arithmetic: >
+      BURST-A -> BURST-B 40 TRANSFERs of 30000 in 120min (Feb 20 04:00-05:57Z)
+      = forty parallel edges, NOT one transfer of 1.2M. Expected graph
+      aggregate: count 40, total 1200000, span 117min. Every rule must stay
+      off: R3 distinct receivers 1 < 8; R2 on B distinct senders 1; R6 each
+      side has < 5 active baseline days (A: Jan 20-26 = 4; B: Jan 28-31 = 4);
+      R7 max gap 25d; R11 counterparty returning for both sides' own
+      history... A-B first meet Feb 20 (count 1); R10 no CASH_OUT; R5 30000
+      outside the band; R1 no inflow to A after Jan 26... B receives only.
+    expect_fire: []
+
+  - id: S54_rail_supernode
+    rule: "R2/R3 exclusion (test_supernode_excluded_from_fan_rules)"
+    kind: structural edge case
+    rows: [42, 46, 49, 53, 65, 88, 184, 185, 187, 188, 189, 193, 194, 195, 197, 198, 201, 228, 260, 274, 275, 285, 288, 289, 291, 294, 297, 299, 304, 321, 332, 343, 358, 369, 377, 381, 385, 390, 398, 400, 405, 407, 411, 414, 418, 420, 423, 426]
+    arithmetic: >
+      ACC-RAIL-AGENT total_degree = 48 non-self edges (40 inbound counterparties
+      + bank disbursements) - the largest node in the corpus; with N=319
+      accounts the committed P3a formula (percentile_nearest_rank at
+      graph.rail_degree_percentile 99.0 -> sorted_deg[int(0.99*319)=315] =
+      3rd-highest degree = 44, the BURST pair tie) types rails = nodes with
+      degree STRICTLY above 44 = exactly {ACC-RAIL-AGENT}. Every rule hub
+      sits at or below 27. Planted trap: Feb 15 04:30-13:30Z, 10
+      distinct senders (>= k=8) with amounts 3000..5250, sorted median
+      (4000+4250)/2 = 4125 < tau 22000 -> a naive R2 fires; the rail
+      exclusion must prevent it. R11 share 4/10 = 0.40 blocked. R1: both
+      disbursements >= 13h30m after the last cluster receipt. R10: no
+      CASH_OUT.
+    expect_fire: []
+
+  - id: S55_rail_second
+    rule: none
+    kind: structural edge case (degree-gap insurance for rail typing)
+    rows: [63, 77, 86, 97, 104, 113, 116, 119, 124, 134, 146, 158, 165, 176, 191, 202, 203, 205, 206, 249]
+    arithmetic: "ACC-RAIL-MARKET: 20 distinct senders, one per day Feb 1-20, max 1 inside any 24h window -> no fan arithmetic; its degree (20) plus the 44s create the gap the percentile threshold falls into"
+    expect_fire: []
+
+  - id: S56_singleton
+    rule: none
+    kind: structural edge case (test_singletons_excluded_from_graph_stats)
+    rows: [408]
+    arithmetic: "LONER -> EXT-002 25000: the only incident edge for both -> total_degree 1 = SINGLETON_DEGREE -> excluded from graph aggregates (in_graph false); tabular module still scores it"
+    expect_fire: []
+
+  - id: S57_zero_amount
+    rule: none
+    kind: structural edge case (test_zero_amount_excluded_from_value_features)
+    rows: [413, 415, 416]
+    arithmetic: "2 rows amount_minor 0 (is_zero_value), 1 row 12000. R1 min-A blocks zero; zero rows excluded from value features and cycle retention; R2 on ZERO-02: 1 distinct sender -> silent"
+    expect_fire: []
+
+  - id: S58_balance_inconsistency
+    rule: none
+    kind: structural edge case (test_balance_delta_feature_present)
+    rows: [290, 292, 295]
+    arithmetic: >
+      THE planted break: 290 sends 50000 but src goes 500000->460000 (delta
+      -40000) and dst 100000->100000 (0); 292 delta -60000 vs -80000 amount;
+      295 delta -45000 vs -40000. Every OTHER row in the corpus satisfies
+      src_after = src_before - amount and dst_after = dst_before + amount.
+      The feature is_is_balance_delta_inconsistent must be true on exactly
+      these three txn_ids - a feature, not an error (03 SD).
+    expect_fire: []
+
+  - id: S59_background_noise
+    rule: none
+    kind: background
+    rows: [11, 13, 16, 17, 21, 41, 45, 75, 108, 128, 200, 204, 326, 395, 397, 412, 427, 447, 494, 526, 530, 531, 532, 533, 534]
+    arithmetic: "each noise account appears exactly once: no second edge to complete any rule; amounts clamped 20000..1500000 keep tau = 22000 (the clamp floor guarantees p25 >= ~20000) and keep zero noise rows inside the R5 band"
+    expect_fire: []
+
+# ===========================================================================
+# STRUCTURAL INVENTORY (self-check asserts these against the built rows)
+# ===========================================================================
+structural_inventory:
+  usd_rows: [101, 102]
+  self_transfer_rows: [378]
+  zero_amount_rows: [413, 415]
+  reversal_rows: [387, 392]
+  balance_inconsistent_rows: [290, 292, 295]
+  external_only_accounts: [ACC-EXT-001, ACC-EXT-002]   # appear as account_to only
+  singleton_accounts: [ACC-LONER, ACC-EXT-002]
+  supernode_accounts: [ACC-RAIL-AGENT]                 # total_degree 48, max
+  second_high_degree: [ACC-BURST-A, ACC-BURST-B]       # 44 each (harmless: no expectations)
+  in_band_r5_rows_outside_smurf: []                    # noise clamp guarantees empty
+  fraud_labelled_rows_are_planted_only: true           # label_is_fraud=1 iff row is in a planted positive scenario
+
+# ===========================================================================
+# DEVIATIONS: what plan SS9 pins that config/rules.yaml does NOT carry
+# ===========================================================================
+deviations:
+  - id: DEV-G1
+    summary: "R5 threshold T has no configured value"
+    detail: >
+      plan SS9: "T from histogram mode"; config carries threshold_source:
+      histogram_mode plus a synthetic flag but NO numeric T and no
+      golden-corpus override. This fixture pins T = 2_500_000 minor as an
+      assumption (assumptions.structuring_threshold_minor). The rules engine
+      must either accept the fixture-provided T or derive it from the
+      amount histogram - the ladder is the only cluster in [2000000, 2500000]
+      (noise is clamped below 1500000, near-miss outlier 1975000 sits just
+      under the band), so histogram-mode detection lands on the same value.
+  - id: DEV-G2
+    summary: "R2 tau has no golden override"
+    detail: >
+      tau_source corpus_percentile is computed at run time. Hand-derived
+      bracket: 8250 < tau < 120000 (measured p25 = 22000; the self-check
+      recomputes p25 and re-asserts the bracket). If a future fixture edit
+      moves noise volume across the clamp, this bracket is the guard.
+  - id: DEV-G3
+    summary: "rail degree percentile lives in config/pipeline.yaml, not rules.yaml"
+    detail: "graph.rail_degree_percentile: 99.0 (config/pipeline.yaml) + the P3a nearest-rank formula. rules.yaml R2/R3 exclude_node_types [rail, external] but never say how a rail is recognised; noted, not edited."
+  - id: DEV-G4
+    summary: "R11 has no rail/external exclusion"
+    detail: >
+      R2/R3 carry exclude_node_types; R11 does not. ACC-RAIL-AGENT is built
+      so R11 fails on its own arithmetic (share 0.40), so the expectations
+      hold either way - but a future rail with many fresh counterparties
+      would fire R11 by config. Flagged for the rules agent; config not
+      touched.
+  - id: DEV-G5
+    summary: "golden txn_type REVERSAL extends PAYSIM_TXN_TYPES"
+    detail: "raw_paysim.py restricts type to five values; that is the PaySim CONTRACT. source_dataset=golden is its own corpus with a six-value alphabet (README). The loader keeps REVERSAL legal."
