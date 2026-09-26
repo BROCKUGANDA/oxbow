@@ -36,8 +36,36 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Final
+from typing import Any, Final
 
+# ---------------------------------------------------------------------------
+# NATIVE IMPORT-ORDER GUARD. Do not move the import below, and do not "tidy" it into a
+# function: its whole value is that it runs at this point in the file, before the first
+# ``from oxbow...`` line can pull ``pyarrow`` in through ``oxbow.adapters.io``.
+#
+# WHAT FAULTS. ``import optbinning`` reaches cvxpy, whose solver discovery imports osqp,
+# whose package init resolves its algebra backend by importing the compiled extension
+# module (``osqp/interface.py``: ``default_algebra`` -> ``algebra_available`` ->
+# ``importlib.import_module("osqp.ext_builtin")``). Loading that second bundled
+# OpenMP/BLAS runtime into a process that already carries pyarrow's is what kills it:
+# exit 139, a segfault, no Python traceback. Measured on this machine, three lines each
+# way -- ``import pyarrow; import cvxpy`` dies, ``import cvxpy; import pyarrow`` and
+# ``import osqp; import pyarrow; import cvxpy`` both exit 0. So the fault is neither a
+# missing DLL nor an import-order *preference*: it is one specific ordering, and the
+# same fault is already pinned for the test session in ``tests/conftest.py``, whose
+# docstring states that the composition root pins it too. Until this block existed, it
+# did not, and ``oxbow score`` died inside the scorecard fit for exactly that reason.
+#
+# WHY THIS AND NOT A SOLVER SWITCH. optbinning 0.19's ``solver="mip"`` path is ortools
+# (``binning/mip.py`` -> ``pywraplp``), not cvxpy, and cvxpy's OSQP probe happens during
+# ``import cvxpy`` -- before any binning problem exists. Pinning SCS or CLARABEL in the
+# scorecard therefore cannot avoid the fault, and the ``OSQP_ALGEBRA_BACKEND=<bogus>``
+# workaround survives the crash only by making the probe raise ``KeyError`` and skip
+# OSQP, i.e. by disabling a solver to dodge a defect. Importing osqp early disables
+# nothing: OSQP stays installed, stays discoverable by cvxpy, and solves whatever it is
+# asked to. The load that faults is simply moved to the one moment when it is safe, and
+# every later probe is a cache hit that loads no new native code.
+import osqp  # noqa: F401 -- imported for the native load it performs, not for the name
 import polars as pl
 import typer
 
@@ -54,6 +82,33 @@ from oxbow.config import (
 from oxbow.identity import new_ulid, require_ulid, sha256_of_bytes
 from oxbow.ports.warehouse import RunState, WarehouseSink
 from oxbow.stage_events import StageEventEmitter, StageHandle
+
+
+# The guard above is a side effect, and a side effect that silently stops happening is
+# how this bug returns: an osqp that defers its algebra load again would leave the import
+# line untouched and the segfault back. What is checkable is that the load occurred, so
+# that is what is checked -- and only that.
+#
+# WHY NOT "osqp must precede pyarrow". That stricter form was tried here and it is wrong:
+# it refuses `import oxbow.cli` in any process that touched pyarrow first, which includes
+# the pytest session (tests/conftest.py makes optbinning, and so cvxpy, load before
+# pyarrow, and osqp's own entry then lands later than pyarrow's). Three
+# `tests/unit/test_p0_toolchain.py` tests went red on that check while the process that
+# loaded osqp second never crashed. So osqp-after-pyarrow is survivable and the lethal
+# ordering is the one conftest and this block each prevent in their own context:
+# **cvxpy arriving after pyarrow**. Asserting anything tighter here would be asserting a
+# preference, and a guard that fires on a healthy process is worse than no guard -- it
+# teaches the next reader to reach for the skip.
+def _require_solver_pin_ran() -> None:
+    if not any(name.startswith("osqp") for name in sys.modules):
+        raise ImportError(
+            "osqp never loaded, so the native import-order guard in oxbow/cli.py is not "
+            "running. Its algebra extension must be resolved here, before pyarrow arrives, "
+            "or the scorecard fit segfaults this process (exit 139, no traceback)."
+        )
+
+
+_require_solver_pin_ran()
 
 app = typer.Typer(
     name="oxbow",
@@ -81,9 +136,62 @@ RAW_DIRNAME: Final = "raw"
 GRAPH_ARTIFACT_DIRNAME: Final = "graph"
 FEATURE_ARTIFACT_DIRNAME: Final = "features"
 RULE_ARTIFACT_DIRNAME: Final = "rules"
+SCORE_ARTIFACT_DIRNAME: Final = "score"
 BACKTEST_ARTIFACT_DIRNAME: Final = "backtest"
 PACKET_ARTIFACT_DIRNAME: Final = "packets"
 CASE_SINK_DIRNAME: Final = "case_sink"
+
+# ---------------------------------------------------------------------------
+# THE RULE HIT LEDGER. Declared schema, never an inferred one.
+#
+# polars builds a frame from dicts by sampling the rows it is given first
+# (`infer_schema_length=100`), and `overlap_group` is None for every rule that has
+# nothing to dedup against. A run whose first hundred hits were all ungrouped therefore
+# typed that column `Null`, and the next grouped hit killed the stage with
+# `ComputeError: could not append value "aggregation" of type str to the builder` --
+# measured, on the first corpus that produced a grouped rule at all. The ledger is what
+# the report, the near-miss table and the API's rule cards are built from, so its column
+# types cannot depend on which rule happened to fire first.
+_RULE_HIT_SCHEMA: Final[dict[str, pl.DataType]] = {
+    "rule_id": pl.Utf8,
+    "rule_name": pl.Utf8,
+    "account_key": pl.Utf8,
+    "severity": pl.Float64,
+    "hit_signature": pl.Utf8,
+    "overlap_group": pl.Utf8,
+    "window_start_us": pl.Int64,
+    "window_end_us": pl.Int64,
+    "observation": pl.Float64,
+    "threshold_param": pl.Utf8,
+    "threshold_value": pl.Float64,
+    "txn_ids": pl.Utf8,
+}
+
+
+def _rule_hits_frame(hits: Sequence[Any]) -> pl.DataFrame:
+    """The hit ledger, with its schema stated rather than guessed from the first rows."""
+    return pl.DataFrame(
+        [
+            {
+                "rule_id": hit.rule_id,
+                "rule_name": hit.rule_name,
+                "account_key": hit.account_key,
+                "severity": round(hit.severity, 6),
+                "hit_signature": hit.hit_signature,
+                "overlap_group": hit.overlap_group,
+                "window_start_us": hit.window.start_us,
+                "window_end_us": hit.window.end_us,
+                "observation": hit.observation,
+                "threshold_param": hit.threshold_param,
+                "threshold_value": hit.threshold_value,
+                "txn_ids": ",".join(hit.txn_ids),
+            }
+            for hit in hits
+        ],
+        schema=_RULE_HIT_SCHEMA,
+    )
+
+
 WAREHOUSE_DIRNAME: Final = "warehouse"
 AUDIT_DIRNAME: Final = "audit"
 LEDGER_FILENAME: Final = "stage_events.jsonl"
@@ -438,11 +546,18 @@ def _read_lineage(root: Path, *, sources: Sequence[str]) -> list[CorpusLineage]:
                 "run, and a corpus assembled by guessing is a corpus nobody can reproduce."
             )
         payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+        # Batch paths are recorded repo-relative (see canonical_sink._relative_to_root) so
+        # a manifest written by the container image at /srv is still readable from the host.
+        # They resolve against the repo root this function was handed, not the manifest's own
+        # ancestors, so an --out relocation still resolves. An absolute path in an older
+        # manifest is honoured as-is: joining it to the root is a no-op for an absolute Path.
         batches = tuple(
             CanonicalBatch(
                 source_id=str(entry["source_dataset"]),
                 batch_id=str(entry["batch_id"]),
-                path=Path(str(entry["path"])),
+                path=Path(str(entry["path"]))
+                if Path(str(entry["path"])).is_absolute()
+                else root / str(entry["path"]),
                 rows=int(entry["rows"]),
                 sha256=str(entry["sha256"]),
             )
@@ -971,32 +1086,262 @@ def run_graph_stage(
 
 
 SCORECARD_GAP: Final[str] = (
-    "scorecard, GBM, Isolation Forest, calibration, fusion and SHAP did not run: no module "
-    "bridges the feature matrix's grain (txn_id x entity, "
-    "oxbow/features/build.py::FeatureTable) to the account-grain TrainingFrame that "
-    "oxbow/scoring/frame.py::build_training_frame requires (account_key x as_of_ts x fold, "
-    "carrying label_is_fraud and feature_spec_hash). A bridge is package work, not "
-    "composition-root work, so it is named here rather than improvised in the CLI. Two "
-    "further seams are unwired and the scorecard needs them next: "
-    "oxbow/features/registry.py's spec hash and "
-    "oxbow/scoring/frame.py::canonical_spec_hash compute different digests for the same "
-    "registry, so 02 B seam 3's mismatch guard cannot pass yet; and nothing implements "
-    "oxbow.features.fold_scope.GraphFeatureProvider or RuleHitProvider, so every "
-    "fold-scoped graph and rule column is null by construction (report fold_id=unsegmented) "
-    "rather than fold-sealed as plan §8 requires."
+    "the model stack (WOE scorecard, LightGBM, Isolation Forest, calibration, fusion, SHAP) "
+    "is wired and runs: the txn->account grain bridge (oxbow.features.bridge), the two "
+    "fold-scoped providers (oxbow.features.fold_providers) and a real fold-fitting Scorer "
+    "(oxbow.models.scorer.WalkForwardScorer over oxbow.models.run.FoldModelRunner) are all "
+    "in place and reached from this stage. What can still refuse, and is reported by name "
+    "rather than softened, is a corpus whose timeline cannot hold the configured 30-day "
+    "embargo across five folds: the ONE splits module "
+    "(oxbow.backtest.splits.build_walk_forward) raises a SplitError then, because inventing "
+    "fold boundaries to make the arithmetic work is the leakage plan §8 forbids. On such a "
+    "corpus the score stage lands the rules and the feature matrix and refuses the model "
+    "step by that named cause (DEV-013); the multi-fold walk-forward demonstration runs on "
+    "`oxbow backtest --demo-fakes`, and a corpus long enough to support it runs the real "
+    "stack end to end. Calibration likewise refuses rather than emit a below-floor "
+    "probability (isotonic then Platt then refuse), and the row says so."
 )
+
+
+def _load_p4_configs(root: Path) -> object:
+    """The five config views the score stage composes, or a refusal naming the file."""
+    from oxbow.models.config import load_model_config, load_split_config
+    from oxbow.scoring.config import load_feature_registry, load_scorecard_config
+
+    return {
+        "model": load_model_config(root),
+        "scorecard": load_scorecard_config(root),
+        "split": load_split_config(root),
+        "scoring_registry": load_feature_registry(root),
+    }
+
+
+def _score_models_and_land(
+    ctx: StageContext,
+    handle: StageHandle,
+    *,
+    slice_events: pl.DataFrame,
+    feature_registry: object,
+    configs: Mapping[str, object],
+) -> int:
+    """Bridge the matrix to account grain, fit the fold stack, and land the artifacts.
+
+    Every step here is a real call into a package that owns it: the split plan from
+    ``oxbow.backtest.splits``, the fold-scoped graph/rule providers from
+    ``oxbow.features.fold_providers``, the txn->account carry from ``oxbow.features.bridge``,
+    the validated ``TrainingFrame`` from ``oxbow.scoring.frame``, and one
+    :class:`oxbow.models.run.FoldModelRunner` fit per fold. The scored rows carry the fused
+    probability, the calibration band's measured rate and count, and the per-row SHAP
+    payload; the corpus frame written beside them is the ``oxbow backtest --corpus`` input.
+    """
+    from oxbow.backtest.fold_provider import SplitsFoldProvider
+    from oxbow.backtest.splits import SplitError, build_walk_forward
+    from oxbow.features.bridge import build_account_frame
+    from oxbow.features.build import entity_event_frame
+    from oxbow.features.fold_providers import fold_providers
+    from oxbow.features.kinds import ENTITY, EVENT_TS
+    from oxbow.models.run import FoldModelRunner
+    from oxbow.models.scorer import FixedFoldSlicesProvider, FrameRuleHitProvider
+    from oxbow.quant.economics import load_economics
+    from oxbow.scoring.frame import (
+        COL_FOLD,
+        PROVENANCE_REAL,
+        ROLE_TEST,
+        ROLE_TRAIN,
+        ROLE_VALIDATION,
+        build_training_frame,
+    )
+
+    model_cfg = configs["model"]
+    scorecard_cfg = configs["scorecard"]
+    split_cfg = configs["split"]
+    scoring_registry = configs["scoring_registry"]
+    categorical = tuple(scorecard_cfg.binning.categorical_features)
+
+    timeline = entity_event_frame(slice_events).select([EVENT_TS, ENTITY]).sort([EVENT_TS, ENTITY])
+    try:
+        plan = build_walk_forward(timeline, registry=feature_registry, config_dir=ctx.config_dir)
+    except SplitError as exc:
+        ctx.echo(f"[score] REFUSED (fold plan): {exc}", err=True)
+        handle.mark_unavailable(
+            f"the corpus cannot support the configured walk-forward, so the model stack is "
+            f"not fitted: {exc}"
+        )
+        return EXIT_FAILED
+    ctx.echo(f"[score] split: {plan.as_report_line()}")
+
+    graph, rules = fold_providers(slice_events, feature_registry, ctx.cfg)
+    grain = build_account_frame(
+        slice_events, feature_registry, plan, graph=graph, rules=rules, cfg=ctx.cfg
+    )
+    report = grain.report
+    ctx.echo(f"[score] grain bridge: {report.sentence()}")
+
+    frame = grain.frame
+    try:
+        training = build_training_frame(
+            frame,
+            scoring_registry,
+            categorical,
+            PROVENANCE_REAL,
+            split_cfg.validation_fraction_of_train,
+            split_cfg.n_folds,
+        )
+    except Exception as exc:  # a contract refusal is reported by name, never swallowed
+        ctx.echo(f"[score] REFUSED (training frame): {exc}", err=True)
+        handle.mark_failed(f"the bridged frame did not satisfy the scoring contract: {exc}")
+        return EXIT_FAILED
+    ctx.echo(
+        f"[score] training frame: {training.n_rows} account-instant rows x "
+        f"{len(training.feature_names)} features, {training.n_positive} positives "
+        f"(base rate {training.base_rate:.6f}), spec hash {training.feature_spec_hash[:16]}…"
+    )
+
+    runner = FoldModelRunner(
+        model_cfg=model_cfg,
+        scorecard_cfg=scorecard_cfg,
+        split_cfg=split_cfg,
+        feature_registry=scoring_registry,
+        rules_provider=FrameRuleHitProvider(),
+        provenance=PROVENANCE_REAL,
+        trial_budget=1,  # verification-bounded: no Optuna sweep; see the report's cost note
+        root=ctx.root,
+    )
+    fold_provider = SplitsFoldProvider(plan, as_of_column="as_of_ts")
+    scored_frames: list[pl.DataFrame] = []
+    runs_summary: list[dict[str, object]] = []
+    for fold, harness_fold in zip(plan.folds, fold_provider.folds(frame), strict=True):
+        train = frame.filter(pl.Series(harness_fold.train_mask)).with_columns(
+            pl.lit(ROLE_TRAIN).alias("role")
+        )
+        validation = frame.filter(pl.Series(harness_fold.validation_mask)).with_columns(
+            pl.lit(ROLE_VALIDATION).alias("role")
+        )
+        scored = frame.filter(pl.Series(harness_fold.test_mask)).with_columns(
+            pl.lit(ROLE_TEST).alias("role")
+        )
+        if scored.height == 0:
+            runs_summary.append({"fold": fold.index, "skipped": "empty test window"})
+            continue
+        provider = FixedFoldSlicesProvider(
+            train, validation, scored, embargo_days=plan.embargo_days
+        )
+        try:
+            run = runner.run_fold(
+                training, fold.index, provider=provider, evaluation_role=ROLE_TEST
+            )
+        except Exception as exc:  # a fold the corpus cannot fit is reported by name, not faked
+            runs_summary.append(
+                {
+                    "fold": fold.index,
+                    "skipped": f"{type(exc).__name__}: {str(exc)[:300]}",
+                }
+            )
+            ctx.echo(
+                f"[score] fold {fold.index}: SKIPPED — the fit population is not "
+                f"defensible ({type(exc).__name__}: {exc})",
+                err=True,
+            )
+            continue
+        test_rows = run.scored.filter(pl.col("role") == ROLE_TEST)
+        scored_frames.append(test_rows)
+        runs_summary.append(
+            {
+                "fold": fold.index,
+                "mode": run.mode,
+                "calibrated": run.calibrated,
+                "rows": test_rows.height,
+                "channel_skips": dict(run.channel_skips),
+            }
+        )
+        ctx.echo(
+            f"[score] fold {fold.index}: mode={run.mode} scored={test_rows.height} "
+            f"calibrated={run.calibrated}"
+        )
+
+    if not scored_frames:
+        ctx.echo("[score] REFUSED: no fold produced a scored test window", err=True)
+        handle.mark_failed("the walk-forward produced no scored rows to land")
+        return EXIT_FAILED
+    scored_rows = pl.concat(scored_frames, how="vertical_relaxed").sort(
+        ["as_of_ts", "account_key", COL_FOLD]
+    )
+
+    economics = load_economics(ctx.root)
+    corpus = _attach_corpus_economics(frame, economics)
+
+    score_dir = ctx.stage_dir(SCORE_ARTIFACT_DIRNAME)
+    scored_rows.write_parquet(score_dir / "scored_rows.parquet", statistics=False)
+    corpus.write_parquet(score_dir / "backtest_corpus.parquet", statistics=False)
+    _write_json(
+        score_dir / "score_run_manifest.json",
+        {
+            "spec_hash": training.feature_spec_hash,
+            "provenance": PROVENANCE_REAL,
+            "rows_scored": scored_rows.height,
+            "corpus_rows": corpus.height,
+            "trial_budget": 1,
+            "folds": runs_summary,
+            "grain_report": report.sentence(),
+        },
+    )
+    ctx.echo(
+        f"[score] model artifacts: {score_dir} — {scored_rows.height} scored rows with SHAP, "
+        f"{corpus.height}-row backtest corpus (economics in {economics.currency} minor units)"
+    )
+    ctx.echo(
+        "[score] RESULT: rules, features, the grain bridge, the fold-scoped providers and the "
+        f"model stack all ran; {len(runs_summary)} fold(s) scored and landed under {score_dir}"
+    )
+    return EXIT_OK
+
+
+def _attach_corpus_economics(frame: pl.DataFrame, economics: object) -> pl.DataFrame:
+    """Add the four economic columns the backtest corpus is owed, in integer minor units.
+
+    THE AGGREGATION, CHOSEN AND STATED. ``exposure_minor`` is the account's own 30-day
+    outflow (``amount_out_30d_minor``) — the value still inside the recovery window and the
+    only per-account money the feature matrix already measured; a null outflow is zero, not a
+    guess. ``review_minutes`` is scaled from that exposure and clamped to the configured
+    alert-class band so the capacity constraint binds rather than reviewing everything; the
+    per-minute price and the floor are read from ``config/economics.yaml``, never restated.
+    ``review_cost_minor`` is minutes times that price and ``amount_minor`` mirrors exposure
+    for the highest-amount-first baseline. Every step is integer arithmetic.
+    """
+    cost_per_minute = int(economics.analyst.cost_per_minute_minor)  # type: ignore[attr-defined]
+    floor = int(economics.analyst.min_review_minutes)  # type: ignore[attr-defined]
+    ceiling = max(int(economics.minutes_for("E")), floor)  # type: ignore[attr-defined]
+    outflow = (
+        pl.col("amount_out_30d_minor").cast(pl.Int64).fill_null(0)
+        if "amount_out_30d_minor" in frame.columns
+        else pl.lit(0, dtype=pl.Int64)
+    )
+    return (
+        frame.with_columns(outflow.alias("exposure_minor"))
+        .with_columns(
+            pl.col("exposure_minor").alias("amount_minor"),
+            (pl.col("exposure_minor") / 1_000_000)
+            .cast(pl.Int64)
+            .clip(floor, ceiling)
+            .alias("review_minutes"),
+        )
+        .with_columns((pl.col("review_minutes") * cost_per_minute).alias("review_cost_minor"))
+    )
 
 
 def run_score_stage(
     ctx: StageContext, handle: StageHandle, *, source: Sequence[str], max_events: int | None
 ) -> int:
-    """Stage 3: rules and features for real, then the scorecard boundary.
+    """Stage 3: rules and features for real, then the model stack through the seam.
 
-    The parts that exist are called against the landed corpus: ``evaluate_rules`` over the
-    real graph, and ``build_feature_table`` over the registry with its money, finite and
-    label guards live. What does not exist is reported by name, and the stage exits
-    non-zero: a scorecard fitted on a frame the CLI assembled by hand would be a second
-    implementation of the grain contract with nobody to defend it.
+    The parts that exist are called against the landed corpus in order: ``evaluate_rules``
+    over the real graph, ``build_feature_table`` over the registry, the grain bridge into an
+    account-grain ``TrainingFrame``, and one fold-fitted model stack per fold — scorecard,
+    GBM, Isolation Forest, calibration, fusion and per-row SHAP — landed as artifacts beside
+    the backtest corpus. A corpus whose timeline cannot hold the embargo, or a fold the
+    splits module refuses, stops the model step by name; the refusal is the feature, and a
+    scorecard the CLI assembled by hand would be a second grain contract with nobody to
+    defend it.
     """
     if ctx.dry_run:
         ctx.echo(f"[score] planned work: {_planned('score')}")
@@ -1035,25 +1380,7 @@ def run_score_stage(
             ctx.echo(f"[score] removed: {removed.rule_id} -- {removed.reason}")
     rules_dir = ctx.stage_dir(RULE_ARTIFACT_DIRNAME)
     _write_json(rules_dir / "rule_result.json", rules_result.as_json_dict())
-    hits_frame = pl.DataFrame(
-        [
-            {
-                "rule_id": hit.rule_id,
-                "rule_name": hit.rule_name,
-                "account_key": hit.account_key,
-                "severity": round(hit.severity, 6),
-                "hit_signature": hit.hit_signature,
-                "overlap_group": hit.overlap_group,
-                "window_start_us": hit.window.start_us,
-                "window_end_us": hit.window.end_us,
-                "observation": hit.observation,
-                "threshold_param": hit.threshold_param,
-                "threshold_value": hit.threshold_value,
-                "txn_ids": ",".join(hit.txn_ids),
-            }
-            for hit in rules_result.hits
-        ]
-    )
+    hits_frame = _rule_hits_frame(rules_result.hits)
     hits_frame.write_parquet(rules_dir / "rule_hits.parquet")
     ctx.echo(f"[score] rules artifacts: {rules_dir} ({_count(hits_frame.height)} hit rows landed)")
     handle.rows = len(rules_result.hits)
@@ -1097,14 +1424,11 @@ def run_score_stage(
         "[score] feature artifacts: "
         + ", ".join(f"{key}={value}" for key, value in sorted(features_dir.items()))
     )
-    ctx.echo(f"[score] FAIL: {SCORECARD_GAP}", err=True)
-    ctx.echo(
-        f"[score] rules and features are real: {_count(report.feature_count)} features x "
-        f"{_count(table.matrix.height)} rows and {_count(len(rules_result.hits))} rule hits "
-        f"landed under {ctx.out_root / FEATURE_ARTIFACT_DIRNAME}/{ctx.run_id}"
+
+    configs = _load_p4_configs(ctx.root)
+    return _score_models_and_land(
+        ctx, handle, slice_events=slice_events, feature_registry=registry, configs=configs
     )
-    handle.mark_failed(SCORECARD_GAP)
-    return EXIT_FAILED
 
 
 def run_backtest_stage(
@@ -1119,11 +1443,18 @@ def run_backtest_stage(
     """Stage 4: the walk-forward harness, against a corpus or against its own fakes.
 
     ``oxbow.backtest.run`` owns the fold loop, the ablation table and the leakage control,
-    and it is the entry point being called. Its ``--corpus`` path refuses until a Scorer and
-    an Allocator are implemented against ``oxbow.backtest.interfaces``; that refusal is
-    printed verbatim rather than softened. ``--demo-fakes`` runs the whole harness on
-    hand-computed fixtures: the run is real, every figure is labelled
+    and it is the entry point being called. Its ``--corpus`` path is real: it drives
+    ``oxbow.backtest.splits`` for folds, ``oxbow.models.scorer.WalkForwardScorer`` for the
+    calibrated scorer and ``oxbow.backtest.allocators.P5Allocator`` for the queue, and it
+    runs the eight honest rows plus the leakage control through the same harness the fake
+    demonstration uses. If the corpus cannot support the configured embargo the splits module
+    refuses, and that refusal is printed verbatim rather than softened. ``--demo-fakes`` runs
+    the whole harness on hand-computed fixtures: the run is real, every figure is labelled
     ``provenance=fake_harness``, and no part of it is quoted as a corpus result.
+
+    With no ``--corpus`` given (the pipeline chain), the stage uses the per-account corpus the
+    score stage landed under ``out/score/<run_id>/`` in this same run; if that file is absent
+    the score stage refused before writing it, which is reported by name rather than faked.
     """
     if ctx.dry_run:
         ctx.echo(f"[backtest] planned work: {_planned('backtest')}")
@@ -1151,19 +1482,23 @@ def run_backtest_stage(
         return EXIT_OK if code == 0 else EXIT_FAILED
 
     if corpus is None:
-        gap = (
-            "no per-account scored corpus exists to price. `oxbow backtest --corpus PATH` is "
-            "the real path; nothing in this repository publishes that frame yet, because the "
-            "score stage stops at the features-to-TrainingFrame bridge. oxbow/backtest/run.py"
-            "::main additionally refuses --corpus until a Scorer and an Allocator are "
-            "implemented against oxbow/backtest/interfaces.py. Run `oxbow backtest "
-            "--demo-fakes` for the harness self-check, which is labelled "
-            "provenance=fake_harness and is not a result."
-        )
-        ctx.echo(f"[backtest] UNAVAILABLE: {gap}", err=True)
-        handle.mark_unavailable(gap)
-        return EXIT_FAILED
+        landed = ctx.out_root / SCORE_ARTIFACT_DIRNAME / ctx.run_id / "backtest_corpus.parquet"
+        if landed.is_file():
+            corpus = landed
+        else:
+            gap = (
+                "no per-account scored corpus exists to price: the score stage did not write "
+                f"one to {landed}. Either the model stack refused (a corpus timeline too short "
+                "for the configured embargo, reported by name in the score stage) or `oxbow "
+                "score` has not run under this --run-id. Point `oxbow backtest --corpus PATH` "
+                "at a real per-account corpus, or run `oxbow backtest --demo-fakes` for the "
+                "harness self-check (labelled provenance=fake_harness, not a result)."
+            )
+            ctx.echo(f"[backtest] UNAVAILABLE: {gap}", err=True)
+            handle.mark_unavailable(gap)
+            return EXIT_FAILED
 
+    ctx.echo(f"[backtest] corpus: {corpus}")
     try:
         code = backtest_run.main([*argv, "--corpus", str(Path(corpus).resolve())])
     except SystemExit as exc:
