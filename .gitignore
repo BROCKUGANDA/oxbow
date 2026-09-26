@@ -55,12 +55,22 @@ data/snapshots/*
 !data/interim/.gitkeep
 !data/processed/.gitkeep
 !data/snapshots/.gitkeep
+# One file under data/processed/ IS committed, and deliberately so:
+# `typology_join_artifact` in config/pipeline.yaml names it, data/DATASET_CARD.md cites
+# its row and block counts, and it is 9 kB. It was previously tracked only because
+# somebody force-added it past the rule above, which meant the next `git add -A` could
+# drop a declared input without anyone deciding to. An input the config names is not a
+# generated artifact, so it gets an explicit exemption rather than an accident.
+!data/processed/ibm_typologies.parquet
 # The golden fixture IS committed: hand-built, hand-computed, and the thing the
 # rule engine and scorecard are tested against.
 !data/golden/*
 artifacts/
 out/
 mlruns/
+# Hypothesis's example database is a cache of the test suite's own search, never an
+# input. It was tracked (21 kB) with no rule covering it at all.
+.hypothesis/
 
 # --- generated clients: committed on purpose -----------------------------
 # 02 B seam 6: the generated client is committed, so a contract drift shows up

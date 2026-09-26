@@ -8,6 +8,7 @@ reverting any of it turns the suite red.
 from __future__ import annotations
 
 import json
+import subprocess
 import tomllib
 from pathlib import Path
 
@@ -496,3 +497,81 @@ def test_disclaimer_is_the_specified_text() -> None:
     assert "does not process live financial transactions" in DISCLAIMER
     assert "not financial advice" in DISCLAIMER
     assert "not validated for operational use" in DISCLAIMER
+
+
+# --- what git is actually carrying ------------------------------------------
+
+
+def _tracked_paths() -> list[str]:
+    """Every path git tracks, from the index rather than the filesystem.
+
+    Read from the index because that is the question being asked: a file that exists
+    on disk and is ignored is not carried by the repository, and a fresh clone will
+    not have it. ``git ls-files`` on a dirty tree still answers for the last commit,
+    which is what a clone would get.
+    """
+    out = subprocess.run(
+        ["git", "ls-files"],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return [line.strip() for line in out.stdout.splitlines() if line.strip()]
+
+
+def test_no_cache_or_dependency_tree_is_tracked() -> None:
+    """A tracked cache is a clone nobody can reproduce and a diff nobody can read.
+
+    Hypothesis' example database was tracked at 21 kB with no ignore rule covering
+    it: the suite's own search cache, regenerated on every run, carried in the
+    repository forever. The rule now covers the directory rather than the one file
+    that happened to be added first.
+    """
+    tracked = _tracked_paths()
+    offenders = [
+        path
+        for path in tracked
+        if any(
+            part in {".hypothesis", "__pycache__", ".mypy_cache", ".pytest_cache", "node_modules"}
+            for part in Path(path).parts
+        )
+    ]
+    assert not offenders, f"cache or dependency tree tracked: {offenders[:10]}"
+
+
+@pytest.mark.parametrize("directory", ["data/raw", "data/interim", "data/processed", "data/snapshots"])
+def test_ignored_data_directories_survive_a_fresh_clone(directory: str) -> None:
+    """Four ``data/`` subdirectories are ignore-managed, so nothing in git keeps them.
+
+    Their contents are deliberately uncommitted -- PaySim is 6.3 M rows and licensed --
+    but the directories themselves are prescribed by the plan's tree, and without a
+    tracked placeholder a fresh clone has no ``data/interim/`` to write into. The
+    ``!data/<dir>/.gitkeep`` negations existed in ``.gitignore`` for exactly this and
+    had no file behind them, so they were dead.
+    """
+    tracked = _tracked_paths()
+    assert f"{directory}/.gitkeep" in tracked, (
+        f"{directory} is ignored and has no tracked placeholder, so a fresh clone does "
+        "not have the directory the plan's tree prescribes"
+    )
+    assert (REPO_ROOT / directory).is_dir()
+
+
+def test_a_declared_input_under_an_ignored_directory_stays_tracked() -> None:
+    """``data/processed/`` is ignored, and one file in it is a declared input.
+
+    ``config/pipeline.yaml`` names ``typology_join_artifact:
+    data/processed/ibm_typologies.parquet`` and ``data/DATASET_CARD.md`` cites its row
+    and block counts. It was tracked only because somebody force-added it past the
+    ignore rule, which is the worst of both states: carried, but by accident, so the
+    next ``git add -A`` could drop a declared input with nobody deciding to. The rule
+    now exempts it explicitly, and this asserts the exemption still resolves.
+    """
+    tracked = _tracked_paths()
+    assert "data/processed/ibm_typologies.parquet" in tracked
+    ignored = subprocess.run(
+        ["git", "check-ignore", "-q", "data/processed/ibm_typologies.parquet"],
+        cwd=REPO_ROOT,
+    )
+    assert ignored.returncode != 0, "the declared typology artifact is ignored again"
