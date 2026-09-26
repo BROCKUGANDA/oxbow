@@ -13,7 +13,7 @@ the position.
 | **P1b** | canonical v1, PaySim + IBM-AML adapters, quarantine, Parquet/DuckDB writers, dataset card | in progress — 1 of 2 gates failing | `verify.py --phase P1b`: the ingest gate passes (200,000 canonical events, 0 quarantined, 0 silently coerced; the same holds for an explicit `--source ibmaml` run), and 26 of 27 contract tests pass — the failure is `test_counterparty_reuse_reported`, i.e. punch-list item 2a, not the ingest layer |
 | **P3a** | time-stamped directed multigraph, rails, Leiden, cycles, subgraph cap | **DONE, one amendment open** | `verify.py --phase P3a` 1/1 (61 tests) · DEV-018 needs the graph to exclude self-edges it can now receive |
 | **P2** | 60–75 features, feature-spec hash, leakage gate proven to bite, purged splits | in progress | 5 of 6 known failures are in `test_p2_splits.py`: expanding window not enforced, purge decorative, entity-disjoint share off target |
-| **P3b** | golden fixture, rules R1–R12 | in progress | 4 failures in `test_p3b_r4_labelled_cycles.py`, all downstream of DEV-018 |
+| **P3b** | golden fixture, rules R1–R12 | in progress | `test_p3b_rules.py` + `test_p3b_golden_matrix.py`: **82 passed**; 4 remain in `test_p3b_r4_labelled_cycles.py` — see punch-list item 13, one of which is a mis-specified expectation rather than a measurement |
 | **P4** | WOE scorecard, LightGBM, Isolation Forest, calibration, fusion, SHAP | code present, **not verified by the orchestrator** | agent-reported full-stack run at 620 s/fold with an `import mlflow` MemoryError; nothing audited here |
 | **P5** | EV allocation, greedy vs CP-SAT, Monte Carlo exposure, economics | **DONE** | `verify.py --phase P5` 1/1 (89 tests) |
 | **P6** | walk-forward backtest, ablation table, fairness, perturbation | in progress | `data/processed/eval.json` exists; its numbers have not been reproduced from a command here |
@@ -197,6 +197,19 @@ Ordered by damage if any of it survives into a claimed-complete phase.
     including every test in `test_p9_packet.py`; the same file run alone reports 28
     passed, 1 skipped. `make test` has to be read on a quiet tree, and the green claim
     in §16 belongs to that run only.
+
+13. **`test_p3b_r4_labelled_cycles.py` has four failures, and one of them is a
+    mis-specified expectation, not a measurement.** The file expects a refusal-reason
+    aggregate key `amount_increases_along_loop = 45`, but the live anatomy dict reports
+    five keys (cross-currency 38, length-above 20, length-below 14, timestamps 5,
+    retention 25) which match DEV-015's recorded table exactly. `amount_increases_along_loop`
+    is not an aggregate reason code at all -- in `rules/network.py:127` it is a
+    per-hit evidence field read off one cycle anchor (`anchor.non_increasing_breaches`),
+    and 45 appears in no artifact in the repo. So either the rules layer needs a real
+    non-increasing *reason* aggregate that nobody has measured, or the test invented a
+    number. Unresolved deliberately: the self-edge amendment (DEV-018) changes which
+    anchors the enumerator sees, so any figure taken now would move again. Re-read this
+    item once `graph/build.py` settles.
 
 ## Verification ledger (run by the orchestrator, not reported by agents)
 
