@@ -46,6 +46,11 @@ class Gate:
     # produces). A missing prerequisite is reported as SKIPPED-PREREQUISITE with
     # the path named, never as a pass.
     prerequisite: str | None = None
+    # Run the command somewhere other than the repo root. A JS test runner resolves its
+    # config and its `include` globs against the working directory, so the P8 gate has to
+    # run inside apps/web; passing a relative --config instead breaks esbuild's own path
+    # resolution, which is a more confusing failure than stating where the command runs.
+    cwd: str | None = None
     timeout_s: int = 900
 
 
@@ -257,11 +262,37 @@ PHASES: tuple[Phase, ...] = (
     Phase(
         name="P8",
         done=False,
-        pending_reason="screens and primitives compile clean over 64 files (tsc), but nothing has been rendered in a browser, so states/CLS/reduced-motion are unverified",
+        # Not "never rendered in a browser" any more: 316535b ran the suite against the
+        # cached chromium and measured CLS on every route. What is still open is the
+        # measurement itself -- /alerts sits at 0.0153 against a 0.001 budget because a div
+        # shifts on resolution -- plus five playwright specs that are not green. Saying
+        # "unverified" would understate what has been measured, and saying "done" would
+        # overstate a red suite.
+        pending_reason=(
+            "51 vitest tests pass over 11 files and every route has been rendered and "
+            "measured in the cached chromium, but the measured CLS is over budget on "
+            "/alerts (0.0153 against 0.001, a div shifts on resolution) and 5 of 26 "
+            "playwright specs are not green, so the matched-geometry claim does not yet "
+            "hold on the queue route"
+        ),
         gates=(
+            # `node node_modules/vitest/vitest.mjs`, not `pnpm --dir apps/web test:unit`:
+            # pnpm is not installed on this host and never was, so the gate could not run at
+            # all -- a green phase definition that cannot be executed is the same phantom
+            # `make demo` was. .env.example:139-140 records this host's convention.
+            #
+            # The JS entry point rather than `node_modules/.bin/vitest`: that is a shell
+            # script, and subprocess on Windows raises WinError 2 trying to CreateProcess it.
+            # Going through node is also the path the .CMD shim itself uses, so this is the
+            # same resolution order pnpm would have produced.
+            #
+            # cwd="apps/web" is load-bearing: vitest resolves its config and its
+            # `include: tests/unit/**` globs against the working directory, and passing a
+            # relative --config instead breaks esbuild's own path resolution.
             Gate(
                 "unit tests for the design system and state craft",
-                ("pnpm", "--dir", "apps/web", "test:unit", "--run"),
+                ("node", "node_modules/vitest/vitest.mjs", "run"),
+                cwd="apps/web",
             ),
         ),
     ),
@@ -300,7 +331,7 @@ def _run(gate: Gate) -> tuple[bool, str]:
     child_env = dict(os.environ, PYTHONIOENCODING="utf-8")
     proc = subprocess.run(
         gate.argv,
-        cwd=REPO_ROOT,
+        cwd=str(REPO_ROOT / gate.cwd) if gate.cwd else REPO_ROOT,
         capture_output=True,
         text=True,
         encoding="utf-8",

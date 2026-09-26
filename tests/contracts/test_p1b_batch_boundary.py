@@ -257,16 +257,17 @@ def test_persisted_parquet_carries_no_run_scoped_columns(tmp_path: Path) -> None
         determinism=DETERMINISM,
     )
     artifact = sink.write_batch(PAYSIM_NAMESPACE, result.batch_id, result.events)
+    # `path` is recorded repo-relative so the manifest survives the container/host
+    # handoff; the sink resolves it back to something openable on this machine.
+    landed_path = sink.resolve(str(artifact["path"]))
 
-    landed = pl.read_parquet(artifact["path"])
+    landed = pl.read_parquet(landed_path)
     assert landed.columns == list(PERSISTED_CANONICAL_COLUMNS)
     for column in SIDECAR_COLUMNS:
         assert column not in landed.columns
     assert set(PERSISTED_CANONICAL_COLUMNS) | set(SIDECAR_COLUMNS) == set(CANONICAL_COLUMNS)
     assert artifact["rows"] == 1
-    assert (
-        artifact["sha256"] == hashlib.sha256(Path(str(artifact["path"])).read_bytes()).hexdigest()
-    )
+    assert artifact["sha256"] == hashlib.sha256(landed_path.read_bytes()).hexdigest()
 
     manifest_path = Path(
         sink.write_run_manifest(PAYSIM_NAMESPACE, {"run_id": "X", "ingested_at": "Y"})
@@ -324,7 +325,7 @@ def test_duckdb_views_read_back_the_landed_parquet(tmp_path: Path) -> None:
         ],
     )
     views = sink.register_views(
-        canonical_files={PAYSIM_NAMESPACE: [str(artifact["path"])]},
+        canonical_files={PAYSIM_NAMESPACE: [str(sink.resolve(str(artifact["path"])))]},
         quarantine_files=[quarantine],
     )
     names = {str(view["view"]) for view in views}

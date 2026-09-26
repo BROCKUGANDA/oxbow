@@ -381,8 +381,8 @@ Ordered by damage if any of it survives into a claimed-complete phase.
     because the corpus it "had" was now seven days short of one. Nothing was corrupted and
     nothing was wrong with the code: the manifest is the contract, and it had honestly
     changed. The same hazard is built into the P1b gate, which runs
-    `oxbow ingest --limit 200000` twice; **`make verify` therefore changes what the score
-    stage reads**, and a score run must re-assert its own corpus first. Two follow-ons:
+    already. **`make verify` therefore changes what the score stage reads**, and a score run
+    must re-assert its own corpus first. Two follow-ons:
     (a) per-run manifests under `data/interim/<source>/runs/<run_id>.json` with the flat
     file as a symlink/pointer would make the pointer explicit; (b) the score stage should
     print the landed window next to the embargo arithmetic when it refuses, since "the
@@ -392,8 +392,38 @@ Ordered by damage if any of it survives into a claimed-complete phase.
     6.4M-event corpus as "absent on disk" — now relative on both sides, pinned by
     `tests/unit/test_p1b_manifest_path_portability.py`.
 
-## Verification ledger (run by the orchestrator, not reported by agents)
+18. **The RQ worker has run real jobs, and four of them are in the database as `failed`.**
+    Queried out of the compose Postgres (`job_run` joined to `run`), not inferred from a
+    test: four `pipeline` jobs, all `state='failed'`, each with a named cause stored --
+    `OSError: [Errno 30] Read-only file system: '/srv/data/interim/paysim/...parquet.partial'`
+    (the compose file mounted `data/` read-only; ingest writes there, so the mount was
+    widened to `./data:/srv/data` plus `./data/raw:/srv/data/raw:ro`),
+    `StageChainFailedError: run 01M3FGE8... went red: ingest exited 1`, and two
+    `OSError: [Errno 12] Cannot allocate memory` from `adapters/io.py:104`.
+    Three things follow. The failure bookkeeping works: the run row and the job row both
+    say `failed`, with the reason, and nothing hangs in `running` -- which is the property
+    `jobs.py`'s enqueue guard exists to protect, now demonstrated on production-shaped data
+    rather than only in `test_p7_worker.py`. The worker's `--demo`-free path executes:
+    `docker logs oxbow-worker-1` shows it cleaning registries for queue `oxbow` and taking
+    jobs. And **memory is the binding constraint on this host**, not CPU and not disk:
+    a container running the full pipeline concurrently with a host-side score run and one
+    agent is enough to hit `Errno 12` inside a 15.7 GB machine with ~2 GB free. That is the
+    real explanation for the "import mlflow MemoryError" a worker once reported as a
+    blocker, and it is why the score stage is run serially here rather than fanned out.
 
+19. **`verify-determinism` at the score stage cannot be claimed on this host yet, and the
+    sampler was the reason.** The slice is a pure function of the landed corpus, but the
+    corpus is not a pure function of the bytes: `induced_subcorpus` took the *head by time*
+    of the induced mutual set, so a re-ingest that minted different batch ids reordered the
+    head and changed the slice's span (18 days vs 162 for the same command and seed). Fixed
+    in `fix(p2)` by striding across the ordered set instead of cutting its head; the
+    endpoints and the coverage are now asserted in `tests/unit/test_p2_features.py`. What is
+    still owed is the double-run comparison at the score stage itself
+    (`scripts/verify_determinism.py --command "uv run oxbow score --max-events 40000"
+    --artifacts out/score`), which needs one score run to finish before there is an
+    artifact pair to compare.
+
+## Verification ledger (run by the orchestrator, not reported by agents)
 
 §16 requires a gate to be run in-session with observed output, so this is the list of
 what has been independently executed here, with the number that came back. Anything
@@ -401,12 +431,16 @@ not on this list is *not* verified, regardless of what a package's own tests cla
 
 | What | Command | Result |
 | --- | --- | --- |
+| Full PaySim corpus | `uv run oxbow ingest -s paysim` (no limit) | **6,362,620 canonical events across 64 batches, 0 quarantined, 0 silently coerced, 252.7s**, window `2014-01-02 → 2016-01-14` = **743 days**, which is the `step 1–743 × step_hours 24` reading asserted in item 14 |
+| The worker, in production | `docker exec oxbow-postgres-1 psql ... -c "select state, kind, error from job_run"` | **4 `pipeline` jobs, all `failed`, each with a named cause stored** (`Errno 30` read-only mount, `Errno 12` cannot allocate memory ×2, `StageChainFailedError: run ... went red: ingest exited 1`); the matching `run` rows are `failed` too, so nothing is left `running`. Item 18 |
+| Sampler coverage after `fix(p2)` | `uv run pytest -q tests/unit/test_p2_features.py -k slice` | **2 passed** — slice spans ≥ 90% of the corpus timeline, stride keeps both endpoints of the frame it is handed, is ordered, and repeats identically |
+| P2 gates after the sampler change | `uv run pytest -q tests/test_leakage.py` / `tests/unit -k p2` | **19 passed** and **79 passed** (was 78; the new test is the +1) |
+| Score at the configured slice | `uv run oxbow score` (500,000-event target) | **did not finish in 1h47m** (72 CPU-minutes) while two agents shared the host; killed. The lesson is the same one that withdrew the P3a graph gate: a phase gate that cannot finish is not a gate |
 | P7 gate set, this session | `uv run python scripts/verify.py --phase P7` | **3 gates run, 3 passed** — 22 conformance, `Contracts: 4 kept, 0 broken`, and **77 passed in 160.62s** across the API, worker, session hygiene and envelope doctrine |
 | Append race, isolated | `uv run pytest -q tests/integration/test_p7_api.py` | **41 passed**. The two order-dependent assertions in `test_concurrent_append_gives_one_success_and_one_409` are now scoped to the race itself (`chain_seq == winner + 1`, counts by `trace_id`). Mutation-proven: `+ 2` produced `E assert 2 == (1 + 2)` |
 | The scorecard solver actually runs | seeded 4,000-row monotone signal through `fit_feature_binning` | `boundary_source='optbinning-mip'`, eight value bins, bad rates `0.011 → 0.711` monotone, `monotonic_direction='ascending'`, identical table inside and outside the pytest warning filter. Before DEV-020 every numeric feature came from `quantile-fallback` |
 | P4 guardrail tests | `uv run pytest -q tests/unit -k p4` | **16 passed** (9 guards + 6 calibration/fusion/explain + the scorer seam) |
 | 1.5M-row ingest | `uv run oxbow ingest -s paysim --limit 1500000` | **1,500,000 canonical events, 0 quarantined, 0 silently coerced, 69.4s**, window `2014-01-02 → 2014-05-24` = 143 days, which is what makes the 30-day embargo arithmetically satisfiable |
-| Score at the configured slice | `uv run oxbow score` (500,000-event target) | **did not finish in 1h47m** (72 CPU-minutes) while two agents shared the host; killed. The lesson is the same one that withdrew the P3a graph gate: a phase gate that cannot finish is not a gate |
 | Score on a bounded slice | `uv run oxbow score --max-events 120000` | killed by a 90-minute budget: the rules-layer graph alone took ~65 min for **173,031 nodes, 0 cycles, 23,646 communities** |
 | Score on the run now in flight | `uv run oxbow score --max-events 40000` | rules **736 hits over 72,135 accounts, 11 rules below the hit-rate floor**, graph `0 cycles / 6,150 communities`; features 75 published; **fold plan accepted** (`30d embargo over 2014-01-02 → 2014-06-12`); per-fold model stack running at the time of writing |
 | First browser run of the web app | `./node_modules/.bin/playwright test` (chromium from the ms-playwright cache) | **21 passed, 5 failed in 5.8 min.** Measured CLS `/alerts 0.0153` (gate: zero), `/cases 0.00059`, `/dev/states 0.00072`; axe 0 critical/serious on every route sampled. After two fixes the gallery file is 3 passed / 2 failed |
