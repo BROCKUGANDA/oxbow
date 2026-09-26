@@ -310,13 +310,22 @@ def _run_stage(ctx: StageContext, name: str, body: Callable[[StageHandle], int])
         return code
 
 
-def _execute(ctx: StageContext, name: str, body: Callable[[StageHandle], int]) -> int:
-    """Run one stage and always move the run to a terminal state.
+def _execute(
+    ctx: StageContext, name: str, body: Callable[[StageHandle], int], *, terminal: bool = True
+) -> int:
+    """Run one stage and, unless told otherwise, move the run to a terminal state.
 
     A crash that left ``run.state`` at ``running`` would hold the API's SSE stream open
     until its budget expired, which reads as a stalled pipeline rather than a failed one
     (03 §J). The exception still propagates: the ledger records the failure, the operator
     sees the traceback, and the exit code stays non-zero.
+
+    ``terminal=False`` is for a stage composed into a larger run by ``pipeline``, which
+    owns the run's terminal state itself. Without it the first stage closed the run and
+    the composition root's own ``finish`` hit the warehouse's deliberate
+    "a completed run does not change state" guard, so `oxbow pipeline` could not finish
+    whatever its stages did. A failure is still terminal here, because a raised
+    exception stops the whole run at that stage.
     """
     try:
         code = _run_stage(ctx, name, body)
@@ -324,7 +333,7 @@ def _execute(ctx: StageContext, name: str, body: Callable[[StageHandle], int]) -
         if not ctx.dry_run:
             ctx.emitter.finish(RunState.FAILED, error=f"{type(exc).__name__}: {exc}")
         raise
-    if not ctx.dry_run:
+    if not ctx.dry_run and terminal:
         ctx.emitter.finish(RunState.FAILED if code else RunState.COMPLETE)
     return code
 
@@ -1456,7 +1465,7 @@ def pipeline_cmd(
     }
     outcomes: list[tuple[str, int]] = []
     for name in STAGES:
-        code = _execute(ctx, name, bodies[name])
+        code = _execute(ctx, name, bodies[name], terminal=False)
         outcomes.append((name, code))
         if code != EXIT_OK:
             break
@@ -1667,6 +1676,12 @@ def eval_cmd(
     artifacts the pipeline actually wrote, publishes them as
     ``data/processed/eval.json`` with a source pointer per figure, and renders the documents
     from that JSON. It exits non-zero while any published section still has no artifact.
+
+    ``data/DATASET_CARD.md`` is the one document it does *not* write. A dataset card carries
+    authored judgement that no artifact can generate, and a past run of this command
+    overwrote it. :mod:`oxbow.dataset_card` resolves each figure the card states against the
+    artifact or config that owns it, fails naming the field and both values when they drift,
+    and reports the checks it could not run instead of counting them as passes.
     """
     root = _repo_root(config_dir)
     typer.echo(f"[eval] root {root} | every figure read from a landed artifact")
