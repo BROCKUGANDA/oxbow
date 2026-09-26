@@ -1,0 +1,13 @@
+<!-- OXBOW glyph: hash-link - the append-only audit hash chain.
+     Two interlocking brackets whose arms cross at two points, plus a tick. The
+     crossing is the point: two brackets merely stacked read as decoration, and two
+     that interlock read as a chain whose links cannot be reordered after the fact.
+     Spec 12.6 glyph system: 24x24 grid, 1.75px stroke, square line caps, 2px optical padding. -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none"
+     stroke="currentColor" stroke-width="1.75" stroke-linecap="square" stroke-linejoin="round">
+  <!-- two chain links, offset so they interlock across the overlap at x 9.5-15, y 8.5-10.5 -->
+  <rect x="3" y="3" width="12" height="7.5" rx="3.75"/>
+  <rect x="9.5" y="8.5" width="11.5" height="7.5" rx="3.75"/>
+  <!-- the tick, held in the clear corner below the first link -->
+  <path d="M3.5 15L6 17.5 8.8 13"/>
+</svg>

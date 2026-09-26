@@ -1,0 +1,17 @@
+<!-- OXBOW glyph: pass-through - R1 RAPID_PASS_THROUGH, the mule signature.
+     A hollow node with one arrow entering it and one arrow leaving it on the SAME
+     30-degree axis, and a clock tick beneath for the 60-minute window. Value that
+     arrives and leaves on one line is the whole definition of a pass-through; any
+     kink in that axis would read as two unrelated transfers instead.
+     Spec 12.6 glyph system: 24x24 grid, 1.75px stroke, square line caps, 2px optical padding. -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none"
+     stroke="currentColor" stroke-width="1.75" stroke-linecap="square" stroke-linejoin="round">
+  <!-- the through-line: both shafts are collinear with the node centre (12, 9.8) -->
+  <path d="M3.77 14.55L7.15 12.6M14.6 8.3L18 6.35"/>
+  <!-- entry arrowhead pointing into the node, exit arrowhead pointing out of it -->
+  <path d="M8.1 14.25L9.4 11.3 6.2 10.96M18.95 8L20.23 5.05 17.05 4.71"/>
+  <circle cx="12" cy="9.8" r="3"/>
+  <!-- the 60-minute clock beneath, hands at three o'clock -->
+  <circle cx="12" cy="18.4" r="2.5"/>
+  <path d="M12 17.3V18.4H13.7"/>
+</svg>

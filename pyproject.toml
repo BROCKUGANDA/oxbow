@@ -1,0 +1,143 @@
+[project]
+name = "oxbow"
+version = "0.1.0"
+description = "OXBOW - quantitative risk scoring and financial-crime intelligence for mobile-money networks"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+  # --- dataframes / contracts (01 D: Polars 1.x, DuckDB 1.1, Pandera 0.20) ---
+  "polars==1.32.3",
+  "duckdb==1.1.3",
+  "pandera==0.20.3",
+  # mlflow 2.19 requires pyarrow<19; 18.1.0 is the ceiling that also satisfies
+  # polars 1.32. Pinned to the highest version both allow.
+  "pyarrow==18.1.0",
+  # --- risk scoring and quant (spec 12.2) ---
+  "optbinning==0.19.0",
+  "statsmodels==0.14.4",
+  "scipy==1.15.3",
+  "scikit-learn==1.5.2",
+  "lightgbm==4.5.0",
+  "optuna==4.3.0",
+  "shap==0.46.0",
+  "mlflow==2.19.0",
+  "ortools==9.11.4210",
+  # numpy 1.26.4, not 2.x: optbinning 0.19 requires numpy<2, and numba must match
+  # the numpy major. Neither library's version is pinned by 01 D or spec 12.2
+  # ("NumPy plus Numba", "optbinning"), so the pair is chosen for resolvability.
+  "numpy==1.26.4",
+  "numba==0.60.0",
+  # --- graph (spec 12.3) ---
+  "networkx==3.3",
+  "python-igraph==0.11.8",
+  "leidenalg==0.10.2",
+  # --- backend (spec 12.4) ---
+  "fastapi==0.115.6",
+  "pydantic==2.10.4",
+  "pydantic-settings==2.7.0",
+  "uvicorn[standard]==0.34.0",
+  "sqlalchemy==2.0.36",
+  "alembic==1.14.0",
+  "psycopg[binary]==3.2.3",
+  "redis==5.2.1",
+  "rq==2.1.0",
+  "weasyprint==63.0",
+  "jinja2==3.1.5",
+  "structlog==24.4.0",
+  "httpx==0.28.1",
+  "typer==0.15.1",
+  # typer 0.15.1 calls Parameter.make_metavar(ctx), which click 8.5 removed.
+  # click 8.1.8 is the newest release typer 0.15.1 renders help against.
+  "click==8.1.8",
+  "python-ulid==3.0.0",
+  "pyyaml==6.0.2",
+  "boto3==1.35.90",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest==8.3.4",
+  "pytest-cov==6.0.0",
+  "pytest-timeout==2.3.1",
+  "mypy==1.14.0",
+  "ruff==0.8.6",
+  "import-linter==2.3.0",
+  "schemathesis==3.39.9",
+  "pip-audit==2.7.3",
+  "responses==0.25.3",
+  "freezegun==1.5.1",
+  "hypothesis==6.122.3",
+  # Type stubs, so `mypy --strict` type-checks the yaml and requests surfaces
+  # instead of silently treating them as untyped (spec 12.9: strict on the core).
+  "types-PyYAML==6.0.12.20260906",
+  "types-requests==2.33.0.20260906",
+]
+
+[project.scripts]
+oxbow = "oxbow.cli:app"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["packages/pipeline/oxbow"]
+
+# --- ruff (spec 12.9: one tool for lint and format) ---
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+src = ["packages/pipeline", "apps/api", "tests", "scripts"]
+extend-exclude = [".hermes", "data", "out"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "N", "UP", "B", "A", "C4", "SIM", "RET", "ARG", "PTH", "TID", "RUF"]
+ignore = [
+  "E501",    # formatter owns line length
+  "B008",    # FastAPI Depends() in defaults is idiomatic
+  "N803", "N806",  # rule/table identifiers are spec-named
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["ARG", "S101"]
+"apps/api/alembic/**" = ["E402"]
+
+[tool.ruff.lint.flake8-tidy-imports]
+ban-relative-imports = "parents"
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+
+# --- mypy strict on the core (spec 12.9) ---
+[tool.mypy]
+python_version = "3.12"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true
+ignore_missing_imports = true
+namespace_packages = true
+explicit_package_bases = true
+mypy_path = "packages/pipeline"
+exclude = ['(^|/)\.hermes/', 'data/', 'out/']
+
+[[tool.mypy.overrides]]
+module = "tests.*"
+disallow_untyped_defs = false
+
+[tool.pytest.ini_options]
+minversion = "8.0"
+testpaths = ["tests", "packages/pipeline/tests"]
+python_files = ["test_*.py"]
+addopts = "-ra --strict-markers --timeout=300"
+markers = [
+  "golden: golden-file tests for the rule engine and scorecard points (spec 12.9)",
+  "slow: tests over the full corpus rather than a fixture",
+  "contract: port-conformance and data-contract tests (02 H)",
+  "integration: requires running infrastructure",
+  "e2e: full stack",
+]
+filterwarnings = ["error::DeprecationWarning:oxbow.*"]
+
+[tool.coverage.run]
+source = ["packages/pipeline/oxbow"]
+branch = true

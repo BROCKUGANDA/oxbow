@@ -1,0 +1,11 @@
+<!-- OXBOW glyph: fast-cash-out - R10 FAST_CASH_OUT, placement and extraction.
+     A node with a downward arrow piercing a rail bar. The rail is split either side
+     of the pierce so the arrow reads as passing THROUGH it rather than stopping on
+     it, which is the difference between extraction and an ordinary purchase.
+     Spec 12.6 glyph system: 24x24 grid, 1.75px stroke, square line caps, 2px optical padding. -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none"
+     stroke="currentColor" stroke-width="1.75" stroke-linecap="square" stroke-linejoin="round">
+  <circle cx="12" cy="6" r="2.6"/>
+  <path d="M12 8.6V21M9.8 18.8L12 21 14.2 18.8"/>
+  <path d="M2.5 12.5H10.3M13.7 12.5H21.5M2.5 17H10.3M13.7 17H21.5M2.5 12.5V17M21.5 12.5V17"/>
+</svg>

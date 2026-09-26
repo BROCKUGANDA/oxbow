@@ -1,0 +1,104 @@
+# OXBOW pipeline configuration
+# Spec 14: seeds fixed here as `seed: 1337` and propagated to NumPy, LightGBM,
+# Optuna, the Monte Carlo engine and the injector. `make eval` must reproduce the
+# README's numbers exactly; if it does not, that is a bug with the same severity
+# as a crash.
+#
+# Owner: P1 (ingest) / P2 (features) / P6 (backtest)
+
+seed: 1337
+
+# --- deployment identity -------------------------------------------------
+# NEVER mix local_hour and ts_utc. Rules that reason about human hours read the
+# separate local_hour column derived from this timezone (03 C: an ODD_HOUR_SHIFT
+# rule written against UTC flags an entire East-African morning as suspicious).
+deployment_timezone: Africa/Kampala
+
+# --- PaySim step expansion ----------------------------------------------
+# PaySim's `step` is a synthetic day counter, not a timestamp. Converting it to
+# UTC needs a fixed epoch, and every transaction inside a step shares that
+# timestamp, which makes intra-step ordering arbitrary. The offset below is
+# derived deterministically from a hash of the transaction id, documented in the
+# dataset card as synthetic (03 B: test_step_expansion_stable).
+paysim:
+  epoch_utc: "2014-01-01T00:00:00Z"
+  step_hours: 24
+  intra_step_offset:
+    method: hash_of_txn_id      # deterministic, seed-independent
+    modulus_us: 86_400_000_000  # spread within the step
+    salt: "oxbow-paysim-step-v1"
+
+# --- rows / corruption guards (03 B) -------------------------------------
+ingest:
+  # A zero-row batch is an error, not a success: a clean run that scored nothing
+  # looks like a clean run that found nothing.
+  allow_empty_batch: false
+  # Any coercion quarantines the row. The counter must be zero at the end of a
+  # green run.
+  allow_silent_coercion: false
+  # Reject anything after the batch window end plus this tolerance.
+  future_timestamp_tolerance_hours: 6
+  # 12 hex characters is 48 bits. Asserted unique per run; widen if it ever fails.
+  account_key_prefix_len: 12
+
+# --- determinism ---------------------------------------------------------
+determinism:
+  # Two runs of `make pipeline` on the same input must produce identical Parquet
+  # checksums. If they do not, that is a P1 bug and everything else waits (01 A4).
+  parquet_row_group_size: 100_000
+  parquet_compression: zstd
+  parquet_compression_level: 3
+  sort_keys:
+    - ts_utc
+    - txn_id          # total order is (ts_utc, txn_id); every sort uses this tuple
+  hash_algorithm: sha256
+
+# --- graph build ---------------------------------------------------------
+graph:
+  # Nodes above this degree percentile are typed `rail`: merchants, agents and
+  # aggregators, whose degree in the tens of thousands makes fan-in fire on the
+  # whole economy and destroys PageRank. Rails are traversal stoppers.
+  rail_degree_percentile: 99.0
+  # Server-side cap on a rendered subgraph. Beyond it, communities collapse into
+  # expandable meta-nodes labelled with their true size.
+  subgraph_node_cap: 1500
+  default_hops: 2
+  # Leiden must be stable between runs, so seed and iteration count are both fixed
+  # and community ids are remapped to a canonical order by size then minimum node key.
+  community:
+    algorithm: leiden
+    seed: 1337
+    n_iterations: 3
+    objective_function: modularity
+    resolution: 1.0
+    canonical_order: size_then_min_node_key
+  page_rank:
+    alpha: 0.85
+    max_iter: 200
+  betweenness:
+    # 500 pivots is the affordable approximation at this corpus size.
+    pivots: 500
+
+# --- exposure (spec 3.2) -------------------------------------------------
+# Exposure at risk E_i is the value still interceptable: funds that flow OUT of i
+# and its 1-hop downstream within the recovery window w after the first triggering
+# event, capped at inflow observed in the same window.
+exposure:
+  window_hours: 24
+  downstream_hops: 1
+
+# --- checkpoints / resumability (03 J) ----------------------------------
+runtime:
+  resumable_stages: true
+  # Every stage is resumable from its checkpoint; a run records the last
+  # committed offset. Partial batch failure records where it stopped.
+  checkpoint_every_rows: 250_000
+
+# --- parallel corpus policy (spec 18, addresses the 49 GB disk) ------------
+# Graph algorithms are too slow on the full corpus, so the interactive product
+# runs on a connected subcorpus while full-corpus metrics run offline. The
+# sampling rule is documented in data/DATASET_CARD.md.
+sampling:
+  interactive_txn_target: 500_000
+  strategy: connected_subcorpus   # preserves network structure; random rows would not
+  full_corpus_metrics: offline

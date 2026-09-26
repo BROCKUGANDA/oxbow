@@ -1,0 +1,96 @@
+# OXBOW economic assumptions - the single source for every money figure.
+# Spec 6.1: this file holds every economic assumption and is rendered verbatim in
+# the UI. Any number the product asserts is a function of this file plus observed
+# data, and nothing else.
+#
+# Owner: P5 (quant decision layer). Changing a value here changes every headline
+# figure, which is the point: the assumptions travel with the number.
+#
+# MONEY IS INTEGER MINOR UNITS. Every amount below is a count of minor units
+# (1 UGX = 100 minor). Float arithmetic on money is a defect, not a style choice
+# (01 B), so `amount_minor: int64` and a lint rule bans float money in the
+# pipeline package.
+
+currency: UGX
+minor_units_per_major: 100
+
+# --- analyst cost --------------------------------------------------------
+# c_i in EV = p_i * E_i * r - c_i - (1 - p_i) * f
+analyst:
+  # Fully loaded cost of one analyst-hour, in minor units. Illustrative.
+  cost_per_hour_minor: 250_000
+  # Minimum expected review minutes, in config load. Zero is REJECTED at load,
+  # because EV density divides by minutes and a zero-minute alert would dominate
+  # the ranking forever (03 I: test_ev_density_no_zero_divide).
+  min_review_minutes: 5.0
+  hours_per_period: 40
+
+# --- review effort by risk band -----------------------------------------
+# Minutes are the operational reality of a triage desk: a band-A account is a
+# glance, a band-E account is an investigation.
+review_minutes_by_band:
+  A: 5
+  B: 12
+  C: 25
+  D: 60
+  E: 120
+
+# --- recovery rate (spec 3.2) --------------------------------------------
+# r is the share of exposure a timely investigation actually prevents.
+# IT IS AN ASSUMPTION, not a measurement. Default 0.35, and every headline figure
+# carries a sensitivity band over {0.20, 0.35, 0.50}. Never present a single
+# money number without its r band; that one habit is the difference between
+# "credible" and "made up".
+recovery:
+  rate: 0.35
+  sensitivity_band: [0.20, 0.35, 0.50]
+  # Config validation constrains r to an open interval. Zero or one makes every
+  # figure degenerate (03 I: test_recovery_rate_bounds).
+  bounds_exclusive: [0.0, 1.0]
+
+# --- recovery window -----------------------------------------------------
+# Exposure is measured over this window after the first triggering event.
+window_hours: 24
+
+# --- friction cost -------------------------------------------------------
+# f: the cost of wrongly touching a legitimate customer. This term exists
+# precisely to price that harm, and small-value and newly-active accounts are
+# the realistic over-flagging risk. Illustrative, in minor units.
+friction_cost_minor: 50_000
+
+# --- capacity ------------------------------------------------------------
+# The review budget for one period. This is the constraint the whole module
+# optimises under: selecting which accounts to review given B analyst-minutes is
+# a 0/1 knapsack.
+capacity:
+  review_minutes_per_period: 12_000
+  # Accounts reviewed at the default capacity, for the demo. The capacity cutoff
+  # line in the alert queue is drawn at this rank.
+  default_alerts_reviewed: 200
+  sweep:
+    # The efficient frontier sweeps B across its plausible range.
+    min_minutes: 2_000
+    max_minutes: 30_000
+    points: 31
+
+# --- Monte Carlo (spec 6.6) ----------------------------------------------
+# Network exposure by propagation: each outgoing edge transmits with probability
+# proportional to its value share. The single most persuasive number in the
+# product, and it costs about eighty lines plus numba.
+monte_carlo:
+  runs: 10_000
+  max_depth: 4
+  seed: 1337
+  interval: [0.05, 0.95]     # the 90% interval rendered on the case page
+
+# --- four-eyes threshold (02 F) ------------------------------------------
+# Any decision above this exposure value requires a second `reviewer`
+# confirmation before the outbox row is written.
+four_eyes:
+  threshold_exposure_minor: 5_000_000
+
+# --- tail risk (spec 6.5) ------------------------------------------------
+# The residual is the risk: the loss distribution over UNREVIEWED accounts.
+tail_risk:
+  var_alpha: 0.95
+  es_alpha: 0.975

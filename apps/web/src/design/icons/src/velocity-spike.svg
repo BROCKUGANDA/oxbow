@@ -1,0 +1,7 @@
+<!-- OXBOW glyph: velocity-spike - R6 VELOCITY_SPIKE, behaviour break.
+     A flat sparkline with one vertical break.
+     Spec 12.6 glyph system: 24x24 grid, 1.75px stroke, square line caps, 2px optical padding. -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none"
+     stroke="currentColor" stroke-width="1.75" stroke-linecap="square" stroke-linejoin="round">
+  <path d="M2.5 15.5H8L11.5 14.6L13.8 15.5L15.2 4.5L15.8 15.5H21.5"/>
+</svg>

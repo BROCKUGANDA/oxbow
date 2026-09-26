@@ -1,0 +1,13 @@
+<!-- OXBOW glyph: cycle - R4 CYCLE_MEMBER, circular layering.
+     A closed triangle of three arrowed sides, one arrowhead per side, so the
+     shape is unmistakably a LOOP rather than a generic refresh arrow: laundering
+     rings close, they do not merely repeat.
+     Spec 12.6 glyph system: 24x24 grid, 1.75px stroke, square line caps,
+     round line joins at the 1.75 stroke (2px optical), 2px optical padding. -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none"
+     stroke="currentColor" stroke-width="1.75" stroke-linecap="square" stroke-linejoin="round">
+  <!-- the closed triangle, drawn whole so the corners genuinely meet -->
+  <path d="M12 4.2L4.6 18.4H19.4Z"/>
+  <!-- one arrowhead laid over each side, all turning the same way round the loop -->
+  <path d="M10.45 11.29L7.56 12.72 7.08 9.54M10.88 16.5L13.48 18.4 10.88 20.3M17.85 11.31L14.96 9.88 14.48 13.06"/>
+</svg>

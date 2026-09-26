@@ -1,0 +1,79 @@
+# OXBOW - ignore rules.
+# 02 F: .env.example is committed, .env is never, and a pre-commit hook scans
+# for keys.
+
+# --- secrets: committed example only, real values never ---
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+secrets/
+credentials/
+
+# --- python ---
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+dist/
+*.egg-info/
+.venv/
+venv/
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+.coverage
+coverage.xml
+htmlcov/
+uv.lock.bak
+
+# --- node ---
+node_modules/
+.pnpm-store/
+apps/web/.next/
+apps/web/out/
+apps/web/.turbo/
+*.tsbuildinfo
+npm-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# --- data: corpora and artifacts are content-hashed, not committed ---
+# PaySim is 6.3M rows. The datasets are licensed and large, so they are fetched
+# by `make data` and verified by SHA-256 against data/DATASET_CARD.md rather
+# than committed.
+data/raw/*
+data/interim/*
+data/processed/*
+data/snapshots/*
+!data/raw/.gitkeep
+!data/interim/.gitkeep
+!data/processed/.gitkeep
+!data/snapshots/.gitkeep
+# The golden fixture IS committed: hand-built, hand-computed, and the thing the
+# rule engine and scorecard are tested against.
+!data/golden/*
+artifacts/
+out/
+mlruns/
+
+# --- generated clients: committed on purpose -----------------------------
+# 02 B seam 6: the generated client is committed, so a contract drift shows up
+# as a diff in review. The CI check regenerates it and fails on any difference.
+!apps/web/src/lib/api/schema.d.ts
+
+# --- editors / OS ---
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# --- agent plan scratch --------------------------------------------------
+.hermes/

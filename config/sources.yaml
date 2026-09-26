@@ -1,0 +1,157 @@
+# OXBOW declared data sources.
+# 01 B hard constraint: historical, public or de-identified data ONLY. Ingest
+# REFUSES any source not declared here, and every declared source carries a
+# license and a citation.
+#
+# Owner: P1a (ingest).
+#
+# This file is the allowlist. A source that is not in it cannot be read by the
+# pipeline, which is how the track rule is enforced mechanically rather than by
+# good intentions.
+
+schema_version: 1
+
+# --- primary: mobile-money shape ----------------------------------------
+sources:
+  - id: paysim
+    name: "PaySim1"
+    role: primary
+    module: "tabular risk scoring + topology"
+    source_url: "https://www.kaggle.com/datasets/ealaxi/paysim1"
+    retrieval: "scripts/download_data.py"
+    files:
+      - name: "PS_2014_01.csv"
+        # SHA-256 is verified at download and re-verified by `make data`. A
+        # mismatch fails closed; it never proceeds with the wrong bytes.
+        sha256: "RECORDED_AT_DOWNLOAD"
+    license: "CC BY-SA 4.0"
+    license_obligation: >-
+      Share-alike. Any derivative dataset we publish, including the canonical
+      event table and any feature extract, inherits CC BY-SA 4.0 and must be
+      released under the same terms with attribution.
+    citation: >-
+      E. A. Lopez-Rojas, A. Elmir, S. Axelsson, "PaySim: A financial mobile money
+      simulator for fraud detection," 28th European Modeling and Simulation
+      Symposium (EMSS), Larnaca, Cyprus, 2016.
+    description: >-
+      Agent-based simulator calibrated on one month of real logs from an African
+      mobile-money operator. CASH-IN, CASH-OUT, DEBIT, PAYMENT, TRANSFER. Roughly
+      6.3M rows. Sender and receiver ids give a real graph; balance columns give
+      an exposure proxy.
+    label_caveat: >-
+      isFraud covers a NARROW behaviour: an agent takes over an account and
+      drains it via TRANSFER then CASH-OUT. isFlaggedFraud is a crude threshold,
+      not ground truth. This must be stated before a judge finds it.
+    synthetic_fields: [step, oldBalanceOrig, newBalanceOrig, oldBalanceDest, newBalanceDest]
+    known_biases:
+      - "Simulated, not observed transactions; absolute amounts are not real."
+      - "Fraud prevalence is a simulator parameter, not a measured rate."
+      - "Balance columns are known to be internally inconsistent with amount."
+
+  # --- secondary: AML typologies ------------------------------------------
+  - id: ibmaml
+    name: "IBM Transactions for Anti-Money Laundering"
+    role: secondary
+    module: "network typology detection"
+    source_url: "https://www.kaggle.com/datasets/ealtman2019/ibm-transactions-for-anti-money-laundering"
+    retrieval: "scripts/download_data.py"
+    files:
+      - name: "transactions.csv"
+        sha256: "RECORDED_AT_DOWNLOAD"
+      - name: "patterns.csv"
+        sha256: "RECORDED_AT_DOWNLOAD"
+    license: "CDLA-Sharing-1.0"
+    license_obligation: >-
+      Share-alike on derived data. Any derivative dataset we publish inherits
+      CDLA-Sharing-1.0. The repository code is Apache-2.0, but the DATA carries
+      the stricter CDLA terms.
+    citation: >-
+      ealtman2019, IBM Transactions for Anti-Money Laundering, Kaggle.
+    description: >-
+      Ships laundering labels AND a typology/pattern file: fan-in, fan-out,
+      cycles, stacks, gather-scatter. This is the corpus that proves network
+      detection, because it carries explicit typology labels.
+    label_caveat: >-
+      Labelled typologies are curated, not independently verified. A labelled
+      cycle is a research annotation, not a prosecuted case.
+    known_biases:
+      - "Curated synthetic-scale corpus; account identifiers are already pseudonymous."
+      - "Typology labels are not balanced across categories."
+
+  # --- cite only, NEVER ingested -----------------------------------------
+  - id: elliptic
+    name: "Elliptic Bitcoin Dataset"
+    role: cite_only
+    ingest_allowed: false
+    source_url: "https://www.kaggle.com/datasets/elliptic/elliptic-data-transaction"
+    license: "CC BY-NC-ND 4.0"
+    license_obligation: >-
+      NON-COMMERCIAL and NO DERIVATIVES. A derived sample would violate the
+      licence outright, so this dataset is cited as related work in the README
+      and never read by the pipeline.
+    citation: "Dal crypto-graph benchmark; see README for full attribution."
+
+# --- explicitly refused sources ------------------------------------------
+refused:
+  - id: ieee_cis
+    name: "IEEE-CIS Fraud Detection"
+    reason: >-
+      Governed by competition rules; the terms on derived-split redistribution
+      are murky enough that shipping anything derived would be a licensing
+      question this prototype cannot answer. Not used at all.
+  - id: any_live_source
+    name: "Any live transaction source"
+    reason: >-
+      Track rule and a hard constraint: historical, public or de-identified data
+      only. OXBOW does not process live financial transactions, does not connect
+      to a payment rail, and does not trade or advise.
+
+# --- ingestion contract (02 D) -------------------------------------------
+contract:
+  # A source adapter must yield rows that satisfy the canonical Pandera schema,
+  # or raise. It may not repair data silently.
+  fail_loud_at_boundary: true
+  silent_repair_allowed: false
+  # Anything that cannot be mapped goes to a quarantine table with the original
+  # row, the failing constraint and the batch id. Quarantine is VISIBLE IN THE UI
+  # with a count, because silently dropped rows are how fraud systems develop
+  # blind spots that nobody can see.
+  quarantine:
+    enabled: true
+    visible_in_ui: true
+    show_count: true
+  batch:
+    # A batch is accepted whole or rejected whole. Partial batches never enter:
+    # half a day of transactions looks like a quiet day, which looks normal.
+    atomic: true
+    manifest_fields: [batch_id, row_count, sha256, window_start, window_end, source_system]
+    on_manifest_mismatch: reject_whole_batch
+  # A source arriving with zero rows is an ERROR, not a success. The stage ledger
+  # shows it red.
+  on_zero_rows: error
+
+# --- de-identification (spec 3.4) ---------------------------------------
+deidentification:
+  # Re-hash every account id at ingest. Nothing in the UI or an export resembles
+  # an upstream identifier.
+  account_key:
+    algorithm: sha256
+    input: "account_id + RUN_SALT"
+    prefix_length: 12
+    display_form: "ACC-{KEY_UPPERCASE}"
+    # The salt is per-run and lives in the environment, never the repo.
+    salt_source: environment
+    salt_var: RUN_SALT
+    # Re-identification requires the salt. Erasure destroys the salt mapping,
+    # leaving the audit chain intact and the subject unrecoverable.
+    mapping_table_excluded_from_exports: true
+  raw_identifier_policy:
+    # Never log or render a raw account identifier. Logs, traces and packets all
+    # use account_key.
+    logs: redacted
+    traces: redacted
+    packets: redacted
+    redaction_pattern: "^(?!ACC-)[A-Za-z0-9_\\.]{6,}$"
+  # A redaction filter drops any field matching the raw-identifier pattern, and
+  # a test asserts the filter fires.
+  assert_redaction_filter_fires: true

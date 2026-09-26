@@ -1,0 +1,16 @@
+<!-- OXBOW mark: the severed loop.
+     Spec 12.6 THE MARK. The leading O of OXBOW drawn as the severed loop: one closed
+     condensed loop with a single stroke running left to right beneath it, detached.
+     One SVG, reused as the favicon, the app mark, the export-packet cover, and the
+     single licensed loading indicator in the product. 32x32 viewBox so the severed
+     gap survives the 16px favicon. -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" fill="none" stroke="currentColor"
+     stroke-width="3" stroke-linecap="square" stroke-linejoin="round">
+  <!-- the closed loop, condensed proportion (w/h 0.86) so the mark sits at the same
+       optical weight as IBM Plex Sans Condensed 600 -->
+  <ellipse cx="16" cy="11" rx="7.25" ry="8.5"/>
+  <!-- The bow stave: one stroke, left to right, detached below the loop with a 2px
+       optical gap. The bow is the severing. A stave drawn straight would read as a
+       shelf the loop sits on, and the mark would lose the only idea it has. -->
+  <path d="M2.5 27Q16 25 29.5 27"/>
+</svg>

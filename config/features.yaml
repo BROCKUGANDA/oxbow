@@ -1,0 +1,176 @@
+# OXBOW feature specification.
+# Spec 5.2: features are computed strictly as of the split cutoff. The leakage
+# gate is a CI test: any feature computation touching a timestamp after
+# cutoff_ts fails the build.
+#
+# Owner: P2 (feature layer).
+#
+# TWO INVARIANTS, both enforced by tests rather than by discipline:
+#  1. Every feature declares an as-of timestamp and a lookback window. Rolling
+#     aggregates are computed over sorted time within that window, NEVER over
+#     the whole corpus.
+#  2. A feature-spec HASH is written alongside the feature table. Change the spec,
+#     change the hash, and every downstream artifact is invalidated
+#     automatically. At scoring time the hash is compared against the one
+#     recorded at training; mismatch REFUSES to score (02 B seam 3).
+#
+# target 60-75 features. feature_spec.yaml holds one plain-English sentence per
+# feature; it is both the SHAP panel's dictionary and the scorecard's attribute
+# labels.
+
+spec_version: 1
+target_feature_count: 60
+
+# As-of semantics. `as_of` is the account's cutoff timestamp for the fold; every
+# window is [as_of - lookback, as_of] and is half-open at the top so a row
+# timestamped exactly at as_of is excluded from the feature that predicts as_of.
+window_semantics:
+  as_of: fold_cutoff_ts
+  interval: "[as_of - lookback, as_of)"
+  sort_order: [ts_utc, txn_id]     # the codebase-wide total order
+  # Features are computed per window from a SEALED window. A late row lands in
+  # the next window and increments a late_arrival counter shown on the run, so a
+  # feature computed at 10:00 does not change when a 09:00 row arrives at 11:00.
+  sealed_windows: true
+  late_arrival_counter: true
+  # Windows overlap by the longest rule lookback so a pattern spanning a
+  # boundary is visible in at least one window.
+  overlap_hours: 168
+
+# The longest lookback in the registry. This number is what the walk-forward
+# embargo must equal, because a 30-day rolling feature computed just after the
+# boundary would otherwise see training-period data.
+max_lookback_days: 30
+
+groups:
+  volume_value:
+    - { name: txn_count_1d,          lookback_days: 1,  desc: "Transactions in the last day" }
+    - { name: txn_count_7d,          lookback_days: 7,  desc: "Transactions in the last 7 days" }
+    - { name: txn_count_30d,         lookback_days: 30, desc: "Transactions in the last 30 days" }
+    - { name: amount_sum_in_30d,      lookback_days: 30, desc: "Total value received in 30 days" }
+    - { name: amount_sum_out_30d,     lookback_days: 30, desc: "Total value sent in 30 days" }
+    - { name: amount_mean_in_30d,     lookback_days: 30, desc: "Average value received" }
+    - { name: amount_median_in_30d,   lookback_days: 30, desc: "Typical value received" }
+    - { name: amount_std_in_30d,      lookback_days: 30, desc: "Spread of values received" }
+    - { name: amount_max_in_30d,      lookback_days: 30, desc: "Largest single receipt" }
+    - { name: in_out_amount_ratio_30d, lookback_days: 30, desc: "Value received divided by value sent" }
+    - { name: net_flow_30d,           lookback_days: 30, desc: "Value received minus value sent" }
+    - { name: amount_entropy_30d,     lookback_days: 30, desc: "How varied the transaction amounts are" }
+    - { name: benford_first_digit_dev, lookback_days: 30, desc: "How far the leading digits depart from Benford's law" }
+
+  counterparty:
+    - { name: unique_counterparties_in_30d,  lookback_days: 30, desc: "Distinct accounts that paid this one" }
+    - { name: unique_counterparties_out_30d, lookback_days: 30, desc: "Distinct accounts this one paid" }
+    - { name: counterparty_churn_rate_30d,   lookback_days: 30, desc: "Share of counterparties new this period" }
+    - { name: repeat_counterparty_share_30d, lookback_days: 30, desc: "Share of transactions with a repeat counterparty" }
+    - { name: new_counterparty_ratio_7d,     lookback_days: 7,  desc: "Share of counterparties never seen before" }
+    - { name: new_counterparty_ratio_30d,    lookback_days: 30, desc: "Share of counterparties never seen before, monthly" }
+    - { name: herfindahl_concentration_30d,  lookback_days: 30, desc: "How concentrated volume is in one counterparty" }
+
+  temporal:
+    - { name: txns_per_active_day_30d,     lookback_days: 30, desc: "Transactions per day on days with activity" }
+    - { name: interarrival_mean_30d,       lookback_days: 30, desc: "Average gap between transactions" }
+    - { name: interarrival_std_30d,        lookback_days: 30, desc: "Variability in those gaps" }
+    - { name: interarrival_min_30d,        lookback_days: 30, desc: "Shortest gap between transactions" }
+    - { name: burstiness_fano_30d,         lookback_days: 30, desc: "Whether activity comes in bursts rather than steadily" }
+    - { name: hour_of_day_entropy_30d,     lookback_days: 30, desc: "How spread activity is across the day" }
+    - { name: weekend_share_30d,           lookback_days: 30, desc: "Share of activity at the weekend" }
+    - { name: dormancy_length_days,        lookback_days: 30, desc: "Days of silence before the most recent activity" }
+    - { name: time_to_next_transfer_h,     lookback_days: 30, desc: "Hours between receiving money and sending it on" }
+
+  graph_local:
+    - { name: in_degree,                   lookback_days: 30, desc: "Distinct accounts that paid this one" }
+    - { name: out_degree,                  lookback_days: 30, desc: "Distinct accounts this one paid" }
+    - { name: degree_ratio,                lookback_days: 30, desc: "Out-degree divided by in-degree" }
+    - { name: neighbourhood_1hop,          lookback_days: 30, desc: "Accounts one payment away" }
+    - { name: neighbourhood_2hop,          lookback_days: 30, desc: "Accounts two payments away" }
+    - { name: clustering_coefficient,      lookback_days: 30, desc: "How tightly this account's contacts also trade with each other" }
+    - { name: reciprocity,                 lookback_days: 30, desc: "Share of counterparties that trade both ways" }
+    - { name: triangle_count,              lookback_days: 30, desc: "Closed three-party trading rings" }
+
+  graph_global:
+    # Recomputed PER FOLD from that fold's edges only, never once over the full
+    # graph (spec 7.2).
+    - { name: pagerank,                   lookback_days: 30, desc: "How central this account is in the payment network" }
+    - { name: betweenness_approx,         lookback_days: 30, desc: "How often this account lies on others' shortest paths" }
+    - { name: eigenvector_centrality,     lookback_days: 30, desc: "Influence within densely connected groups" }
+    - { name: k_core_number,              lookback_days: 30, desc: "The tightest group this account belongs to" }
+    - { name: community_id,               lookback_days: 30, desc: "Which detected group this account belongs to" }
+    - { name: community_size,             lookback_days: 30, desc: "How many accounts share that group" }
+    - { name: intra_inter_community_ratio, lookback_days: 30, desc: "Share of value moving within the group rather than outside it" }
+
+  graph_typology:
+    - { name: cycle_participation_count,  lookback_days: 30, desc: "How many circular flows this account sits in" }
+    - { name: max_cycle_retention,        lookback_days: 30, desc: "Largest share of money that returned around a loop" }
+    - { name: longest_chain_length,       lookback_days: 30, desc: "Longest sequence of shrinking payments through this account" }
+    - { name: max_fan_in_24h,             lookback_days: 30, desc: "Most distinct senders in any single day" }
+    - { name: max_fan_out_24h,            lookback_days: 30, desc: "Most distinct recipients in any single day" }
+    - { name: pass_through_ratio_1h,      lookback_days: 30, desc: "Share of money received then forwarded within an hour" }
+
+  balance_proxy:
+    - { name: mean_balance_after_30d,     lookback_days: 30, desc: "Typical balance left after each transaction" }
+    - { name: zero_balance_after_rate_30d, lookback_days: 30, desc: "Share of transactions that emptied the account" }
+    - { name: drain_events_30d,           lookback_days: 30, desc: "Times the account was driven to near zero" }
+    - { name: inflow_to_zero_latency_h,   lookback_days: 30, desc: "Hours from receiving money to being emptied" }
+    # PaySim has known internal inconsistencies between amount and balance
+    # columns. The delta is computed as a FEATURE rather than corrected: the
+    # inconsistency is a signal, not an error (03 D: test_balance_delta_feature_present).
+    - { name: balance_delta_mismatch_rate_30d, lookback_days: 30, desc: "How often the stated balance disagrees with the stated amount" }
+
+  exposure:
+    - { name: downstream_outflow_24h,     lookback_days: 1,  desc: "Value leaving this account and its direct contacts within a day" }
+    - { name: interceptable_share,        lookback_days: 1,  desc: "Share of that value still reachable in time to stop it" }
+    - { name: velocity_weighted_exposure, lookback_days: 1,  desc: "Exposure weighted by how fast the money moves" }
+
+  rule_derived:
+    # One severity column per rule R1 to R12, plus hit count and max severity.
+    - { name: rule_severity_R1,  lookback_days: 30, desc: "Strength of the rapid pass-through signal" }
+    - { name: rule_severity_R2,  lookback_days: 30, desc: "Strength of the gather signal" }
+    - { name: rule_severity_R3,  lookback_days: 30, desc: "Strength of the scatter signal" }
+    - { name: rule_severity_R4,  lookback_days: 30, desc: "Strength of the circular transfer signal" }
+    - { name: rule_severity_R5,  lookback_days: 30, desc: "Strength of the structuring signal" }
+    - { name: rule_severity_R6,  lookback_days: 30, desc: "Strength of the velocity break signal" }
+    - { name: rule_severity_R7,  lookback_days: 30, desc: "Strength of the dormant reactivation signal" }
+    - { name: rule_severity_R8,  lookback_days: 30, desc: "Strength of the unusual-hours signal" }
+    - { name: rule_severity_R9,  lookback_days: 30, desc: "Strength of the amount regime change signal" }
+    - { name: rule_severity_R10, lookback_days: 30, desc: "Strength of the rapid cash-out signal" }
+    - { name: rule_severity_R11, lookback_days: 30, desc: "Strength of the new counterparty surge signal" }
+    - { name: rule_severity_R12, lookback_days: 30, desc: "Strength of the layering chain signal" }
+    - { name: rule_hit_count,   lookback_days: 30, desc: "How many distinct typologies fired" }
+    - { name: rule_severity_max, lookback_days: 30, desc: "The strongest single typology signal" }
+
+  identity:
+    # Documented, deliberate, and rendered differently in the explorer.
+    - { name: self_transfer_count_30d, lookback_days: 30, desc: "Times money was sent to the account's own self" }
+    - { name: account_age_days,       lookback_days: 30, desc: "How long this account has been observed" }
+    - { name: is_external,            lookback_days: 30, desc: "True when the account only ever appears as a counterparty" }
+    # is_rail is deliberately NOT a feature. It is a graph node type, rendered
+    # differently in the explorer and used to exclude fan scoring; feeding it to
+    # the model would let the model relearn the exclusion we already applied.
+    # Dropping it keeps the registry at 75, inside the 60-75 target.
+
+# --- guards --------------------------------------------------------------
+guards:
+  # label_fraud and anything derived from it NEVER enters the feature matrix. A
+  # test asserts no feature exceeds 0.98 absolute correlation with the label
+  # (spec 7.2).
+  max_abs_correlation_with_label: 0.98
+  banned_inputs: [label_fraud, isFraud, isFlaggedFraud, typology, label_typology]
+  # LightGBM tolerates NaN, the scorecard does not, and the two silently diverge
+  # if it reaches the feature table. Fail the run with the column named
+  # (03 H: test_features_finite).
+  require_finite: true
+  # Winsorise at a configured percentile FOR FEATURES ONLY. Reported money
+  # figures always use raw values, and the winsorisation is stated
+  # (03 D: test_winsorise_features_not_reports).
+  winsorise:
+    enabled: true
+    lower_percentile: 0.01
+    upper_percentile: 0.99
+    applies_to: features_only
+  # A missing feature is an explicit missing bin with its own WOE, never a mean.
+  # Silent imputation with the mean invents evidence (03 H).
+  missing_value_policy: explicit_bin
+  # A missing count is null rendered as an em dash, never 0. Zeros propagate into
+  # money figures and lie convincingly (03 A rule 2).
+  null_renders_as: "—"

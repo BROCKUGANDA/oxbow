@@ -1,0 +1,12 @@
+<!-- OXBOW glyph: chain - R12 CHAIN_MEMBER, layering chain.
+     Four nodes on a descending staircase with decaying stroke weight
+     (2.6 / 2.1 / 1.6 / 1.2) so the chain thins as the amount decays along it.
+     Spec 12.6 glyph system: 24x24 grid, square line caps, 2px optical padding. -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none"
+     stroke="currentColor" stroke-width="1.75" stroke-linecap="square" stroke-linejoin="round">
+  <path d="M6.25 6.99L8.05 8.51M11.57 11.47L13.43 13.03M16.95 15.99L18.75 17.51"/>
+  <circle cx="4.5" cy="5.5" r="2.3" stroke-width="2.6"/>
+  <circle cx="9.8" cy="10" r="2.3" stroke-width="2.1"/>
+  <circle cx="15.2" cy="14.5" r="2.3" stroke-width="1.6"/>
+  <circle cx="20.5" cy="19" r="2.3" stroke-width="1.2"/>
+</svg>

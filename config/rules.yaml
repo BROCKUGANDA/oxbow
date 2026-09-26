@@ -1,0 +1,195 @@
+# OXBOW typology rules R1-R12.
+# Spec 5.1: every rule emits a structured hit, never a boolean. Severity is
+# normalised 0-1 as a documented function of how far the observation exceeds
+# threshold, so two accounts hitting the same rule remain rankable.
+#
+# Owner: P3b (rules engine).
+#
+# Two invariants govern everything below:
+#  1. Thresholds are fitted on the TRAINING WINDOW ONLY and pinned here together
+#     with the window that produced them. A threshold tuned on the test set is
+#     classic leakage dressed up as tuning (03 G: test_thresholds_from_train_window).
+#  2. No rule may fire on more than one third of accounts. A rule that fires on
+#     almost everything contributes no information and makes the evidence panel
+#     noise (00 G rejection trigger; 00 D day-5 gate).
+
+# Ceiling for the per-run hit-rate report. A rule above this FAILS the run with a
+# threshold suggestion rather than shipping as a constant.
+hit_rate_ceiling: 0.33
+# Floor side. A permanently dead rule is removed from the UI rather than left as
+# decoration presented as capability.
+hit_rate_floor: 0.0001
+
+# Rules declare overlap groups. Pass-through and fast-cash-out both firing on one
+# event doubles the apparent evidence; the evidence display groups them and the
+# score counts the group once (03 G: test_overlapping_rules_counted_once).
+overlap_groups:
+  extraction:
+    - RAPID_PASS_THROUGH
+    - FAST_CASH_OUT
+  aggregation:
+    - FAN_IN
+    - NEW_COUNTERPARTY_SURGE
+  layering:
+    - CYCLE_MEMBER
+    - CHAIN_MEMBER
+
+# Rules that reason about human hours read the local_hour column, derived from
+# config/pipeline.yaml deployment_timezone. They must never read ts_utc directly
+# (03 C: test_odd_hour_uses_local_hour).
+uses_local_hour: [ODD_HOUR_SHIFT, DORMANT_REACTIVATION]
+
+rules:
+  - id: R1
+    name: RAPID_PASS_THROUGH
+    typology: "Mule / layering"
+    description: "Receives A, then sends at least p*A within delta_t"
+    params: { p: 0.80, delta_minutes: 60, min_amount_minor: 10_000 }
+    severity: "normalised by how far the retained share exceeds p, capped at 1.0"
+
+  - id: R2
+    name: FAN_IN
+    typology: Gather
+    description: "At least k distinct senders in window W, median amount below tau"
+    params:
+      k: 8
+      window_hours: 24
+      # tau is the corpus p25 of transaction amount, computed at run time from
+      # the training window and recorded in the run's config hash.
+      tau_source: corpus_percentile
+      tau_percentile: 25
+    # Rails are excluded from fan scoring: a merchant with degree in the tens of
+    # thousands would otherwise fire fan-in on the whole economy.
+    exclude_node_types: [rail, external]
+    severity: "scales with k beyond the threshold, saturating at 2*k"
+
+  - id: R3
+    name: FAN_OUT
+    typology: Scatter
+    description: "At least k distinct receivers in window W"
+    params: { k: 8, window_hours: 24 }
+    exclude_node_types: [rail, external]
+    severity: "scales with k beyond the threshold, saturating at 2*k"
+
+  - id: R4
+    name: CYCLE_MEMBER
+    typology: Circular transfers
+    description: "In a time-respecting directed cycle, length 3 to 6, value retention at least r"
+    params:
+      retention: 0.6
+      min_length: 3
+      max_length: 6
+      # Time-respecting means timestamps strictly increase around the loop. A
+      # time-reversed loop returns nothing.
+      require_strict_time_increase: true
+      # A cycle that recurs on a regular period is payroll, not a crime.
+      down_weight_periodic: true
+      periodic_period_hours: 168
+      periodic_down_weight: 0.3
+    severity: "scales with value retention above the floor and with cycle length"
+
+  - id: R5
+    name: STRUCTURING
+    typology: Smurfing
+    description: "At least n transactions inside 80 to 100 percent of a salient threshold T within W"
+    params:
+      n: 3
+      window_days: 7
+      # T is derived from histogram mode detection over the training window.
+      # Neither corpus carries a real reporting threshold, so this is explicitly
+      # SYNTHETIC and the UI labels it as an assumption rather than a fact
+      # (03 G: test_structuring_threshold_is_configured).
+      threshold_source: histogram_mode
+      threshold_band_low: 0.80
+      threshold_band_high: 1.00
+      synthetic: true
+    severity: "scales with count above n and tightness to the threshold band"
+
+  - id: R6
+    name: VELOCITY_SPIKE
+    typology: Behaviour break
+    description: "MAD-robust z-score of daily txn count vs own 30-day baseline at least z"
+    params:
+      z: 3.0
+      baseline_days: 30
+      min_baseline_days: 5
+      # MAD-robust: a single enormous day must not inflate the baseline it is
+      # measured against.
+      robust_scale: mad
+    severity: "scales with z above threshold, saturating at 2*z"
+
+  - id: R7
+    name: DORMANT_REACTIVATION
+    typology: Mule activation
+    description: "Inactive at least d days, then at least k txns in 24h"
+    params: { dormant_days: 30, k: 5, window_hours: 24 }
+    severity: "scales with k above threshold and with length of dormancy"
+
+  - id: R8
+    name: ODD_HOUR_SHIFT
+    typology: Behaviour break
+    description: "Volume share in historically quiet hours jumps by at least q"
+    params:
+      # Absolute jump, not relative: quiet hours are defined per account as its
+      # own low-volume decile of local hours.
+      q: 0.40
+      min_transactions: 10
+      quiet_hours_source: account_decile
+    severity: "scales with the share jump above q"
+
+  - id: R9
+    name: AMOUNT_REGIME_SHIFT
+    typology: Behaviour break
+    description: "Rolling-median amount ratio, 7d vs prior 30d, outside 1/m to m"
+    params: { m: 4, recent_days: 7, baseline_days: 30 }
+    severity: "scales with log deviation outside the band"
+
+  - id: R10
+    name: FAST_CASH_OUT
+    typology: "Placement / extraction"
+    description: "At least s share of inflow exits as cash-out within holding time h"
+    params: { s: 0.70, holding_hours: 6 }
+    severity: "scales with the share above s"
+
+  - id: R11
+    name: NEW_COUNTERPARTY_SURGE
+    typology: Network expansion
+    description: "At least g share of counterparties in W are first-time, count at least c"
+    params: { g: 0.80, c: 6, window_hours: 48 }
+    severity: "scales with the first-time share above g"
+
+  - id: R12
+    name: CHAIN_MEMBER
+    typology: Layering chain
+    description: "On a time-respecting path of length at least 3, non-increasing amounts, each hop under delta_t"
+    params:
+      min_length: 3
+      delta_hours: 24
+      decay: 0.95
+      require_non_increasing: true
+      # Bounded depth from config plus a per-component budget plus a hard
+      # timeout, so a naive enumeration on a dense component never hangs the
+      # pipeline. A truncated search records a flag rather than failing.
+      max_depth: 6
+      component_budget: 5000
+      timeout_ms: 2000
+    severity: "scales with chain length and decay fidelity"
+
+# --- global rule guards --------------------------------------------------
+guards:
+  # Windows overlap by the longest rule lookback, and hits are deduplicated by
+  # pattern signature rather than by window, so a structuring ladder spanning
+  # midnight is detected once, not once per day (03 C).
+  window_overlap_hours: 168
+  deduplicate_by: pattern_signature
+  # Reversals are typed, linked to the original, and excluded from cycle
+  # detection. A reversal read as a transfer creates a fake cycle back to the
+  # originator (03 D: test_reversal_not_a_cycle).
+  exclude_reversals_from: [CYCLE_MEMBER, CHAIN_MEMBER, RAPID_PASS_THROUGH]
+  # Zero-amount transactions are balance probes and account tests. They inflate
+  # counts and break ratio features.
+  exclude_zero_value_from_value_rules: true
+  # Self-transfers create a self-loop that trivially satisfies a cycle.
+  exclude_self_loops_from: [CYCLE_MEMBER, FAN_IN, FAN_OUT]
+  # Singletons drag every graph aggregate toward zero.
+  exclude_singletons_from_graph_aggregates: true

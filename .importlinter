@@ -1,0 +1,94 @@
+# OXBOW architecture contracts, enforced by import-linter in CI.
+#
+# 02 A: nothing in features/, graph/, models/ or quant/ may import an adapter.
+# That one rule is what stops "integration-ready" from quietly decaying into a
+# hairball. It is written now, against a tree that is still mostly empty, so it
+# is enforced from the first real import rather than retrofitted after the
+# coupling has already spread.
+#
+# Run with: uv run lint-imports   (or `make contracts`)
+
+[importlinter]
+root_package = oxbow
+# Contract 3 forbids external packages (httpx, boto3, ...), so the external
+# graph must be built. The tool rejects the config outright without this.
+include_external_packages = True
+
+# --- contract 1: core computation never imports an adapter ---------------
+# The pipeline computes. Adapters do IO. A feature that imports boto3 has
+# stopped being a feature and become a network call, which breaks the offline
+# demo and the no-network-at-scoring-time constraint (01 B) at the same time.
+[importlinter:contract:core-does-not-import-adapters]
+name = Core layers must not import adapters
+type = forbidden
+source_modules =
+    oxbow.features
+    oxbow.graph
+    oxbow.rules
+    oxbow.models
+    oxbow.scoring
+    oxbow.quant
+    oxbow.backtest
+    oxbow.explain
+forbidden_modules =
+    oxbow.adapters
+forbidden_import_aliases = []
+unmatched_ignore_imports_alerting = error
+
+# --- contract 2: ports have zero third-party dependencies ---------------
+# 02 A: ports/ is abstract protocols with zero dependencies. A Protocol that
+# imports polars is not a port, it is an implementation wearing a costume.
+[importlinter:contract:ports-are-dependency-free]
+name = Ports must not import adapters, models or third-party data libraries
+type = forbidden
+source_modules =
+    oxbow.ports
+forbidden_modules =
+    oxbow.adapters
+    oxbow.models
+    oxbow.scoring
+    oxbow.quant
+unmatched_ignore_imports_alerting = error
+
+# --- contract 3: the scoring path has no HTTP client --------------------
+# 01 B: "No network calls at scoring time. The scoring package has no HTTP
+# client; enforced with an import-linter contract." Reproducibility and an
+# offline demo depend on this, so it is a contract rather than a convention.
+[importlinter:contract:scoring-has-no-http-client]
+name = Scoring and quant layers must not import an HTTP client
+type = forbidden
+source_modules =
+    oxbow.models
+    oxbow.scoring
+    oxbow.quant
+    oxbow.features
+    oxbow.rules
+    oxbow.backtest
+forbidden_modules =
+    httpx
+    requests
+    urllib3
+    aiohttp
+    boto3
+unmatched_ignore_imports_alerting = error
+
+# --- contract 4: CLI may reach adapters, the core may not ---------------
+# The CLI is the composition root. It is the one place allowed to choose which
+# adapter is wired, which is what makes the null adapter swappable at runtime.
+[importlinter:contract:cli-is-the-composition-root]
+name = Only the CLI composes adapters
+type = forbidden
+source_modules =
+    oxbow.features
+    oxbow.graph
+    oxbow.rules
+    oxbow.models
+    oxbow.scoring
+    oxbow.quant
+    oxbow.backtest
+    oxbow.explain
+    oxbow.publish
+    oxbow.ports
+forbidden_modules =
+    oxbow.adapters
+unmatched_ignore_imports_alerting = error

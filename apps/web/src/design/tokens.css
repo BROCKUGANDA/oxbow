@@ -1,0 +1,234 @@
+/* =============================================================================
+   OXBOW DESIGN TOKENS — the single source of truth.
+   Spec 12.6 (colour, type) and 12.7 (motion).
+
+   RISK IS NEVER ENCODED BY COLOUR ALONE.
+   Bands A to E differ in hue and chroma, not in lightness, so all five sit at equal
+   perceptual lightness and therefore equal legibility on the dark canvas. Chroma
+   carries severity; lightness does not thrash. Every band renders as a five-segment
+   meter glyph (band-meter) PLUS its letter, so the encoding survives a greyscale
+   print of the export packet and a deuteranopia or protanopia simulation. If you
+   find yourself styling a risk surface with a colour and nothing else, it is wrong.
+
+   BAND RAMP: A to E move along one arc in OKLCH hue (250 -> 30) at a fixed
+   lightness of 0.78 and rising chroma. The arc was checked in a CVD simulator for
+   deuteranopia and protanopia; A and E are separable by both chroma and letter, and
+   the middle three are separated by the meter glyph rather than by hue alone.
+
+   ONE RESERVED ACCENT: --evidence. It has exactly one job: marking the rows, nodes
+   and bars that the thing you just clicked is made of. It appears nowhere else.
+
+   HAIRLINES, NOT SHADOWS. 1px borders at 8% alpha, a two-step elevation scale
+   expressed as surface lightness, and zero blur anywhere in the product.
+   ============================================================================= */
+
+@theme {
+  /* ------------------------------------------------------------------ canvas */
+  /* Dark is the DEFAULT. Analysts sit in this for hours. It is ink, not slate-950. */
+  --color-canvas: oklch(0.17 0.012 250);
+  --color-canvas-raised: oklch(0.205 0.014 250);
+  --color-canvas-sunken: oklch(0.142 0.011 250);
+
+  /* Paper mode. Same tokens, inverted relationships. Selected on <html data-theme="paper">. */
+  --color-paper: oklch(0.98 0.004 90);
+  --color-paper-raised: oklch(1 0 0);
+  --color-paper-sunken: oklch(0.955 0.005 90);
+
+  /* Two-step elevation. Surface lightness only. --elev-1 and --elev-2, no blur. */
+  --color-elev-1: oklch(0.205 0.014 250);
+  --color-elev-2: oklch(0.245 0.016 250);
+
+  /* Hairlines. 1px, 8% ink. One stronger step for the focused row only. */
+  --color-hairline: oklch(0.86 0.01 250 / 0.08);
+  --color-hairline-strong: oklch(0.86 0.01 250 / 0.16);
+  --color-hairline-inset: oklch(0.1 0.01 250 / 0.4);
+
+  /* -------------------------------------------------------------------- text */
+  --color-ink: oklch(0.96 0.006 250);
+  --color-ink-muted: oklch(0.74 0.01 250);
+  --color-ink-faint: oklch(0.56 0.012 250);
+  --color-ink-disabled: oklch(0.42 0.012 250);
+  --color-ink-inverse: oklch(0.17 0.012 250);
+
+  /* ------------------------------------------------------------------- bands */
+  /* Equal lightness 0.78 across the ramp. Chroma rises with severity. */
+  --color-band-a: oklch(0.78 0.075 235);
+  --color-band-b: oklch(0.78 0.095 195);
+  --color-band-c: oklch(0.78 0.115 155);
+  --color-band-d: oklch(0.78 0.135 95);
+  --color-band-e: oklch(0.78 0.155 40);
+
+  /* The reserved accent. One job. See the header. */
+  --color-evidence: oklch(0.86 0.115 195);
+
+  /* ------------------------------------------------- semantic, per typology */
+  /* Twelve typologies, hue-drawn from the same arc. Never a risk signal on their own:
+     the glyph and the R-number beside it carry the meaning. */
+  --color-typo-r1-pass-through: oklch(0.74 0.09 25);
+  --color-typo-r2-fan-in: oklch(0.74 0.1 60);
+  --color-typo-r3-fan-out: oklch(0.74 0.105 95);
+  --color-typo-r4-cycle: oklch(0.74 0.1 130);
+  --color-typo-r5-structuring: oklch(0.74 0.09 165);
+  --color-typo-r6-velocity-spike: oklch(0.74 0.085 200);
+  --color-typo-r7-dormant-wake: oklch(0.74 0.08 235);
+  --color-typo-r8-odd-hour-shift: oklch(0.74 0.075 268);
+  --color-typo-r9-amount-regime-shift: oklch(0.74 0.07 300);
+  --color-typo-r10-fast-cash-out: oklch(0.74 0.08 335);
+  --color-typo-r11-counterparty-surge: oklch(0.74 0.085 12);
+  --color-typo-r12-chain: oklch(0.74 0.09 45);
+
+  /* State. Status text, never status colour alone: every one ships with a label. */
+  --color-state-running: oklch(0.78 0.1 200);
+  --color-state-done: oklch(0.78 0.1 150);
+  --color-state-failed: oklch(0.68 0.17 25);
+  --color-state-skipped: oklch(0.5 0.01 250);
+  --color-state-pending: oklch(0.44 0.01 250);
+
+  /* Focus. The only ring in the product, and it is a hairline-coloured outline
+     plus a 2px evidence-tinted inner edge on the focused row. */
+  --color-focus: oklch(0.86 0.115 195);
+
+  /* ------------------------------------------------------------------ motion */
+  /* Spec 12.7. Enters ease out, exits ease in and are ALWAYS faster than enters,
+     position changes use the spring, and ease-in-out never appears on a
+     user-triggered transition. */
+  --duration-instant: 80ms;
+  --duration-fast: 140ms;
+  --duration-base: 220ms;
+  --duration-slow: 320ms;
+  --duration-deliberate: 520ms;
+
+  --ease-out-quint: cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-in-quad: cubic-bezier(0.55, 0.085, 0.68, 0.53);
+
+  /* ------------------------------------------------------------------ radii */
+  /* 3px controls, 6px panels, 0px table cells and graph chrome. Nothing is a pill
+     except the account chip, which carries --radius-pill and nothing else does. */
+  --radius-control: 3px;
+  --radius-panel: 6px;
+  --radius-cell: 0px;
+  --radius-pill: 999px;
+
+  /* -------------------------------------------------------------------- type */
+  /* Spec 12.6. IBM Plex Sans for the interface, IBM Plex Mono for every identifier
+     and evidence string, IBM Plex Sans Condensed 600 for dashboard hero numerals. */
+  --font-sans: "IBM Plex Sans", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, "Cascadia Mono", "SF Mono", Menlo, monospace;
+  --font-condensed: "IBM Plex Sans Condensed", "IBM Plex Sans", ui-sans-serif, system-ui, sans-serif;
+
+  /* Every numeral in a table or a KPI is tabular. Money and score columns align
+     digit-for-digit or the column is lying about its own precision. Non-negotiable. */
+  --font-variant-numeric-tabular: tabular-nums;
+
+  --text-hero: 3.5rem;
+  --text-hero--line-height: 1;
+  --text-hero--letter-spacing: -0.02em;
+  --text-hero--font-weight: 600;
+
+  --text-kpi: 1.75rem;
+  --text-kpi--line-height: 1.1;
+  --text-kpi--letter-spacing: -0.01em;
+  --text-kpi--font-weight: 600;
+
+  --text-body: 0.875rem;
+  --text-body--line-height: 1.5;
+
+  --text-label: 0.75rem;
+  --text-label--line-height: 1.33;
+  --text-label--font-weight: 500;
+
+  --text-micro: 0.6875rem;
+  --text-micro--line-height: 1.45;
+  --text-micro--font-weight: 500;
+
+  /* Nothing above 600 anywhere in the product. */
+  --font-weight-regular: 400;
+  --font-weight-medium: 500;
+  --font-weight-semibold: 600;
+
+  /* ------------------------------------------------------------------ layout */
+  --spacing-hairline: 1px;
+  --spacing-pane-gap: 12px;
+  --spacing-row: 32px;
+  --spacing-table-row: 36px;
+
+  --z-pane: 1;
+  --z-sticky: 20;
+  --z-overlay: 60;
+  --z-toast: 80;
+}
+
+/* =============================================================== PAPER MODE ==
+   The same token names, re-pointed. A component never branches on theme; it reads
+   the token and the cascade does the work. Risk bands keep their hue and gain
+   lightness-adjusted chroma so they still sit at equal lightness against paper. */
+[data-theme='paper'] {
+  --color-canvas: var(--color-paper);
+  --color-canvas-raised: var(--color-paper-raised);
+  --color-canvas-sunken: var(--color-paper-sunken);
+
+  --color-elev-1: var(--color-paper-raised);
+  --color-elev-2: var(--color-paper-raised);
+
+  --color-hairline: oklch(0.2 0.01 90 / 0.12);
+  --color-hairline-strong: oklch(0.2 0.01 90 / 0.24);
+  --color-hairline-inset: oklch(0.2 0.01 90 / 0.08);
+
+  --color-ink: oklch(0.22 0.012 250);
+  --color-ink-muted: oklch(0.44 0.012 250);
+  --color-ink-faint: oklch(0.58 0.012 250);
+  --color-ink-disabled: oklch(0.68 0.01 250);
+  --color-ink-inverse: oklch(0.98 0.004 90);
+
+  /* Equal lightness 0.62 against paper, so the ramp stays uniform on the light
+     canvas too. The letters and the meter still carry the band. */
+  --color-band-a: oklch(0.62 0.09 235);
+  --color-band-b: oklch(0.62 0.11 195);
+  --color-band-c: oklch(0.62 0.12 155);
+  --color-band-d: oklch(0.62 0.13 95);
+  --color-band-e: oklch(0.62 0.14 40);
+  --color-evidence: oklch(0.5 0.12 195);
+
+  --color-focus: oklch(0.5 0.12 195);
+
+  --color-state-running: oklch(0.55 0.11 200);
+  --color-state-done: oklch(0.52 0.12 150);
+  --color-state-failed: oklch(0.52 0.18 25);
+  --color-state-skipped: oklch(0.66 0.01 90);
+  --color-state-pending: oklch(0.72 0.01 90);
+}
+
+/* ----------------------------------------------------- accessibility helpers */
+
+/* The tabular-numeral rule, enforced in one place. Apply to any table cell, KPI
+   figure, axis tick or ledger duration. */
+.u-tabular {
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: 'tnum' 1, 'zero' 1;
+}
+
+/* Visually hidden, still announced. For the live-region text that sits beside a
+   skeleton or a status swatch whose meaning is already carried by the shape. */
+.u-sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* Reduced motion is honoured at the token layer too: durations collapse to
+   instant, so a component that animates from a token cannot outrun the guard. */
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --duration-instant: 0ms;
+    --duration-fast: 0ms;
+    --duration-base: 0ms;
+    --duration-slow: 0ms;
+    --duration-deliberate: 0ms;
+  }
+}

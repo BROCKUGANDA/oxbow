@@ -1,0 +1,8 @@
+<!-- OXBOW glyph: search - utility glyph.
+     Magnifier. Square caps to stay on the set rather than inheriting a library default.
+     Spec 12.6 glyph system: 24x24 grid, 1.75px stroke, square line caps, 2px optical padding. -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none"
+     stroke="currentColor" stroke-width="1.75" stroke-linecap="square" stroke-linejoin="round">
+  <circle cx="10.75" cy="10.75" r="6.25"/>
+  <path d="M15.3 15.3L20.5 20.5"/>
+</svg>

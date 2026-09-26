@@ -1,0 +1,9 @@
+<!-- OXBOW glyph: fan-in - R2 FAN_IN, gather typology.
+     Five strokes converging on a single filled node.
+     Spec 12.6 glyph system: 24x24 grid, 1.75px stroke, square line caps,
+     round line joins at the 1.75 stroke (2px optical), 2px optical padding. -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none"
+     stroke="currentColor" stroke-width="1.75" stroke-linecap="square" stroke-linejoin="round">
+  <path d="M2.5 4L13.16 10.56M2.5 7.5L13.04 11.15M2.5 12L12.9 12M2.5 16.5L13.04 12.85M2.5 20L13.16 13.44"/>
+  <circle cx="15.5" cy="12" r="2.4" fill="currentColor" stroke="none"/>
+</svg>

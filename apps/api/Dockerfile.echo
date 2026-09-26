@@ -1,0 +1,36 @@
+# OXBOW webhook echo receiver (P7).
+#
+# 02 H: a tiny FastAPI echo service in Compose that verifies the signature and
+# records deliveries. Signing, retries, idempotency and dead-lettering are
+# exercised END TO END against this, not against a mock inside a test file.
+#
+# It is a real HTTP service that does real HMAC verification. It is not a
+# stub: if the signature is wrong it says so, and if it is right it records the
+# delivery so a replay can be detected.
+
+FROM python:3.12-slim
+
+# No compiler toolchain in the final image: the app is pure Python plus the
+# FastAPI stack already pinned in pyproject.toml.
+WORKDIR /srv
+
+RUN pip install --no-cache-dir \
+    "fastapi==0.115.6" \
+    "pydantic==2.10.4" \
+    "uvicorn[standard]==0.34.0" \
+    "httpx==0.28.1"
+
+COPY echo.py /srv/echo.py
+
+# Local-only demo default. Compose overrides it from .env, which is never
+# committed (02 F: secrets from the environment, .env.example committed).
+ENV SIGNING_SECRET=oxbow_local_secret \
+    RECORD_PATH=/data/deliveries.jsonl \
+    PORT=8099
+
+EXPOSE 8099
+
+HEALTHCHECK --interval=10s --timeout=5s --retries=10 \
+  CMD python -c "import urllib.request;urllib.request.urlopen('http://localhost:8099/healthz')" || exit 1
+
+CMD ["uvicorn", "echo:app", "--host", "0.0.0.0", "--port", "8099"]

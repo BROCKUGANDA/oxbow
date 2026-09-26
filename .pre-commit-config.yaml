@@ -1,0 +1,100 @@
+# OXBOW pre-commit hooks.
+# 01 D: `make bootstrap` runs pre-commit install as its third step.
+# 02 F: a pre-commit hook scans for keys, because secrets come from the
+# environment and .env is never committed.
+
+default_stages: [pre-commit]
+fail_fast: false
+
+repos:
+  # --- secret scanning (02 F) -------------------------------------------
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.24.0
+    hooks:
+      - id: gitleaks
+
+  # --- Python: ruff for lint and format (spec 12.9, one tool for both) ---
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.8.6
+    hooks:
+      - id: ruff
+        args: [--fix, --exit-non-zero-on-fix]
+      - id: ruff-format
+
+  # --- Python: mypy strict on the core ----------------------------------
+  - repo: https://github.com/pre-commit/mirrors-mypy
+    rev: v1.14.0
+    hooks:
+      - id: mypy
+        files: ^packages/pipeline/
+        additional_dependencies: [types-PyYAML, types-requests, pandas-stubs]
+        args: [--strict, --ignore-missing-imports]
+        exclude: ^(tests/|apps/api/alembic/)
+
+  # --- architecture: import-linter --------------------------------------
+  # 02 A: nothing in features/ graph/ models/ quant/ may import an adapter.
+  # Running it pre-commit catches the coupling at the moment it is introduced,
+  # not in CI three commits later.
+  - repo: local
+    hooks:
+      - id: import-linter
+        name: import-linter (no adapter imports from core)
+        entry: uv run lint-imports
+        language: system
+        pass_filenames: false
+        types: [python]
+        files: ^(packages/pipeline/oxbow/.*\.py)$
+
+  # --- money is never a float (01 B hard constraint) --------------------
+  # Float arithmetic on money is a defect, not a style choice. The rule is
+  # enforced here as well as by a unit test, because the test proves the
+  # property and this hook stops it being introduced at all.
+  - repo: local
+    hooks:
+      - id: no-float-money
+        name: no float money in the pipeline package
+        entry: uv run python scripts/no_float_money.py
+        language: system
+        pass_filenames: false
+        types: [python]
+        files: ^packages/pipeline/oxbow/.*\.py$
+
+  # --- hygiene ----------------------------------------------------------
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: end-of-file-fixer
+        exclude: ^(data/|out/|artifacts/)
+      - id: trailing-whitespace
+        exclude: ^(data/|out/|artifacts/)
+      - id: check-yaml
+        exclude: ^(data/|out/|artifacts/)
+      - id: check-toml
+      - id: check-json
+        exclude: ^(data/|out/|artifacts/|node_modules/)
+      - id: check-added-large-files
+        args: [--maxkb=2048]
+        exclude: ^(data/|out/|artifacts/)
+      - id: check-merge-conflict
+      - id: detect-private-key
+
+  # --- TypeScript / Biome (one fast binary) -----------------------------
+  - repo: local
+    hooks:
+      - id: biome
+        name: biome (lint + format)
+        entry: bash -c 'cd apps/web && pnpm exec biome check --write .'
+        language: system
+        pass_filenames: false
+        types: [ts, tsx, js, jsx, json]
+        files: ^apps/web/src/.*\.(ts|tsx|js|jsx)$
+
+  # --- design tokens are generated, never hand-edited (02 B seam 8) -----
+  - repo: local
+    hooks:
+      - id: design-tokens-in-sync
+        name: tokens.ts must match tokens.css
+        entry: bash -c 'cd apps/web && pnpm run icons && git diff --exit-code -- src/design/tokens.ts src/design/icons/sprite.svg'
+        language: system
+        pass_filenames: false
+        files: ^apps/web/src/design/(tokens\.css|icons/src/.*\.svg)$

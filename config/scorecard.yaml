@@ -1,0 +1,115 @@
+# OXBOW scorecard specification.
+# Spec 4: the scorecard is the score a human can audit, argue with, and sign off.
+# The GBM is the ranking engine. Both ship, both report, and the disagreement
+# queue between them is shown, because that is where model risk actually lives.
+#
+# Owner: P4a (scorecard).
+
+# --- scaling constants ---------------------------------------------------
+# score = offset + factor * ln(odds)
+# factor = PDO / ln(2)
+# offset = base - factor * ln(base_odds)
+# A judge must be able to add the points column up by hand and land on the score.
+scaling:
+  pdo: 20                  # points to double the odds
+  base_score: 600
+  base_odds: 50            # 50:1
+  # Derived, recorded so the UI can show the arithmetic:
+  #   factor = 20 / ln(2)         = 28.8539...
+  #   offset = 600 - factor*ln(50) = 472.4184...
+  show_formula_in_ui: true
+
+# --- binning (spec 4.2) --------------------------------------------------
+binning:
+  algorithm: monotonic_optimal     # optbinning
+  min_bin_pct: 0.05                # at least 5% of the population per bin
+  max_bins: 8
+  enforce_monotonic_trend: true
+  # Special bins, because a missing value is evidence and a structural zero is
+  # not the same thing as a small number.
+  special_bins:
+    missing: "__missing__"
+    structural_zero: "__zero__"
+  # A bin with zero bads gives infinite WOE and makes the points table nonsense.
+  # Minimum count plus Laplace smoothing; bins below the floor merge with the
+  # neighbour and the merge is recorded (03 H: test_no_infinite_woe).
+  min_bin_count: 30
+  smoothing: laplace
+  laplace_alpha: 0.5
+  # A category unseen at scoring time gets its own bin fitted from the training
+  # tail, rather than being silently mapped to the most common category
+  # (03 H: test_unseen_category_handled).
+  unseen_category_bin: "__unseen__"
+
+# --- feature admission ---------------------------------------------------
+# IV = sum_b (g_b/G - b_b/B) * WOE_b
+# Feature admission rule: keep 0.02 <= IV <= 0.5. Anything above 0.5 is treated
+# as SUSPECTED LEAKAGE and must be justified in writing before it enters the
+# scorecard. Make that rule visible on the page, because self-imposed constraints
+# read as rigor.
+iv_bounds:
+  min: 0.02
+  max: 0.5
+  above_max_action: require_written_justification
+  show_rule_in_ui: true
+
+# --- fitting -------------------------------------------------------------
+fit:
+  # Regularisation on by default. Perfect separation diverges the coefficients
+  # and makes the scorecard unusable; a separation check fails loudly and names
+  # the feature (03 H: test_separation_detected).
+  regularisation: l2
+  regularisation_strength: 1.0
+  detect_separation: true
+  max_iter: 500
+  # Points are whole numbers so a judge can add the column by hand.
+  round_points_to_integer: true
+
+# --- bands (spec 4.4) ----------------------------------------------------
+# Cut by OBSERVED bad rate on validation, never by a round number. Each band
+# carries population share, observed rate, and the action it implies.
+bands:
+  - { id: A, label: "A", max_points: 599, action: monitor,   glyph: band-meter }
+  - { id: B, label: "B", max_points: 649, action: review,    glyph: band-meter }
+  - { id: C, label: "C", max_points: 699, action: review,    glyph: band-meter }
+  - { id: D, label: "D", max_points: 749, action: escalate,  glyph: band-meter }
+  - { id: E, label: "E", max_points: null, action: escalate, glyph: band-meter }
+# Boundaries are fitted on observed validation bad rate and then PINNED here so
+# the band table is stable across runs. Fitted values are written back to this
+# file by `oxbow eval` and reviewed, never silently overwritten.
+band_cut_points: null   # populated at P4a from validation, then committed
+
+# --- reason codes --------------------------------------------------------
+# The three largest negative point contributions, rendered as attribute plus bin,
+# e.g. "Pass-through ratio in top decile: minus 48 points". Adverse-action style,
+# deterministic, no model needed to write them.
+reason_codes:
+  top_n: 3
+  template: "{attribute} in {bin_label}: {points_signed} points"
+  points_signed_format: "{points:+d}"
+
+# --- drift (spec 4.4) ----------------------------------------------------
+# PSI = sum_b (a_b - e_b) * ln(a_b / e_b)
+# Standard thresholds, watch at 0.10 and action at 0.25.
+drift:
+  psi_watch: 0.10
+  psi_action: 0.25
+  # Characteristic Stability Index: the same formula on feature bins, to
+  # localise any drift the PSI flags.
+  csi_watch: 0.10
+  csi_action: 0.25
+  # At action the run degrades to rules-plus-scorecard and the banner says so
+  # (03 H: test_psi_action_degrades_scoring).
+  on_action: degrade_to_rules_plus_scorecard
+  # Rating migration matrix period over period, with a downgrade-rate alert. A
+  # standard risk artifact almost no hackathon project has.
+  migration_matrix: true
+  downgrade_rate_alert: 0.10
+  min_bins: 10
+
+# --- determinism ---------------------------------------------------------
+determinism:
+  # Every sort in the codebase uses the (ts_utc, txn_id) tuple; exact score ties
+  # at the cutoff are broken on (score, account_key) so queue order never changes
+  # between runs (03 H: test_tie_break_deterministic).
+  tie_break: [score, account_key]

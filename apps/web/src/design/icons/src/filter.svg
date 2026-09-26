@@ -1,0 +1,7 @@
+<!-- OXBOW glyph: filter - utility glyph.
+     Funnel, drawn as one closed outline at 3px control radius on screen.
+     Spec 12.6 glyph system: 24x24 grid, 1.75px stroke, square line caps, 2px optical padding. -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none"
+     stroke="currentColor" stroke-width="1.75" stroke-linecap="square" stroke-linejoin="round">
+  <path d="M3 4.5H21L13.75 12.75V19.25L10.25 21V12.75Z"/>
+</svg>

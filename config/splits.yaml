@@ -1,0 +1,113 @@
+# OXBOW walk-forward splits.
+# Spec 7.1: TEMPORAL, NEVER RANDOM. Expanding-window walk-forward with 5 folds:
+# train, then an embargo gap equal to the longest feature lookback (30 days),
+# then test.
+#
+# A random split on transaction data is the classic hackathon tell. Purging and
+# embargo are the fix, they come straight from quantitative finance, and naming
+# their origin is free credibility.
+#
+# Owner: P2 (splits module) / P6 (backtest harness).
+
+seed: 1337
+
+# --- the main temporal walk-forward --------------------------------------
+walk_forward:
+  n_folds: 5
+  scheme: expanding_window       # train grows each fold; test is always later
+  # The embargo exists because a 30-day rolling feature computed just after the
+  # boundary would otherwise see training-period data. This number is not a
+  # guess: it equals max_lookback_days in config/features.yaml, and the split
+  # module asserts the two agree.
+  embargo_days: 30
+  # Purge: drop training rows whose label window overlaps the test window, so a
+  # transaction near the boundary cannot leak its outcome across the split.
+  purge: true
+  purge_days: 1
+  # Temporal split only. Shuffling is a rejection trigger, not an option.
+  shuffle: false
+  # A fold with zero positives has an undefined PR-AUC. Detect it, skip with a
+  # NAMED reason, and show the skipped fold on the validation page rather than
+  # hiding it (03 H: test_zero_positive_fold_reported).
+  on_zero_positive_fold: skip_with_named_reason
+
+  # Temporal boundaries as fractions of the corpus timeline. Resolved against
+  # the actual ts_utc range at run time and recorded in the run's split_def.
+  folds:
+    - { index: 0, train_end_frac: 0.30, test_end_frac: 0.45 }
+    - { index: 1, train_end_frac: 0.45, test_end_frac: 0.60 }
+    - { index: 2, train_end_frac: 0.60, test_end_frac: 0.75 }
+    - { index: 3, train_end_frac: 0.75, test_end_frac: 0.90 }
+    - { index: 4, train_end_frac: 0.90, test_end_frac: 1.00 }
+
+# --- validation windows inside each training period ----------------------
+validation:
+  # The last slice of each training period, after the embargo, used for bin
+  # fitting, calibration and selection. Never the test fold.
+  fraction_of_train: 0.15
+  # The test fold is touched ONCE and that fact is timestamped in the MLflow
+  # run (spec 7.5).
+  touch_test_fold_once: true
+
+# --- entity-disjoint robustness check (spec 7.1) -------------------------
+# Reported alongside the temporal split, and the docs state plainly which one
+# was optimised on. A temporal split can still let the same account appear in
+# train and test, which flatters the result for account-level features.
+entity_disjoint:
+  enabled: true
+  method: account_holdout
+  holdout_fraction: 0.20
+  # State plainly which split was optimised on. Temporal is primary; this is a
+  # robustness check, not the headline.
+  report_as: robustness_check
+
+# --- deliberately leaking CONTROL (01 P6 gate) --------------------------
+# A lookahead-leaking configuration is included ON PURPOSE and VISIBLY
+# outperforms, proving the harness detects leakage. Without this control, a
+# green backtest and a broken one look identical.
+leakage_control:
+  enabled: true
+  # The control reads a feature from AFTER the fold boundary. It must score
+  # better than the honest configuration; if it does not, the harness is not
+  # measuring what it claims to.
+  expect_outperforms: true
+  label: "CONTROL - lookahead, not a shippable configuration"
+  show_in_validation_ui: true
+  # Shipped to the UI only as a labelled control row. It is never the headline,
+  # and it must be visually distinguished from a real ablation row.
+  render_as: control
+
+# --- backtest reporting --------------------------------------------------
+report:
+  # A fold with no alerts above the cutoff has UNDEFINED precision at capacity.
+  # Reported as undefined with the alert count, never as zero or as one
+  # (03 I: test_no_alerts_fold_undefined_not_zero).
+  undefined_precision_policy: report_undefined_with_alert_count
+  # Cumulative net benefit never going negative is correct behaviour, but state
+  # it rather than hiding an empty chart.
+  zero_drawdown_policy: label_and_explain
+  # The risk-adjusted benefit ratio is NOT a Sharpe ratio: no risk-free rate, no
+  # annualization. The label and the formula are shown in the UI, the model card
+  # and the script.
+  benefit_ratio:
+    label: "Risk-adjusted benefit ratio"
+    is_sharpe_ratio: false
+    formula: "mean(per-period net benefit) / std(per-period net benefit)"
+    show_formula: true
+  bootstrap:
+    resamples: 1000
+    confidence: 0.95
+  seed_stability:
+    # Report mean and standard deviation across seeds, not a lucky run.
+    seeds: [1337, 2027, 4099, 8191, 16381]
+    report: [mean, std]
+  monte_carlo:
+    runs: 10_000
+    seed: 1337
+    store_seed_and_draw_count: true
+  tail_risk:
+    var_alpha: 0.95
+    es_alpha: 0.975
+    # Compare policies by TAIL REDUCTION, not just mean benefit. A policy that
+    # lowers average loss while fattening the tail is a bad policy.
+    primary_comparison: tail_reduction

@@ -1,0 +1,24 @@
+<!-- OXBOW glyph: band-meter - the five-segment risk meter that accompanies bands A to E.
+     Five slots, filled to the band level by the oxbow-band custom property (1-5).
+     Colour NEVER carries the band on its own: the filled segment count is the primary
+     reading and the letter A-E sits beside it, so a greyscale export packet keeps
+     its meaning. If a browser rejects clamp() the declaration is dropped and every
+     slot reads filled, which is loud rather than quietly wrong.
+     NOTE: custom-property names are written here without the leading double dash
+     because a double dash is not legal inside an XML comment.
+     Spec 12.6 glyph system: 24x24 grid, 1.75px stroke, square line caps, 2px optical padding. -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none"
+     stroke="currentColor" stroke-width="1.75" stroke-linecap="square" stroke-linejoin="round">
+  <!-- unlit track: always visible, so the meter reads as five slots even when nothing is filled -->
+  <rect x="2" y="5.5" width="3.2" height="13" fill="currentColor" stroke="none" opacity="0.16"/>
+  <rect x="6.2" y="5.5" width="3.2" height="13" fill="currentColor" stroke="none" opacity="0.16"/>
+  <rect x="10.4" y="5.5" width="3.2" height="13" fill="currentColor" stroke="none" opacity="0.16"/>
+  <rect x="14.6" y="5.5" width="3.2" height="13" fill="currentColor" stroke="none" opacity="0.16"/>
+  <rect x="18.8" y="5.5" width="3.2" height="13" fill="currentColor" stroke="none" opacity="0.16"/>
+  <!-- lit segment i is opaque only while the band level exceeds i -->
+  <rect x="2" y="5.5" width="3.2" height="13" fill="currentColor" stroke="none" style="opacity:clamp(0,calc(var(--oxbow-band,1) - 0),1)"/>
+  <rect x="6.2" y="5.5" width="3.2" height="13" fill="currentColor" stroke="none" style="opacity:clamp(0,calc(var(--oxbow-band,1) - 1),1)"/>
+  <rect x="10.4" y="5.5" width="3.2" height="13" fill="currentColor" stroke="none" style="opacity:clamp(0,calc(var(--oxbow-band,1) - 2),1)"/>
+  <rect x="14.6" y="5.5" width="3.2" height="13" fill="currentColor" stroke="none" style="opacity:clamp(0,calc(var(--oxbow-band,1) - 3),1)"/>
+  <rect x="18.8" y="5.5" width="3.2" height="13" fill="currentColor" stroke="none" style="opacity:clamp(0,calc(var(--oxbow-band,1) - 4),1)"/>
+</svg>

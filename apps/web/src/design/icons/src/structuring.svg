@@ -1,0 +1,9 @@
+<!-- OXBOW glyph: structuring - R5 STRUCTURING, smurfing.
+     A stack of four equal short bars sitting just below a dashed threshold line.
+     Spec 12.6 glyph system: 24x24 grid, 1.75px stroke, square line caps, 2px optical padding. -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none"
+     stroke="currentColor" stroke-width="1.75" stroke-linecap="square" stroke-linejoin="round">
+  <!-- the salient reporting threshold; the bars never reach it, and that is the whole finding -->
+  <path d="M2.5 5H21.5" stroke-dasharray="3 2.5"/>
+  <path d="M5 9H19M5 12.5H19M5 16H19M5 19.5H19"/>
+</svg>
