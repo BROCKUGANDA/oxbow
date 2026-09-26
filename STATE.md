@@ -360,15 +360,23 @@ IBM adapter's schema is known-wrong (item 1) and its correction is unscheduled w
    (the frontend checks were run as `./node_modules/.bin/tsc --noEmit` and
    `./node_modules/.bin/biome check .`). A CI runner with GNU make is the place these
    become the plan's own commands.
-2. **A worker reverted the orchestrator's own committed work in the working tree.**
-   After the webhook/env commit, `tests/unit/test_env_declarations.py` was deleted,
-   `.env.example` lost its documented runtime block, and several `apps/api` files were
-   rewritten from a stale in-memory view by a process that had reported finishing.
-   Recovered by confirming HEAD was the better state, preserving the three files newer
-   than HEAD, `git checkout -- .`, then restoring them -- 42 gate tests pass again. The
-   audit scratch files that a `git add -A` had swept in with them are removed here;
-   copies live outside the repo. The lesson, written down because it bit twice this
-   session: never `git add -A` in a tree that concurrent writers may still touch.
+2. **A worker kept committing to `main` after reporting it had finished, and the
+   orchestrator mis-read that as corruption.** Sequence: the webhook/env commit landed,
+   then two commits appeared that the orchestrator did not author (`bfc05eb` "four-way
+   audit", `1aa42bc` pytest-cache `.gitignore`), after which `tests/unit/
+   test_env_declarations.py` seemed deleted and `.env.example` truncated. The real
+   explanation is that the agent's commits moved HEAD underneath a working tree holding
+   newer uncommitted edits, so the apparent "deletions" were the diff between two
+   writers' states, not a revert of committed work. Recovery was correct anyway -- the
+   three files newer than HEAD were preserved to a temp directory, `git checkout -- .`
+   restored HEAD, the files came back, and 42 gate tests pass -- but the *first*
+   diagnosis written into this file and into commit `8daa862`'s message was wrong: it
+   blamed the orchestrator's own `git add -A` for sweeping in `docs/audit/*`, which that
+   agent had in fact committed itself in `bfc05eb`. Corrected here rather than quietly
+   edited, because a wrong root cause is the thing that gets repeated.
+   The audit scratch files are removed from the tree; copies are parked at
+   `~/qoder-parked-oxbow-audit/`. Working rule for this repo, earned twice over:
+   confirm no worker still holds the tree before `git add -A` or `git checkout`.
 
 
 
