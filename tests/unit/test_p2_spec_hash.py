@@ -57,13 +57,12 @@ from oxbow.features.registry import (
     hash_registry,
     parse_registry,
 )
-from oxbow.scoring.config import FeatureRegistry as ScoringFeatureRegistry
 from oxbow.scoring.config import load_feature_registry
 from oxbow.scoring.errors import FrameContractError
 from oxbow.scoring.frame import (
+    COL_FOLD,
     COL_LABEL,
     COL_LABEL_TYPOLOGY,
-    COL_FOLD,
     COL_SPEC_HASH,
     PROVENANCE_REAL,
     build_training_frame,
@@ -117,7 +116,9 @@ def _contract_frame(
     folds = [index % N_FOLDS for index in range(anchors.height)]
     return anchors.rename({ENTITY: "account_key", EVENT_TS: "as_of_ts"}, strict=True).with_columns(
         pl.Series(COL_FOLD, folds, dtype=pl.Int32),
-        pl.Series(COL_LABEL, [1 if index % 6 == 0 else 0 for index in range(anchors.height)], pl.Int8),
+        pl.Series(
+            COL_LABEL, [1 if index % 6 == 0 else 0 for index in range(anchors.height)], pl.Int8
+        ),
         pl.Series(COL_LABEL_TYPOLOGY, [None] * anchors.height, dtype=pl.String),
         pl.lit(spec_hash, dtype=pl.String).alias(COL_SPEC_HASH),
     )
@@ -222,7 +223,9 @@ def test_changing_one_window_moves_the_digest_and_keeps_every_name() -> None:
 def test_changing_one_transform_moves_the_digest() -> None:
     """A different aggregation over the same source, predicate and window is another feature."""
     registry = registry_from_repo(REPO_ROOT)
-    entry = next(item for item in registry.entries if item.kind == "window_agg" and item.agg == "sum")
+    entry = next(
+        item for item in registry.entries if item.kind == "window_agg" and item.agg == "sum"
+    )
     changed = replace(entry, agg="max", null_policy="null_when_window_empty", winsorise=False)
     variant = replace(
         registry,
@@ -331,7 +334,9 @@ def test_a_frame_with_two_digests_is_refused(
         .alias(COL_SPEC_HASH)
     )
     with pytest.raises(FrameContractError, match="one frame is one feature spec"):
-        build_training_frame(tampered, view, CATEGORICAL, PROVENANCE_REAL, VALIDATION_FRACTION, N_FOLDS)
+        build_training_frame(
+            tampered, view, CATEGORICAL, PROVENANCE_REAL, VALIDATION_FRACTION, N_FOLDS
+        )
 
 
 def test_the_scoring_view_refuses_a_registry_the_feature_layer_would_reject(

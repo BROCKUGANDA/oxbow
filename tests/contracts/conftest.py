@@ -165,15 +165,12 @@ def base_row(**overrides: Any) -> dict[str, Any]:
     return row
 
 
-def raw_frame(rows: list[dict[str, Any]], *, columns: tuple[str, ...] | None = None) -> pl.DataFrame:
+def raw_frame(
+    rows: list[dict[str, Any]], *, columns: tuple[str, ...] | None = None
+) -> pl.DataFrame:
     """A raw batch frame with the reader's dtypes: amount String, balances Float64."""
     header = list(columns or RAW_HEADER)
-    frame = pl.DataFrame(
-        {
-            name: [row.get(name) for row in rows]
-            for name in header
-        }
-    )
+    frame = pl.DataFrame({name: [row.get(name) for row in rows] for name in header})
     return frame.with_columns(
         pl.col("step").cast(pl.Int64),
         pl.col("isFraud").cast(pl.Int64),
@@ -187,7 +184,9 @@ def raw_frame(rows: list[dict[str, Any]], *, columns: tuple[str, ...] | None = N
     )
 
 
-def paysim_csv(path: Path, rows: list[dict[str, Any]], *, header: tuple[str, ...] | None = None) -> Path:
+def paysim_csv(
+    path: Path, rows: list[dict[str, Any]], *, header: tuple[str, ...] | None = None
+) -> Path:
     """Write rows as a raw PaySim CSV, header spelled exactly as the real file spells it."""
     columns = list(header or RAW_HEADER)
     lines = [",".join(columns)]

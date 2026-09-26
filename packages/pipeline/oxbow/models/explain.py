@@ -102,9 +102,7 @@ def _explainer_values(bundle: GbmBundle, matrix: np.ndarray) -> tuple[np.ndarray
     return values, base
 
 
-def _closure_error(
-    values: np.ndarray, base_value: float, model_output: np.ndarray
-) -> float:
+def _closure_error(values: np.ndarray, base_value: float, model_output: np.ndarray) -> float:
     """Max |base + sum(contributions) - model output| in logit space.
 
     Measured because the persisted waterfall must add back up to the score the queue was
@@ -147,7 +145,9 @@ def explain_and_report(
     """Return the annotated frame **and** the outcome record for the model card."""
     if bundle is None:
         annotated = _fallback_all_rows(frame, cfg, "no gbm was fitted for this run's mode")
-        return annotated, _scorecard_outcome(annotated, cfg, "no gbm was fitted for this run's mode")
+        return annotated, _scorecard_outcome(
+            annotated, cfg, "no gbm was fitted for this run's mode"
+        )
     matrix = _matrix(frame, bundle.feature_names, bundle.categorical_features)
     values, base_value = _explainer_values(bundle, matrix)
     total = float(np.max(np.abs(values.sum(axis=1)))) if values.size else 0.0
@@ -160,9 +160,15 @@ def explain_and_report(
         annotated = _fallback_all_rows(frame, cfg, reason)
         return annotated, _scorecard_outcome(annotated, cfg, reason)
     probabilities = (
-        frame.get_column(probability_column).cast(pl.Float64).fill_null(0.5).to_numpy(zero_copy_only=False)
+        frame.get_column(probability_column)
+        .cast(pl.Float64)
+        .fill_null(0.5)
+        .to_numpy(zero_copy_only=False)
     )
-    margins = np.log(np.clip(probabilities, 1e-12, 1.0 - 1e-12) / (1.0 - np.clip(probabilities, 1e-12, 1.0 - 1e-12)))
+    margins = np.log(
+        np.clip(probabilities, 1e-12, 1.0 - 1e-12)
+        / (1.0 - np.clip(probabilities, 1e-12, 1.0 - 1e-12))
+    )
     closure = _closure_error(values, base_value, margins)
     payload: list[str] = []
     for position in range(values.shape[0]):
@@ -203,7 +209,9 @@ def explain_and_report(
 def _scorecard_outcome(annotated: pl.DataFrame, cfg: ShapConfig, reason: str) -> ExplanationOutcome:
     rows = annotated.height
     fallbacks = int(
-        annotated.get_column("explanation_source").filter(pl.col("explanation_source") == SOURCE_SCORECARD).len()
+        annotated.get_column("explanation_source")
+        .filter(pl.col("explanation_source") == SOURCE_SCORECARD)
+        .len()
     )
     return ExplanationOutcome(
         source=SOURCE_SCORECARD,
@@ -228,7 +236,11 @@ def _fallback_all_rows(frame: pl.DataFrame, cfg: ShapConfig, reason: str) -> pl.
     for raw in frame.get_column("points_json").to_list():
         contributions = json.loads(raw)
         renamed = [
-            {"feature": item["feature"], "value": float(item["points"]), "attribute": item["attribute"]}
+            {
+                "feature": item["feature"],
+                "value": float(item["points"]),
+                "attribute": item["attribute"],
+            }
             for item in contributions
         ]
         renamed.sort(key=lambda item: (-abs(item["value"]), item["feature"]))

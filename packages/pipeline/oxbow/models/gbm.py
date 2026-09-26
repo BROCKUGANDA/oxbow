@@ -86,9 +86,7 @@ class GbmBundle:
                 f"gbm expects {len(self.feature_names)} columns, got shape {matrix.shape}"
             )
         iteration = self.best_iteration if self.best_iteration > 0 else self.n_estimators_requested
-        return np.asarray(
-            self.booster.predict(matrix, num_iteration=iteration), dtype=np.float64
-        )
+        return np.asarray(self.booster.predict(matrix, num_iteration=iteration), dtype=np.float64)
 
     def training_curve(self) -> tuple[dict[str, float], ...]:
         """The validation PR-AUC per boosting round, for the validation page."""
@@ -212,7 +210,9 @@ def fit_gbm(
         label=y_train,
         feature_name=list(feature_names),
         categorical_feature=(
-            [feature_names[index] for index in categorical_columns] if categorical_columns else "auto"
+            [feature_names[index] for index in categorical_columns]
+            if categorical_columns
+            else "auto"
         ),
         free_raw_data=False,
     )
@@ -222,7 +222,9 @@ def fit_gbm(
         reference=train_data,
         feature_name=list(feature_names),
         categorical_feature=(
-            [feature_names[index] for index in categorical_columns] if categorical_columns else "auto"
+            [feature_names[index] for index in categorical_columns]
+            if categorical_columns
+            else "auto"
         ),
         free_raw_data=False,
     )
@@ -269,7 +271,11 @@ def fit_gbm(
     best_iteration = int(getattr(booster, "best_iteration", 0) or 0)
     native_pr_auc = _validation_metric(booster, cfg.eval_metric)
     repo_pr_auc = _validation_metric(booster, "pr_auc_repo")
-    if np.isfinite(native_pr_auc) and np.isfinite(repo_pr_auc) and abs(native_pr_auc - repo_pr_auc) > 1e-6:
+    if (
+        np.isfinite(native_pr_auc)
+        and np.isfinite(repo_pr_auc)
+        and abs(native_pr_auc - repo_pr_auc) > 1e-6
+    ):
         raise ModelLayerError(
             f"lightgbm's native {cfg.eval_metric} ({native_pr_auc:.8f}) disagrees with this "
             f"repository's average_precision ({repo_pr_auc:.8f}) on the same validation "
@@ -304,6 +310,7 @@ def _matrix(
     from oxbow.models.inputs import feature_matrix
 
     return feature_matrix(frame, feature_names, categorical_features)
+
 
 __all__ = [
     "MODEL_ARTIFACT_FILENAME",

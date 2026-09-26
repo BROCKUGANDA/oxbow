@@ -365,7 +365,11 @@ def build_account_frame(
         else:
             statements.append(
                 "winsorisation: "
-                + ("disabled in the registry" if not registry.guards.winsorise_enabled else "not fitted (no training rows at or before the fold cutoff)")
+                + (
+                    "disabled in the registry"
+                    if not registry.guards.winsorise_enabled
+                    else "not fitted (no training rows at or before the fold cutoff)"
+                )
             )
         chosen = chosen.with_columns(
             pl.lit(fold.index, dtype=pl.Int32).alias(FOLD),
@@ -479,12 +483,7 @@ def _collapse(
     per_instant = ordered.group_by([ENTITY, EVENT_TS], maintain_order=True).agg(
         pl.len().alias("_events"),
         pl.col(LABEL_FRAUD).max().alias(LABEL_FRAUD),
-        (
-            pl.col(LABEL_TYPOLOGY)
-            .filter(pl.col(LABEL_FRAUD) == 1)
-            .last()
-            .alias(LABEL_TYPOLOGY)
-        ),
+        (pl.col(LABEL_TYPOLOGY).filter(pl.col(LABEL_FRAUD) == 1).last().alias(LABEL_TYPOLOGY)),
     )
     ambiguous = int(per_instant.filter(pl.col("_events") > 1).height)
     anchors = ordered.unique(subset=[ENTITY, EVENT_TS], keep="last", maintain_order=True).select(
@@ -539,7 +538,15 @@ def _assert_frame(
     caller must still cross, and this one says *which* grain property failed rather than
     leaving the failure to a frame-level message three layers away.
     """
-    expected = [ACCOUNT_KEY, AS_OF_TS, FOLD, LABEL_FRAUD, LABEL_TYPOLOGY, *registry.matrix_ids, SPEC_HASH]
+    expected = [
+        ACCOUNT_KEY,
+        AS_OF_TS,
+        FOLD,
+        LABEL_FRAUD,
+        LABEL_TYPOLOGY,
+        *registry.matrix_ids,
+        SPEC_HASH,
+    ]
     missing = sorted(set(expected) - set(frame.columns))
     extra = sorted(set(frame.columns) - set(expected))
     if missing or extra:

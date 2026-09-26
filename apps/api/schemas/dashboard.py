@@ -37,7 +37,9 @@ class BandedMoney(BaseModel):
     point: Money
     over_band: list[Money] = Field(min_length=3, max_length=3)
     band_rates: list[float] = Field(min_length=3, max_length=3)
-    basis: str = Field(description="Which config key the band came from, e.g. recovery.sensitivity_band.")
+    basis: str = Field(
+        description="Which config key the band came from, e.g. recovery.sensitivity_band."
+    )
     note: str
 
 

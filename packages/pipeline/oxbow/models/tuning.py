@@ -88,9 +88,7 @@ class TuningResult:
         }
 
 
-def _suggest(
-    trial: optuna.Trial, space: dict[str, dict[str, object]]
-) -> dict[str, float | int]:
+def _suggest(trial: optuna.Trial, space: dict[str, dict[str, object]]) -> dict[str, float | int]:
     """One configuration from the declared search space, with its declared type kept.
 
     An int stays an int: LightGBM rejects ``num_leaves=32.0`` with
@@ -209,16 +207,15 @@ def tune_gbm(
     if len(trials) < requested:
         # Stated, not hidden: the selected score is the maximum of fewer estimates than
         # config asked for, and which cap bit changes how optimistic that maximum is.
-        limit_hit = bool(cfg.timeout_seconds and time.perf_counter() - started >= cfg.timeout_seconds)
-        short_reason = (
-            f"{len(trials)} of {requested} configurations were evaluated; "
-            + (
-                f"optuna.timeout_seconds={cfg.timeout_seconds} was reached"
-                if limit_hit
-                else "trial_budget override from the caller"
-                if trial_budget is not None
-                else "trials failed before scoring"
-            )
+        limit_hit = bool(
+            cfg.timeout_seconds and time.perf_counter() - started >= cfg.timeout_seconds
+        )
+        short_reason = f"{len(trials)} of {requested} configurations were evaluated; " + (
+            f"optuna.timeout_seconds={cfg.timeout_seconds} was reached"
+            if limit_hit
+            else "trial_budget override from the caller"
+            if trial_budget is not None
+            else "trials failed before scoring"
         )
     return TuningResult(
         best_params=winner.params,

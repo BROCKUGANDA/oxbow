@@ -101,7 +101,9 @@ class HttpSink:
         try:
             response = self._client.post(self._url, content=body, headers=headers)
         except httpx.HTTPError as exc:
-            raise DeliveryError(f"{self._sink_id}: transport failure delivering {key}: {exc}") from exc
+            raise DeliveryError(
+                f"{self._sink_id}: transport failure delivering {key}: {exc}"
+            ) from exc
 
         if 200 <= response.status_code < 300:
             receipt = SinkReceipt(

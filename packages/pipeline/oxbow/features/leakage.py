@@ -73,7 +73,9 @@ def _compare(
     full: pl.DataFrame, truncated: pl.DataFrame, columns: Sequence[str]
 ) -> dict[str, tuple[int, int, list[tuple[str, str]], str, str]]:
     """Column-wise comparison of the rows the truncated build still contains."""
-    shared = full.select(KEY_COLUMNS).join(truncated.select(KEY_COLUMNS), on=list(KEY_COLUMNS), how="inner")
+    shared = full.select(KEY_COLUMNS).join(
+        truncated.select(KEY_COLUMNS), on=list(KEY_COLUMNS), how="inner"
+    )
     left = full.join(shared, on=list(KEY_COLUMNS), how="semi").select([*KEY_COLUMNS, *columns])
     right = truncated.select([*KEY_COLUMNS, *columns])
     joined = left.join(right, on=list(KEY_COLUMNS), how="inner", suffix="__trunc")
@@ -86,8 +88,10 @@ def _compare(
         count = int(differs.sum())
         if not count:
             continue
-        sample_rows = joined.filter(differs).select([*KEY_COLUMNS, column, f"{column}__trunc"]).head(
-            MAX_REPORTED_EXAMPLES
+        sample_rows = (
+            joined.filter(differs)
+            .select([*KEY_COLUMNS, column, f"{column}__trunc"])
+            .head(MAX_REPORTED_EXAMPLES)
         )
         keys = [(str(row[0]), str(row[1])) for row in sample_rows.select(list(KEY_COLUMNS)).rows()]
         first = sample_rows.row(0)
@@ -156,12 +160,12 @@ def assert_backward_only(
     Returns the number of (column, cutoff) pairs actually checked, so a caller can see
     that the gate did work rather than passing on an empty comparison.
     """
-    violations = truncation_invariance_violations(
-        builder, events, cutoffs=cutoffs, columns=columns
-    )
+    violations = truncation_invariance_violations(builder, events, cutoffs=cutoffs, columns=columns)
     checked = len(cutoffs) * len(columns)
     if violations:
-        detail = "\n  ".join(violation.describe() for violation in violations[:MAX_REPORTED_EXAMPLES])
+        detail = "\n  ".join(
+            violation.describe() for violation in violations[:MAX_REPORTED_EXAMPLES]
+        )
         raise FutureReadError(
             f"leakage gate: {len(violations)} column/cutoff combination(s) out of {checked} "
             f"read past their own as-of cutoff.\n  {detail}"
@@ -275,9 +279,7 @@ def audit_no_future_reads(
     _assert_matrix_matches(reference, feature_table, registry)
 
     chosen = (
-        tuple(cutoffs)
-        if cutoffs is not None
-        else audit_probe_cutoffs(events, count=probe_count)
+        tuple(cutoffs) if cutoffs is not None else audit_probe_cutoffs(events, count=probe_count)
     )
     if not chosen:
         raise FutureReadError(
@@ -289,7 +291,9 @@ def audit_no_future_reads(
         builder, events, cutoffs=chosen, columns=list(chosen_columns), full=reference
     )
     if violations:
-        detail = "\n  ".join(violation.describe() for violation in violations[:MAX_REPORTED_EXAMPLES])
+        detail = "\n  ".join(
+            violation.describe() for violation in violations[:MAX_REPORTED_EXAMPLES]
+        )
         raise FutureReadError(
             f"leakage gate: {len(violations)} column/cutoff combination(s) out of "
             f"{len(chosen) * len(chosen_columns)} read past their own as-of cutoff.\n  {detail}"

@@ -54,14 +54,13 @@ from oxbow.features.fold_scope import (
 from oxbow.features.kinds import (
     ENTITY,
     EVENT_TS,
+    POSITION,
+    PREDICATE_PREFIX,
+    ROW_UNIT,
     TXN_ID,
     KernelCache,
     KernelContext,
     KernelError,
-    POSITION,
-    PREDICATE_PREFIX,
-    ROW_UNIT,
-    ROW_VALUE_PREFIX,
     dispatch,
     fold_column,
     predicate_column,
@@ -313,9 +312,13 @@ def assert_input_contract(events: pl.DataFrame) -> None:
             f"{INGESTED_AT} must be a datetime; the seal comparison depends on it"
         )
     if not events.schema["local_hour"].is_integer():
-        raise InputContractError(f"local_hour must be an integer hour, got {events.schema['local_hour']}")
+        raise InputContractError(
+            f"local_hour must be an integer hour, got {events.schema['local_hour']}"
+        )
     if events.filter(pl.col(CURRENCY).is_null()).height:
-        raise InputContractError("currency is part of every amount (plan §8); null is not a currency")
+        raise InputContractError(
+            "currency is part of every amount (plan §8); null is not a currency"
+        )
 
 
 def assert_single_currency_per_account(events: pl.DataFrame) -> None:
@@ -425,11 +428,14 @@ def materialise_row_values(frame: pl.DataFrame) -> pl.DataFrame:
     )["_gap_seconds"]
     return with_previous.with_columns(
         gaps.round(0).cast(pl.Int64).alias(row_value_column("gap_since_previous_event_s")),
-        (gaps / ONE_DAY_SECONDS).floor().cast(pl.Int64).alias(
-            row_value_column("gap_since_previous_event_days")
-        ),
+        (gaps / ONE_DAY_SECONDS)
+        .floor()
+        .cast(pl.Int64)
+        .alias(row_value_column("gap_since_previous_event_days")),
         (
-            pl.col(BALANCE_AFTER) - pl.col(BALANCE_BEFORE) - pl.col(DIRECTION_SIGN) * pl.col("amount_minor")
+            pl.col(BALANCE_AFTER)
+            - pl.col(BALANCE_BEFORE)
+            - pl.col(DIRECTION_SIGN) * pl.col("amount_minor")
         )
         .abs()
         .cast(pl.Int64)
@@ -544,7 +550,10 @@ def fold_scoped_columns(
         return frame
     if fold is None:
         return frame.with_columns(
-            [pl.lit(None, dtype=entry.polars_dtype).alias(fold_column(entry.id)) for entry in entries]
+            [
+                pl.lit(None, dtype=entry.polars_dtype).alias(fold_column(entry.id))
+                for entry in entries
+            ]
         )
     work = frame
     graph_entries = [entry for entry in entries if entry.kind == "graph_node"]
@@ -582,7 +591,9 @@ def fold_scoped_columns(
             )
         else:
             matrix = rule_matrix(hits, fold, registry).rename({ACCOUNT: ENTITY})
-            renames = {entry.rule_id: fold_column(entry.id) for entry in rule_entries if entry.rule_id}
+            renames = {
+                entry.rule_id: fold_column(entry.id) for entry in rule_entries if entry.rule_id
+            }
             work = work.join(
                 matrix.select([ENTITY, *renames]).rename(renames),
                 on=ENTITY,
@@ -632,7 +643,9 @@ def label_correlations(
     spread reports nothing rather than a fabricated 0.0.
     """
     if label_column not in computed.columns:
-        raise FeatureTableError(f"{label_column!r} is not on the computed frame to correlate against")
+        raise FeatureTableError(
+            f"{label_column!r} is not on the computed frame to correlate against"
+        )
     out: dict[str, float] = {}
     target = computed[label_column].cast(pl.Float64)
     if target.n_unique() < 2:
@@ -641,9 +654,7 @@ def label_correlations(
         series = computed[column]
         if not (series.dtype.is_integer() or isinstance(series.dtype, pl.Float64)):
             continue
-        both = computed.select(
-            series.cast(pl.Float64).alias("_x"), target.alias("_y")
-        ).drop_nulls()
+        both = computed.select(series.cast(pl.Float64).alias("_x"), target.alias("_y")).drop_nulls()
         if both.height < 2 or both["_x"].n_unique() < 2:
             continue
         # `pl.corr` as an expression rather than `Series.corr`: the latter was removed from
@@ -734,7 +745,9 @@ class FeatureTableBuilder:
         )
         late_column = predicate_column("late_arrival")
         window_filter_names = {
-            entry.where for entry in self.registry.entries if entry.where and entry.where != "always"
+            entry.where
+            for entry in self.registry.entries
+            if entry.where and entry.where != "always"
         }
         if drop_late_from_windows and sealed_before_ts is not None:
             for name in list(frame.columns):
@@ -804,9 +817,7 @@ class FeatureTableBuilder:
         order = [EVENT_TS, TXN_ID, ENTITY]
         matrix = computed.select([*PUBLISHED_KEYS, *matrix_ids]).sort(order)
         outcomes = computed.select([*PUBLISHED_KEYS, *registry.outcome_ids]).sort(order)
-        keys = computed.select(
-            [*PUBLISHED_KEYS, CURRENCY, SOURCE_DATASET, BATCH_ID]
-        ).sort(order)
+        keys = computed.select([*PUBLISHED_KEYS, CURRENCY, SOURCE_DATASET, BATCH_ID]).sort(order)
         for column, dtype in registry.matrix_dtypes().items():
             if matrix.schema[column] != dtype:
                 raise FeatureTableError(
@@ -915,7 +926,9 @@ def cycle_eligible_edges(edges: pl.DataFrame) -> pl.DataFrame:
     the filter here — rather than trusting each caller to remember it — is what makes
     ``test_reversal_not_a_cycle`` a property of the seam instead of a habit.
     """
-    return edges.filter(~pl.col("is_reversal") & ~pl.col("is_zero_value") & ~pl.col("is_self_transfer"))
+    return edges.filter(
+        ~pl.col("is_reversal") & ~pl.col("is_zero_value") & ~pl.col("is_self_transfer")
+    )
 
 
 def assert_edges_within_fold(edges: pl.DataFrame, fold: Fold) -> None:
@@ -953,23 +966,23 @@ def __getattr__(name: str) -> object:
 __all__ = [
     "BALANCE_AFTER",
     "BALANCE_BEFORE",
-    "BuildOptions",
-    "BuildReport",
     "COUNTERPARTY",
     "CUTOFF_TS",
-    "CrossCurrencyAggregationError",
     "DIRECTION_SIGN",
+    "LABEL_FRAUD",
+    "PUBLISHED_KEYS",
+    "REVERSAL_OF",
+    "SELF_TRANSFER_ROW",
+    "BuildOptions",
+    "BuildReport",
+    "CrossCurrencyAggregationError",
     "FeatureHashMismatchError",
     "FeatureTable",
     "FeatureTableBuilder",
     "FeatureTableError",
     "InputContractError",
-    "LABEL_FRAUD",
     "LabelInMatrixError",
     "NonFiniteFeatureError",
-    "PUBLISHED_KEYS",
-    "REVERSAL_OF",
-    "SELF_TRANSFER_ROW",
     "WinsorBounds",
     "assert_edges_within_fold",
     "assert_features_finite",

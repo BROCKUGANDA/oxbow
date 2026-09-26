@@ -59,9 +59,8 @@ from oxbow.features.fold_scope import (
     GraphScopeError,
     require_graph_provider,
     require_rule_provider,
-    seal_node_table,
 )
-from oxbow.features.kinds import ENTITY, EVENT_TS, TXN_ID
+from oxbow.features.kinds import EVENT_TS, TXN_ID
 from oxbow.features.leakage import (
     FutureReadError,
     assert_backward_only,
@@ -160,7 +159,13 @@ def _fixture_rows() -> list[dict[str, Any]]:
     def add(*args: Any, **kwargs: Any) -> None:
         nonlocal index
         index += 1
-        rows.append(_event(index, *args, **kwargs, ))
+        rows.append(
+            _event(
+                index,
+                *args,
+                **kwargs,
+            )
+        )
 
     # Day 0-1: Alice and Bob meet, twice on the same local day and once the next.
     add(ALICE, BOB, 10_000, BASE + HOUR)
@@ -314,9 +319,9 @@ def test_no_feature_reads_any_row_after_its_own_cutoff(
         columns=registry.computed_ids,
     )
     assert checked == len(CUTOFFS) * len(registry.computed_ids)
-    assert checked >= len(CUTOFFS) * 90, (
-        "the sweep is supposed to cover the whole registry, not a comfortable subset"
-    )
+    assert (
+        checked >= len(CUTOFFS) * 90
+    ), "the sweep is supposed to cover the whole registry, not a comfortable subset"
 
 
 def test_every_published_column_is_swept_not_a_handful(events: pl.DataFrame) -> None:
@@ -574,9 +579,7 @@ class TestFoldScopeLeakageArm:
     def test_a_bare_dataframe_is_refused_at_the_provider_position(
         self, registry: FeatureRegistry
     ) -> None:
-        nodes = pl.DataFrame(
-            {ACCOUNT: [ALICE], **{field: [0] for field in registry.graph_fields}}
-        )
+        nodes = pl.DataFrame({ACCOUNT: [ALICE], **{field: [0] for field in registry.graph_fields}})
         with pytest.raises(GraphScopeError, match="bare DataFrame"):
             require_graph_provider(nodes)
         with pytest.raises(GraphScopeError, match="bare DataFrame"):
@@ -598,9 +601,7 @@ class TestFoldScopeLeakageArm:
     def test_the_builder_refuses_a_graph_source_that_is_not_a_provider(
         self, events: pl.DataFrame, registry: FeatureRegistry
     ) -> None:
-        nodes = pl.DataFrame(
-            {ACCOUNT: [ALICE], **{field: [0] for field in registry.graph_fields}}
-        )
+        nodes = pl.DataFrame({ACCOUNT: [ALICE], **{field: [0] for field in registry.graph_fields}})
         with pytest.raises(GraphScopeError, match="bare DataFrame"):
             build_feature_table(events, registry, graph_features=nodes)  # type: ignore[arg-type]
 

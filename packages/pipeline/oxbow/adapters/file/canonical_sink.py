@@ -196,7 +196,11 @@ class CanonicalSink:
         :func:`oxbow.ports.source.batch_paths` names the same default, so a resumed run
         finds the files its predecessor wrote.
         """
-        interim = out_override if out_override is not None else Path(root) / DATA_DIRNAME / INTERIM_DIRNAME
+        interim = (
+            out_override
+            if out_override is not None
+            else Path(root) / DATA_DIRNAME / INTERIM_DIRNAME
+        )
         return cls(
             interim_root=interim,
             duckdb_path=Path(root) / OUT_DIRNAME / WAREHOUSE_DIRNAME / f"oxbow{DUCKDB_EXTENSION}",

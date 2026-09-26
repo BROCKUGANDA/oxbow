@@ -95,14 +95,10 @@ def run_detail(
     summary = read_model.run_summary(row)
     summary["superseded_by"] = _superseded_by(summary, _newest_complete(read_model))
     events = read_model.stage_events(run_id)
-    detail = RunDetail.model_validate(
-        {**summary, "events": [dict(event) for event in events]}
-    )
+    detail = RunDetail.model_validate({**summary, "events": [dict(event) for event in events]})
     return envelope(
         detail,
-        **build_meta(
-            container, run_id=run_id, **run_label(row), assumptions=[]
-        ).model_dump(),
+        **build_meta(container, run_id=run_id, **run_label(row), assumptions=[]).model_dump(),
     )
 
 

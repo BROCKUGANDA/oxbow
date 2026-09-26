@@ -32,20 +32,9 @@ from pathlib import Path
 from typing import Any, Final
 
 import polars as pl
+
 from oxbow.audit.chain import ChainRow
 from oxbow.graph.persist import GraphArtifacts, load_graph
-from oxbow.ports.case_sink import (
-    CASE_SCHEMA_VERSION,
-    CalibrationReading,
-    CaseBundle,
-    DecisionRecord,
-    EconomicsBlock,
-    MonteCarloInterval,
-    ScoreBlock,
-    assert_self_describing,
-)
-from oxbow.quant.economics import AssumptionBlock, Economics
-
 from oxbow.packet.errors import (
     AuditMismatchError,
     MissingArtifactError,
@@ -64,6 +53,17 @@ from oxbow.packet.model import (
     SubgraphNode,
     SubgraphView,
 )
+from oxbow.ports.case_sink import (
+    CASE_SCHEMA_VERSION,
+    CalibrationReading,
+    CaseBundle,
+    DecisionRecord,
+    EconomicsBlock,
+    MonteCarloInterval,
+    ScoreBlock,
+    assert_self_describing,
+)
+from oxbow.quant.economics import AssumptionBlock, Economics
 
 #: Landed case bundles: ``out/case_sink/<idempotency_key>.json`` (02 §E, plan §13).
 CASE_SINK_DIRNAME: Final = "case_sink"
@@ -126,9 +126,7 @@ def case_bundle_from_payload(payload: Mapping[str, Any]) -> CaseBundle:
                 if decision_raw.get("reversal_of_seq") is None
                 else _int(decision_raw.get("reversal_of_seq"), "reversal_of_seq")
             ),
-            decided_on_superseded_run=bool(
-                decision_raw.get("decided_on_superseded_run", False)
-            ),
+            decided_on_superseded_run=bool(decision_raw.get("decided_on_superseded_run", False)),
         ),
         score=ScoreBlock(
             fused_score=float(str(score_raw.get("fused_score"))),
@@ -383,9 +381,7 @@ def evidence_from_graph_artifact(
     )
 
 
-def _evidence_rows(
-    frame: pl.DataFrame, *, account_key: str, limit: int
-) -> tuple[EvidenceRow, ...]:
+def _evidence_rows(frame: pl.DataFrame, *, account_key: str, limit: int) -> tuple[EvidenceRow, ...]:
     """Frame rows as evidence, most recent first then truncated to ``limit``."""
     records = frame.to_dicts()
     ordered = sorted(
@@ -429,9 +425,7 @@ def subgraph_from_graph_artifact(
     """
     frames = load_graph_frames(artifact_dir)
     nodes, edges = frames.nodes, frames.edges
-    node_index = {
-        str(record["account"]): record for record in nodes.to_dicts()
-    }
+    node_index = {str(record["account"]): record for record in nodes.to_dicts()}
     if account_key not in node_index:
         raise SubgraphArtifactError(
             f"{account_key} is not a node in {artifact_dir}. Drawing an empty network "
@@ -525,7 +519,9 @@ def _is_rail(record: Mapping[str, Any] | None) -> bool:
 _EXPLANATION_KEYS: Final = ("explanation", "shap")
 
 
-def explanation_for_bundle(bundle: CaseBundle, *, scored_rows: Path | None = None) -> ExplanationSnapshot:
+def explanation_for_bundle(
+    bundle: CaseBundle, *, scored_rows: Path | None = None
+) -> ExplanationSnapshot:
     """The explanation the decision was argued from, or the labelled fallback.
 
     Preference order is a provenance order, not a convenience one: the copy embedded
@@ -547,9 +543,7 @@ def explanation_for_bundle(bundle: CaseBundle, *, scored_rows: Path | None = Non
             "TreeExplainer values per scored row so this section is a read, never a "
             "recompute; with nothing to read the packet refuses."
         )
-    return explanation_from_scored_rows(
-        path, run_id=bundle.run_id, account_key=bundle.account_key
-    )
+    return explanation_from_scored_rows(path, run_id=bundle.run_id, account_key=bundle.account_key)
 
 
 def explanation_from_scored_rows(
@@ -608,9 +602,7 @@ def explanation_from_scored_rows(
         account_key=account_key,
         source=source_name,
         base_value=float(str(record[base_column])) if base_column else 0.0,
-        base_unit=(
-            "expected model output (logit)" if base_column else "base value not recorded"
-        ),
+        base_unit=("expected model output (logit)" if base_column else "base value not recorded"),
         rows=tuple(pairs),
         source_pointer=f"{source}#run_id={run_id},account_key={account_key}",
         note=(

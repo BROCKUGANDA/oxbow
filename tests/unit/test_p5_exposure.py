@@ -199,8 +199,9 @@ def test_result_is_independent_of_input_order(cfg: Economics) -> None:
     caller that reads rows in a different sequence gets the same exposure.
     """
     edges = fixture_edges()
-    forward, reversed_order = exposure_at_risk(edges, "ACC-A", T0, 24, 1, cfg), exposure_at_risk(
-        list(reversed(edges)), "ACC-A", T0, 24, 1, cfg
+    forward, reversed_order = (
+        exposure_at_risk(edges, "ACC-A", T0, 24, 1, cfg),
+        exposure_at_risk(list(reversed(edges)), "ACC-A", T0, 24, 1, cfg),
     )
     assert forward.cluster == reversed_order.cluster
     assert forward.exposure == reversed_order.exposure
@@ -291,7 +292,12 @@ def test_the_shipped_config_defines_a_24_hour_one_hop_window() -> None:
     assert shipped.exposure.window_hours == 24
     assert shipped.exposure.downstream_hops == 1
     result = exposure_at_risk(
-        fixture_edges(), "ACC-A", T0, shipped.exposure.window_hours, shipped.exposure.downstream_hops, shipped
+        fixture_edges(),
+        "ACC-A",
+        T0,
+        shipped.exposure.window_hours,
+        shipped.exposure.downstream_hops,
+        shipped,
     )
     assert result.exposure == Money(5_000_000, "UGX")
     with pytest.raises(ConfigError, match="no review minutes"):

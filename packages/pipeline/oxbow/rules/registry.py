@@ -269,4 +269,10 @@ def signature_for(rule_id: str, account_key: str, *parts: object) -> str:
     return pattern_signature(rule_id, account_key, *parts)
 
 
-__all__ = ["GRAPH_TOPOLOGY_RULE_IDS", "RULE_IDS", "RULE_REGISTRY", "evaluate_rules", "signature_for"]
+__all__ = [
+    "GRAPH_TOPOLOGY_RULE_IDS",
+    "RULE_IDS",
+    "RULE_REGISTRY",
+    "evaluate_rules",
+    "signature_for",
+]

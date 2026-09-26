@@ -50,9 +50,7 @@ RULE_IDS: Final[tuple[str, ...]] = tuple(f"R{index}" for index in range(1, 13))
 
 CURRENCY_POLICY_SAME: Final = "same_currency"
 CURRENCY_POLICY_IGNORE: Final = "ignore_currency"
-CURRENCY_POLICIES: Final[frozenset[str]] = frozenset(
-    {CURRENCY_POLICY_SAME, CURRENCY_POLICY_IGNORE}
-)
+CURRENCY_POLICIES: Final[frozenset[str]] = frozenset({CURRENCY_POLICY_SAME, CURRENCY_POLICY_IGNORE})
 
 DEDUPLICATE_BY_SIGNATURE: Final = "pattern_signature"
 
@@ -432,7 +430,9 @@ class RulesSettings:
             "hit_rate_ceiling": self.hit_rate_ceiling,
             "hit_rate_floor": self.hit_rate_floor,
             "uses_local_hour": sorted(self.uses_local_hour),
-            "overlap_groups": {name: list(members) for name, members in self.overlap_groups.items()},
+            "overlap_groups": {
+                name: list(members) for name, members in self.overlap_groups.items()
+            },
             "guards": {
                 "window_overlap_hours": self.guards.window_overlap_hours,
                 "deduplicate_by": self.guards.deduplicate_by,
@@ -504,7 +504,9 @@ def load_rules_settings(root: Path | None = None) -> RulesSettings:
             "and too dead, and the run report cannot name either failure."
         )
 
-    overlap_raw = _mapping(_require(raw, "overlap_groups", "rules.yaml"), owner="rules.yaml.overlap_groups")
+    overlap_raw = _mapping(
+        _require(raw, "overlap_groups", "rules.yaml"), owner="rules.yaml.overlap_groups"
+    )
     overlap_groups = {
         str(name): _names(members, owner=f"rules.yaml.overlap_groups.{name}")
         for name, members in overlap_raw.items()
@@ -624,9 +626,15 @@ def _resolve_engine(raw: Mapping[str, object]) -> RuleEngineSettings:
     return RuleEngineSettings(
         cycle_non_increasing=_boolean(raw, "cycle_non_increasing", owner="rules.yaml.rule_engine"),
         cycle_currency_policy=policy,
-        cycle_max_visits=_integer(raw, "cycle_max_visits", owner="rules.yaml.rule_engine", minimum=1),
-        cycle_timeout_ms=_integer(raw, "cycle_timeout_ms", owner="rules.yaml.rule_engine", minimum=1),
-        periodic_tolerance_ratio=_ratio(raw, "periodic_tolerance_ratio", owner="rules.yaml.rule_engine"),
+        cycle_max_visits=_integer(
+            raw, "cycle_max_visits", owner="rules.yaml.rule_engine", minimum=1
+        ),
+        cycle_timeout_ms=_integer(
+            raw, "cycle_timeout_ms", owner="rules.yaml.rule_engine", minimum=1
+        ),
+        periodic_tolerance_ratio=_ratio(
+            raw, "periodic_tolerance_ratio", owner="rules.yaml.rule_engine"
+        ),
         structuring_threshold_minor=_integer(
             raw, "structuring_threshold_minor", owner="rules.yaml.rule_engine", minimum=1
         ),
@@ -682,7 +690,9 @@ def _resolve_rules(
             rule_id,
             params,
             engine=engine,
-            exclude_node_types=_names(raw.get("exclude_node_types", []), owner=f"{rule_id}.exclude_node_types"),
+            exclude_node_types=_names(
+                raw.get("exclude_node_types", []), owner=f"{rule_id}.exclude_node_types"
+            ),
         )
     return specs, resolved, names
 
@@ -758,7 +768,9 @@ def _settings_for(
             low = _ratio(params, "threshold_band_low", owner=owner)
             high = _ratio(params, "threshold_band_high", owner=owner)
             if low >= high:
-                raise RuleConfigError(f"config {owner}.threshold_band_low ({low}) must be < high ({high})")
+                raise RuleConfigError(
+                    f"config {owner}.threshold_band_low ({low}) must be < high ({high})"
+                )
             return StructuringSettings(
                 n=_integer(params, "n", owner=owner, minimum=2),
                 window_days=_integer(params, "window_days", owner=owner, minimum=1),

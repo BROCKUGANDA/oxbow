@@ -190,7 +190,9 @@ def seal_rule_hit_table(
             f"{beyond} rule hit(s) for fold {fold.fold_id!r} were produced by events at or after "
             f"{cutoff.isoformat()}; rule hits must come from inside the fold"
         )
-    unexpected = sorted(set(hits[RULE_COLUMN].cast(pl.String).unique().to_list()) - set(registry.rule_ids))
+    unexpected = sorted(
+        set(hits[RULE_COLUMN].cast(pl.String).unique().to_list()) - set(registry.rule_ids)
+    )
     if unexpected:
         raise GraphScopeError(
             f"the rule hit table for fold {fold.fold_id!r} reports rules {unexpected} that the "
@@ -226,7 +228,9 @@ GraphProducer = Callable[[Fold], tuple[pl.DataFrame, pl.DataFrame] | None]
 """``fold -> (node table, the edges that produced it)``, which the seal then checks."""
 
 
-def graph_provider_from_callable(produce: GraphProducer, registry: FeatureRegistry) -> GraphFeatureProvider:
+def graph_provider_from_callable(
+    produce: GraphProducer, registry: FeatureRegistry
+) -> GraphFeatureProvider:
     """Adapt a plain ``fold -> (nodes, edges)`` callable to the provider protocol.
 
     P3a hands over account-keyed tables today; this lets the seam be wired without
@@ -298,12 +302,7 @@ def rule_matrix(table: FoldScopedTable, fold: Fold, registry: FeatureRegistry) -
     declared = list(dict.fromkeys(registry.rule_ids))
     if frame.height == 0:
         empty: dict[str, pl.Series] = {ACCOUNT: pl.Series(ACCOUNT, [], pl.String)}
-        empty.update(
-            {
-                rule: pl.Series(rule, [], pl.Float64)
-                for rule in declared
-            }
-        )
+        empty.update({rule: pl.Series(rule, [], pl.Float64) for rule in declared})
         return pl.DataFrame(empty)
     rollups = frame.group_by(ACCOUNT).agg(
         pl.col(RULE_COLUMN).n_unique().alias(ROLLUP_COUNT),
@@ -362,11 +361,11 @@ def require_rule_provider(candidate: object) -> RuleHitProvider:
 __all__ = [
     "ACCOUNT",
     "CONTRIBUTING_TS_COLUMN",
-    "GraphFeatureProvider",
-    "GraphScopeError",
-    "FoldScopedTable",
     "ROLLUP_COUNT",
     "ROLLUP_MAX",
+    "FoldScopedTable",
+    "GraphFeatureProvider",
+    "GraphScopeError",
     "RuleHitProvider",
     "edge_timestamps",
     "graph_provider_from_callable",

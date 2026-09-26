@@ -47,7 +47,11 @@ from oxbow.backtest.policies import (
 ABLATION_ROWS: Final[tuple[tuple[str, str, str], ...]] = (
     ("rules_only", "Rules only", "Does the ML earn its complexity?"),
     ("scorecard_only", "Scorecard only (WOE logistic)", "Is the transparent model enough?"),
-    ("gbm_no_graph", "LightGBM without graph features", "How much does gradient boosting add alone?"),
+    (
+        "gbm_no_graph",
+        "LightGBM without graph features",
+        "How much does gradient boosting add alone?",
+    ),
     (
         "gbm_with_graph",
         "LightGBM with graph features",
@@ -154,7 +158,9 @@ class LeakageCheck:
     message: str
 
 
-def check_leakage_control(variants: Sequence[VariantResult], *, expect_outperforms: bool) -> LeakageCheck:
+def check_leakage_control(
+    variants: Sequence[VariantResult], *, expect_outperforms: bool
+) -> LeakageCheck:
     """Confirm the lookahead control arm beats every honest arm, or report loudly.
 
     This is the point of the gate (plan §12): without a control that *should* cheat and
@@ -188,11 +194,7 @@ def check_leakage_control(variants: Sequence[VariantResult], *, expect_outperfor
     best_honest = max(honest, key=lambda v: (headline(v) or -1.0))
     control_auc = headline(control)
     honest_auc = headline(best_honest)
-    detected = (
-        control_auc is not None
-        and honest_auc is not None
-        and control_auc > honest_auc
-    )
+    detected = control_auc is not None and honest_auc is not None and control_auc > honest_auc
     if expect_outperforms and not detected:
         message = (
             "LEAKAGE CONTROL FAILED: the deliberately lookahead-leaking arm did NOT "

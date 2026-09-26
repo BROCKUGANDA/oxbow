@@ -94,9 +94,7 @@ def dashboard(
     currency = str(summary["currency"])
     loss_avoided = int(summary["loss_avoided_minor"])
     band_rates = list(container.economics.recovery.band)
-    band_figures = loss_avoided_over_band(
-        container, rid, str(summary["policy_id"]), band_rates
-    )
+    band_figures = loss_avoided_over_band(container, rid, str(summary["policy_id"]), band_rates)
 
     body = DashboardResponse(
         run_id=rid,
@@ -105,9 +103,7 @@ def dashboard(
         currency=currency,
         expected_loss_avoided=BandedMoney(
             point=_money(loss_avoided, currency, decimals),
-            over_band=[
-                _money(minor, currency, decimals) for minor in band_figures.values()
-            ],
+            over_band=[_money(minor, currency, decimals) for minor in band_figures.values()],
             band_rates=list(band_figures),
             basis="recovery.sensitivity_band",
             note=(
@@ -188,13 +184,13 @@ def loss_avoided_over_band(
     if not rows:
         return {rate: 0 for rate in rates}
     priced, _ = stored_priced_rows(container.read_model, run_id, container.economics)
-    selected = [row for row in priced if row.account_key in {str(item["account_key"]) for item in rows}]
+    selected = [
+        row for row in priced if row.account_key in {str(item["account_key"]) for item in rows}
+    ]
     if not selected:
         return {rate: 0 for rate in rates}
     return {
-        rate: expected_loss_avoided(
-            selected, None, rate, container.economics
-        ).minor
+        rate: expected_loss_avoided(selected, None, rate, container.economics).minor
         for rate in rates
     }
 
@@ -268,7 +264,9 @@ def _high_risk_networks(read_model: ReadModel, run_id: str) -> dict[str, Any]:
     re-clustered: a community the graph layer did not produce is not a network finding,
     and the basis string says which tables the number came out of.
     """
-    communities, _ = read_model.source.select("community", where={"run_id": run_id}, allow_missing=True)
+    communities, _ = read_model.source.select(
+        "community", where={"run_id": run_id}, allow_missing=True
+    )
     memberships, _ = read_model.source.select(
         "account_membership", where={"run_id": run_id}, allow_missing=True
     )
@@ -280,9 +278,9 @@ def _high_risk_networks(read_model: ReadModel, run_id: str) -> dict[str, Any]:
     for row in memberships:
         by_community.setdefault(int(row["community_id"]), set()).add(str(row["account_key"]))
     count = sum(
-        1 for index, keys in by_community.items() if keys & risky_keys and index in {
-            int(row["canonical_index"]) for row in communities
-        }
+        1
+        for index, keys in by_community.items()
+        if keys & risky_keys and index in {int(row["canonical_index"]) for row in communities}
     )
     return {
         "count": count,
@@ -296,7 +294,9 @@ def _dataset_badge(read_model: ReadModel) -> dict[str, Any]:
     try:
         document = load_yaml(repo_root() / "config" / "sources.yaml")
     except Exception as exc:
-        raise DependencyUnavailable(f"config/sources.yaml could not be read for the badge: {exc}") from exc
+        raise DependencyUnavailable(
+            f"config/sources.yaml could not be read for the badge: {exc}"
+        ) from exc
     return {
         "sources": [
             {

@@ -180,15 +180,12 @@ def _smoothed_woe_iv(rows: list[BinRow], alpha: float) -> tuple[list[BinRow], fl
         contribution = (share_good - share_bad) * woe
         iv += contribution
         load_bearing = row.n_good == 0 or row.n_bad == 0
-        reason = (
-            f"laplace_alpha={alpha} added to both class counts; "
-            + (
-                "this bin had "
-                + ("zero bads" if row.n_bad == 0 else "zero goods")
-                + ", so its raw WOE was infinite and alpha is what bounds it"
-                if load_bearing
-                else "raw WOE was finite; alpha applied uniformly so shares stay comparable"
-            )
+        reason = f"laplace_alpha={alpha} added to both class counts; " + (
+            "this bin had "
+            + ("zero bads" if row.n_bad == 0 else "zero goods")
+            + ", so its raw WOE was infinite and alpha is what bounds it"
+            if load_bearing
+            else "raw WOE was finite; alpha applied uniformly so shares stay comparable"
         )
         updated.append(
             replace(
@@ -231,7 +228,11 @@ def _numeric_edges(
             time_limit=cfg.time_limit_seconds,
         )
         binner.fit(x, y)
-        splits = sorted({float(value) for value in np.atleast_1d(binner.splits)}) if binner.splits else []
+        splits = (
+            sorted({float(value) for value in np.atleast_1d(binner.splits)})
+            if binner.splits
+            else []
+        )
         if binner.status in {"OPTIMAL", "FEASIBLE"} and splits:
             return splits, BOUNDARY_SOURCE_BINNING
         if binner.status in {"OPTIMAL", "FEASIBLE"}:
@@ -246,7 +247,9 @@ def _numeric_edges(
         # solve", not why. Deliberately unchanged here -- but it is a diagnosability
         # gap, and the fallback boundary source is what the caller can see.
         probabilities = np.linspace(0.0, 1.0, cfg.max_bins + 1)[1:-1]
-        splits = sorted({float(np.quantile(x, p)) for p in probabilities if np.isfinite(np.quantile(x, p))})
+        splits = sorted(
+            {float(np.quantile(x, p)) for p in probabilities if np.isfinite(np.quantile(x, p))}
+        )
         unique_x = np.unique(x)
         splits = [s for s in splits if unique_x.min() <= s <= unique_x.max()]
         return splits, BOUNDARY_SOURCE_QUANTILE_FALLBACK
@@ -293,7 +296,9 @@ def _category_label(categories: tuple[str, ...]) -> str:
     return "[" + ", ".join(categories) + "]"
 
 
-def _merge_value_bins(rows: list[BinRow], cfg: BinningConfig, total_population: int) -> list[BinRow]:
+def _merge_value_bins(
+    rows: list[BinRow], cfg: BinningConfig, total_population: int
+) -> list[BinRow]:
     """Enforce the population floors by merging into a neighbour, with the rule recorded.
 
     Special bins are never merged away: the missing bin exists precisely so an
@@ -435,7 +440,9 @@ def fit_feature_binning(
     raise DegenerateBinningError(f"unknown binning dtype {dtype!r} for feature {feature!r}")
 
 
-def _fit_numeric(feature: str, values: np.ndarray, labels: np.ndarray, cfg: BinningConfig) -> FeatureBinning:
+def _fit_numeric(
+    feature: str, values: np.ndarray, labels: np.ndarray, cfg: BinningConfig
+) -> FeatureBinning:
     total = values.size
     if total == 0:
         raise DegenerateBinningError(f"feature {feature!r} has no rows to bin")
@@ -577,7 +584,9 @@ def _row_sort_key(row: BinRow) -> tuple[int, float, str]:
     return (order[row.kind], lower, row.label)
 
 
-def _fit_categorical(feature: str, values: np.ndarray, labels: np.ndarray, cfg: BinningConfig) -> FeatureBinning:
+def _fit_categorical(
+    feature: str, values: np.ndarray, labels: np.ndarray, cfg: BinningConfig
+) -> FeatureBinning:
     total = values.size
     if total == 0:
         raise DegenerateBinningError(f"feature {feature!r} has no rows to bin")
@@ -681,7 +690,9 @@ def _fit_categorical(feature: str, values: np.ndarray, labels: np.ndarray, cfg: 
     )
 
 
-def assign_numeric_bin(values: np.ndarray, binning: FeatureBinning, cfg: BinningConfig) -> list[str]:
+def assign_numeric_bin(
+    values: np.ndarray, binning: FeatureBinning, cfg: BinningConfig
+) -> list[str]:
     """Map scored values to bin labels.
 
     Edges are half-open ``[lower, upper)`` with the outer bins open at infinity, so
@@ -706,7 +717,9 @@ def assign_numeric_bin(values: np.ndarray, binning: FeatureBinning, cfg: Binning
             labels.append(cfg.structural_zero_bin)
             continue
         for row in value_rows:
-            if (row.lower is None or number >= row.lower) and (row.upper is None or number < row.upper):
+            if (row.lower is None or number >= row.lower) and (
+                row.upper is None or number < row.upper
+            ):
                 labels.append(row.label)
                 break
         else:
@@ -717,7 +730,9 @@ def assign_numeric_bin(values: np.ndarray, binning: FeatureBinning, cfg: Binning
     return labels
 
 
-def assign_categorical_bin(values: np.ndarray, binning: FeatureBinning, cfg: BinningConfig) -> list[str]:
+def assign_categorical_bin(
+    values: np.ndarray, binning: FeatureBinning, cfg: BinningConfig
+) -> list[str]:
     """Map scored categories to bin labels; categories unseen at fit go to ``__unseen__``."""
     lookup: dict[str, str] = {}
     by_label: dict[str, BinRow] = {row.label: row for row in binning.rows}

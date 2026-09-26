@@ -35,9 +35,8 @@ import math
 from dataclasses import dataclass
 from typing import Final
 
-from oxbow.quant.money import to_major_text
-
 from oxbow.packet.model import SubgraphView
+from oxbow.quant.money import to_major_text
 
 #: Fixed canvas. Millimetres are not used because the SVG is also written as a
 #: standalone file, and a standalone image has no page box to inherit.
@@ -85,10 +84,7 @@ class SubgraphImage:
 def _escape(text: str) -> str:
     """XML text escaping. Autoescape is off inside this module by construction."""
     return (
-        text.replace("&", "&amp;")
-        .replace("<", "&lt;")
-        .replace(">", "&gt;")
-        .replace('"', "&quot;")
+        text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;")
     )
 
 
@@ -142,7 +138,7 @@ def _positions(view: SubgraphView) -> dict[str, tuple[float, float, int]]:
     for hop in sorted(by_hop):
         members = sorted(by_hop[hop])
         radius = RING_RADII[min(hop, len(RING_RADII) - 1)]
-        if radius == 0.0 or len(members) == 1 and hop == 0:
+        if radius == 0.0 or (len(members) == 1 and hop == 0):
             for account in members:
                 positions[account] = (CENTRE_X, CENTRE_Y, hop)
             continue
@@ -239,7 +235,7 @@ def render_subgraph_svg(
         f'viewBox="0 0 {_number(CANVAS_WIDTH)} {_number(CANVAS_HEIGHT)}" role="img" '
         f'aria-label="{_escape(title)}">',
         f"<title>{_escape(title)}</title>",
-        '<desc>Generated from the pinned run\'s persisted graph artifact by '
+        "<desc>Generated from the pinned run's persisted graph artifact by "
         "oxbow.packet.subgraph_image; not a screenshot of the explorer.</desc>",
         "<style>text{font-family:'IBM Plex Sans',ui-sans-serif,system-ui,sans-serif;"
         "fill:#111820}.mono{font-family:'IBM Plex Mono',ui-monospace,Menlo,monospace}</style>",
@@ -284,7 +280,7 @@ def render_subgraph_svg(
         parts.append(
             f'<text x="{_number(midpoint_x)}" y="{_number(midpoint_y - 2)}" font-size="7" '
             f'text-anchor="middle">{_number(edge.edge_count)}x '
-            f'{_escape(edge.currency)}</text>'
+            f"{_escape(edge.currency)}</text>"
         )
 
     # Nodes and their labels.

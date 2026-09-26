@@ -130,7 +130,10 @@ class SlackNotifySink:
             raise DeliveryError(f"slack: transport failure for {key}: {exc}") from exc
         if 200 <= response.status_code < 300:
             receipt = SinkReceipt(
-                accepted=True, idempotency_key=key, consumer=self._sink_id, accepted_at=notification.occurred_at
+                accepted=True,
+                idempotency_key=key,
+                consumer=self._sink_id,
+                accepted_at=notification.occurred_at,
             )
             self._delivered[key] = receipt
             return receipt

@@ -101,7 +101,11 @@ def _percentile_of(
     low = np.clip(positions - 1, 0, reference_percentiles.size - 1)
     high = np.clip(positions, 0, reference_percentiles.size - 1)
     span = reference_sorted[high] - reference_sorted[low]
-    weight = np.where(span > REFERENCE_TIE_FLOOR, (values - reference_sorted[low]) / np.maximum(span, REFERENCE_TIE_FLOOR), 1.0)
+    weight = np.where(
+        span > REFERENCE_TIE_FLOOR,
+        (values - reference_sorted[low]) / np.maximum(span, REFERENCE_TIE_FLOOR),
+        1.0,
+    )
     interpolated = reference_percentiles[low] + weight * (
         reference_percentiles[high] - reference_percentiles[low]
     )
@@ -141,9 +145,7 @@ def fit_anomaly(
     x_train, sentinels = _matrix(train_frame, feature_names, categorical_features)
     x_valid, _ = _matrix(valid_frame, feature_names, categorical_features, sentinels)
     contamination = "auto" if cfg.contamination == "auto" else float(cfg.contamination)
-    max_samples: int | float | str = (
-        "auto" if cfg.max_samples == "auto" else float(cfg.max_samples)
-    )
+    max_samples: int | float | str = "auto" if cfg.max_samples == "auto" else float(cfg.max_samples)
     forest = IsolationForest(
         n_estimators=cfg.n_estimators,
         contamination=contamination,
@@ -172,7 +174,9 @@ def fit_anomaly(
     )
 
 
-def apply_anomaly(bundle: AnomalyBundle, frame: pl.DataFrame, categorical_features: tuple[str, ...]) -> np.ndarray:
+def apply_anomaly(
+    bundle: AnomalyBundle, frame: pl.DataFrame, categorical_features: tuple[str, ...]
+) -> np.ndarray:
     """``anomaly_norm`` for every row of a frame, 1 meaning most unusual.
 
     The missing sentinels come from the bundle, never recomputed here: rescoring the same
@@ -215,5 +219,6 @@ def _matrix(
     if missing.any():
         filled[missing] = np.take(sentinels, np.flatnonzero(missing) % matrix.shape[1])
     return filled, sentinels
+
 
 __all__ = ["AnomalyBundle", "apply_anomaly", "fit_anomaly"]

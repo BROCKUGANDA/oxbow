@@ -67,7 +67,9 @@ def golden_events() -> pl.DataFrame:
 def golden_expected() -> dict[str, Any]:
     import yaml
 
-    document = yaml.safe_load((REPO_ROOT / "tests" / "golden" / "expected.yaml").read_text(encoding="utf-8"))
+    document = yaml.safe_load(
+        (REPO_ROOT / "tests" / "golden" / "expected.yaml").read_text(encoding="utf-8")
+    )
     assert isinstance(document, dict)
     return document
 
@@ -89,7 +91,9 @@ def severity_of(result: Any, rule_id: str, account: str) -> float:
     return max(hit.severity for hit in hits)
 
 
-def test_every_rule_fires_on_exactly_its_planted_case(golden_result: Any, golden_expected: dict) -> None:
+def test_every_rule_fires_on_exactly_its_planted_case(
+    golden_result: Any, golden_expected: dict
+) -> None:
     for rule_id in RULE_IDS:
         assert accounts_of(golden_result, rule_id) == matrix_of(golden_expected, rule_id), rule_id
 
@@ -98,7 +102,9 @@ def test_no_planted_near_miss_fires_any_rule(golden_result: Any, golden_expected
     """The other half of the gate: silence on every near-miss, not just absence of extras."""
     allowed = {account for rule_id in RULE_IDS for account in matrix_of(golden_expected, rule_id)}
     fired = {hit.account_key for hit in golden_result.hits}
-    assert fired <= allowed, f"accounts on the must-stay-clean list fired: {sorted(fired - allowed)}"
+    assert (
+        fired <= allowed
+    ), f"accounts on the must-stay-clean list fired: {sorted(fired - allowed)}"
     # the matrix says every account outside the hit list is clean, so the count is pinned
     assert golden_expected["counts"]["distinct_accounts"] == 319
     assert len(fired) == len(allowed)
@@ -140,8 +146,7 @@ def test_periodic_cycle_is_down_weighted_below_the_one_shot_loops(
         severity_of(golden_result, "R4", account) for account in periodic_accounts(golden_expected)
     )
     one_shot = max(
-        severity_of(golden_result, "R4", account)
-        for account in ("ACC-CYCA-1", "ACC-CYCB-1")
+        severity_of(golden_result, "R4", account) for account in ("ACC-CYCA-1", "ACC-CYCB-1")
     )
     assert payroll < one_shot, "the weekly ring outranks a real loop: the weight did not apply"
     hit = next(
@@ -150,13 +155,18 @@ def test_periodic_cycle_is_down_weighted_below_the_one_shot_loops(
     assert hit.evidence["down_weighted"] is True
     assert hit.evidence["recurrence_period_hours"] == pytest.approx(168.0, abs=1.0)
     # three laps, one pattern: signature dedup rather than three hits per account
-    assert len([h for h in golden_result.hits if h.rule_id == "R4" and h.account_key == "ACC-EMP-01"]) == 1
+    assert (
+        len([h for h in golden_result.hits if h.rule_id == "R4" and h.account_key == "ACC-EMP-01"])
+        == 1
+    )
 
 
 def test_extraction_pair_collapses_into_one_unit_of_evidence(golden_result: Any) -> None:
     # ACC-MULE-07 fires R1 (0.88 passed on in 35 min) and R10 (0.88 cashed out in 6h) on
     # the same receive-then-extract pair: one extraction group, counted once.
-    groups = [group for group in golden_result.evidence_groups if group.account_key == "ACC-MULE-07"]
+    groups = [
+        group for group in golden_result.evidence_groups if group.account_key == "ACC-MULE-07"
+    ]
     assert [group.group for group in groups] == ["extraction"]
     assert groups[0].rule_ids == ("R1", "R10")
     assert golden_result.evidence_units("ACC-MULE-07") == 1
@@ -197,7 +207,11 @@ def test_time_reversed_and_reversal_loops_produce_nothing_at_all(golden_result: 
 
 
 def test_structuring_hit_names_its_synthetic_threshold_and_fit_window(golden_result: Any) -> None:
-    hit = next(hit for hit in golden_result.hits if hit.rule_id == "R5" and hit.account_key == "ACC-SMURF-A")
+    hit = next(
+        hit
+        for hit in golden_result.hits
+        if hit.rule_id == "R5" and hit.account_key == "ACC-SMURF-A"
+    )
     assert hit.evidence["structuring_threshold_minor"] == 2_500_000
     assert hit.evidence["threshold_is_synthetic"] is True
     assert "SYNTHETIC" in str(hit.evidence["threshold_label"])
@@ -210,9 +224,13 @@ def test_structuring_hit_names_its_synthetic_threshold_and_fit_window(golden_res
 
 def test_hit_rate_report_is_complete_and_under_the_ceiling(golden_result: Any) -> None:
     assert [row.rule_id for row in golden_result.hit_rates] == RULE_IDS
-    assert all(row.hit_rate <= 0.33 for row in golden_result.hit_rates), golden_result.hit_rate_table()
+    assert all(
+        row.hit_rate <= 0.33 for row in golden_result.hit_rates
+    ), golden_result.hit_rate_table()
     assert golden_result.scored_accounts == 319
-    assert all(row.accounts_hit > 0 for row in golden_result.hit_rates), golden_result.hit_rate_table()
+    assert all(
+        row.accounts_hit > 0 for row in golden_result.hit_rates
+    ), golden_result.hit_rate_table()
     assert golden_result.removed_rules == ()
 
 
@@ -236,7 +254,9 @@ def test_settings_layer_refuses_a_missing_knob_rather_than_defaulting(tmp_path: 
     from oxbow.rules.errors import RuleConfigError
 
     source = (REPO_ROOT / "config" / "rules.yaml").read_text(encoding="utf-8")
-    stripped = source.replace("params: { p: 0.80, delta_minutes: 60, min_amount_minor: 10_000 }", "params: {}")
+    stripped = source.replace(
+        "params: { p: 0.80, delta_minutes: 60, min_amount_minor: 10_000 }", "params: {}"
+    )
     assert stripped != source
     (tmp_path / "config").mkdir()
     (tmp_path / "config" / "rules.yaml").write_text(stripped, encoding="utf-8")
@@ -252,31 +272,59 @@ def test_rule_settings_defaults_are_what_plan_9_pins() -> None:
     # DEV-015: the §9 retention floor and 3-6 length stay the shipped defaults
     assert (four.retention, four.min_length, four.max_length) == (0.60, 3, 6)
     assert (four.down_weight_periodic, four.periodic_period_hours, four.periodic_down_weight) == (
-        True, 168, 0.3,
+        True,
+        168,
+        0.3,
     )
     assert (five.n, five.window_days, five.threshold_band_low, five.threshold_band_high) == (
-        3, 7, 0.80, 1.00,
+        3,
+        7,
+        0.80,
+        1.00,
     )
     assert five.synthetic is True
     assert (twelve.min_length, twelve.delta_hours, twelve.decay, twelve.component_budget) == (
-        3, 24, 0.95, 5000,
+        3,
+        24,
+        0.95,
+        5000,
     )
 
 
 def test_result_serialises_for_scoring_and_backtest(golden_result: Any) -> None:
     payload = golden_result.as_json_dict()
     assert set(payload) >= {
-        "hits", "hit_rates", "evidence_groups", "near_misses", "removed_rules",
-        "thresholds", "window", "fit_window", "cycle_search_truncated",
-        "cycle_search_reason", "cycle_search_visits", "chain_search_truncated",
-        "chain_search_reason", "self_transfer_count", "zero_value_excluded",
-        "reversal_excluded", "currencies", "scored_accounts", "settings_fingerprint",
+        "hits",
+        "hit_rates",
+        "evidence_groups",
+        "near_misses",
+        "removed_rules",
+        "thresholds",
+        "window",
+        "fit_window",
+        "cycle_search_truncated",
+        "cycle_search_reason",
+        "cycle_search_visits",
+        "chain_search_truncated",
+        "chain_search_reason",
+        "self_transfer_count",
+        "zero_value_excluded",
+        "reversal_excluded",
+        "currencies",
+        "scored_accounts",
+        "settings_fingerprint",
         "local_offset_hours",
     }
     hit = payload["hits"][0]
     assert set(hit) == {
-        "rule_id", "rule_name", "account_key", "severity", "evidence", "window",
-        "hit_signature", "overlap_group",
+        "rule_id",
+        "rule_name",
+        "account_key",
+        "severity",
+        "evidence",
+        "window",
+        "hit_signature",
+        "overlap_group",
     }
     assert json_roundtrip(payload) == json_roundtrip(
         dataclasses.replace(golden_result).as_json_dict()

@@ -297,9 +297,7 @@ def _has_assumptions(payload: Mapping[str, Any]) -> bool:
     assumptions = payload.get("assumptions")
     if isinstance(assumptions, Mapping) and assumptions:
         return True
-    return any(
-        isinstance(value, Mapping) and _has_assumptions(value) for value in payload.values()
-    )
+    return any(isinstance(value, Mapping) and _has_assumptions(value) for value in payload.values())
 
 
 def _has_model_version(payload: Mapping[str, Any]) -> bool:

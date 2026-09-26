@@ -118,9 +118,7 @@ class TemplateRenderError(PacketError):
     """
 
 
-DISCLAIMER_MISSING: Final = (
-    "the packet cover must carry the OXBOW disclaimer verbatim (plan §15)"
-)
+DISCLAIMER_MISSING: Final = "the packet cover must carry the OXBOW disclaimer verbatim (plan §15)"
 
 __all__ = [
     "DISCLAIMER_MISSING",

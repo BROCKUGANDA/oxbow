@@ -76,7 +76,9 @@ def structuring(ctx: RuleContext) -> RuleOutcome:
                     rule_name=ctx.spec("R5").name,
                     account_key=account,
                     severity=combine(
-                        excess_severity(float(len(ladder)), float(settings.n), float(2 * settings.n)),
+                        excess_severity(
+                            float(len(ladder)), float(settings.n), float(2 * settings.n)
+                        ),
                         clamp_unit((tightness - low_ok) / (high_ok - low_ok)),
                     ),
                     evidence={
@@ -159,7 +161,9 @@ def _maximal_ladders(
     }
     return tuple(
         deduped[key]
-        for key in sorted(deduped, key=lambda item: (min(e.ts_us for e in deduped[item]), sorted(item)))
+        for key in sorted(
+            deduped, key=lambda item: (min(e.ts_us for e in deduped[item]), sorted(item))
+        )
     )
 
 

@@ -36,7 +36,12 @@ POLICY_RANDOM: Final = "random"
 POLICY_EV_GREEDY: Final = "ev_greedy"
 POLICY_EV_CPSAT: Final = "ev_cpsat"
 
-HARNESS_POLICIES: Final = (POLICY_THRESHOLD, POLICY_RULES_ONLY, POLICY_HIGHEST_AMOUNT, POLICY_RANDOM)
+HARNESS_POLICIES: Final = (
+    POLICY_THRESHOLD,
+    POLICY_RULES_ONLY,
+    POLICY_HIGHEST_AMOUNT,
+    POLICY_RANDOM,
+)
 ALLOCATOR_POLICIES: Final = (POLICY_EV_GREEDY, POLICY_EV_CPSAT)
 ALL_POLICIES: Final = HARNESS_POLICIES + ALLOCATOR_POLICIES
 
@@ -51,9 +56,7 @@ class PolicyOutcome:
     allocator_label: str
 
 
-def _rank_fill(
-    ordered: list[FoldAccount], minutes_lookup_capacity: int
-) -> list[FoldAccount]:
+def _rank_fill(ordered: list[FoldAccount], minutes_lookup_capacity: int) -> list[FoldAccount]:
     """Take accounts in rank order while each still fits the remaining capacity.
 
     Greedy fill (not first-fit-decreasing): a large account at the head of the ranking
@@ -85,7 +88,9 @@ def set_expected_ev_minor(
     """
     total = 0
     for account in accounts:
-        intercept = money_scaled(account.exposure_minor, account.p_calibrated * recovery_rate, currency)
+        intercept = money_scaled(
+            account.exposure_minor, account.p_calibrated * recovery_rate, currency
+        )
         friction = money_scaled(friction_cost_minor, 1.0 - account.p_calibrated, currency)
         total += intercept - account.review_cost_minor - friction
     return total
@@ -96,7 +101,9 @@ def _ranked_by(accounts: list[FoldAccount]) -> list[FoldAccount]:
 
 
 def _ranked_rules(accounts: list[FoldAccount], severity: dict[str, float]) -> list[FoldAccount]:
-    return sorted(accounts, key=lambda a: (severity.get(a.account_key, 0.0), a.account_key), reverse=True)
+    return sorted(
+        accounts, key=lambda a: (severity.get(a.account_key, 0.0), a.account_key), reverse=True
+    )
 
 
 def _ranked_amount(accounts: list[FoldAccount]) -> list[FoldAccount]:
@@ -106,7 +113,10 @@ def _ranked_amount(accounts: list[FoldAccount]) -> list[FoldAccount]:
 def _ranked_random(accounts: list[FoldAccount], seed: int) -> list[FoldAccount]:
     order = sorted(
         range(len(accounts)),
-        key=lambda i: (float(np.random.default_rng(seed + _hash_key(accounts[i].account_key)).random()), accounts[i].account_key),
+        key=lambda i: (
+            float(np.random.default_rng(seed + _hash_key(accounts[i].account_key)).random()),
+            accounts[i].account_key,
+        ),
     )
     return [accounts[i] for i in order]
 

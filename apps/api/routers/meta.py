@@ -64,7 +64,9 @@ def _flatten(prefix: str, node: Any, into: dict[str, Any]) -> None:
         for key, value in node.items():
             _flatten(f"{prefix}.{key}" if prefix else str(key), value, into)
     elif isinstance(node, list):
-        if node and all(isinstance(item, _SCALAR_TYPES) and not isinstance(item, bool) for item in node):
+        if node and all(
+            isinstance(item, _SCALAR_TYPES) and not isinstance(item, bool) for item in node
+        ):
             into[f"{prefix}.count"] = len(node)
             into[f"{prefix}.min"] = min(node)
             into[f"{prefix}.max"] = max(node)
@@ -211,10 +213,16 @@ def licence(
                     "obligation": card.license_obligation,
                     "citation": card.citation,
                     "retrieval": card.retrieval,
-                    "retrieved_at": None if card.retrieved_at is None else card.retrieved_at.isoformat(),
+                    "retrieved_at": None
+                    if card.retrieved_at is None
+                    else card.retrieved_at.isoformat(),
                     "ingest_allowed": card.ingest_allowed,
                     "files": [
-                        {"file_name": item.file_name, "sha256": item.sha256, "size_bytes": item.size_bytes}
+                        {
+                            "file_name": item.file_name,
+                            "sha256": item.sha256,
+                            "size_bytes": item.size_bytes,
+                        }
                         for item in card.files
                     ],
                 }
@@ -226,7 +234,10 @@ def licence(
                 "Both impose share-alike on derived data, which covers the canonical event table "
                 "and every published sample."
             ),
-            "never_used": ["IEEE-CIS (competition-governed terms)", "Elliptic (CC BY-NC-ND: cite-only)"],
+            "never_used": [
+                "IEEE-CIS (competition-governed terms)",
+                "Elliptic (CC BY-NC-ND: cite-only)",
+            ],
         },
         **meta.model_dump(),
     )
@@ -356,7 +367,9 @@ def _refused_sources(read_model: ReadModel) -> list[dict[str, Any]]:
     return refused
 
 
-def _rows_or_empty(read_model: ReadModel, table: str, where: dict[str, Any]) -> list[dict[str, Any]]:
+def _rows_or_empty(
+    read_model: ReadModel, table: str, where: dict[str, Any]
+) -> list[dict[str, Any]]:
     """Read a table that may legitimately have no rows, and say nothing if it does not.
 
     Distinct from a *query* that may not silently be empty: the dataset card's refusal

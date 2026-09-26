@@ -50,7 +50,7 @@ class _Result:
 
 
 class _Session:
-    def __init__(self, ledger: list["_Session"], *, fail: bool = False) -> None:
+    def __init__(self, ledger: list[_Session], *, fail: bool = False) -> None:
         self.closed = False
         self.ledger = ledger
         self.fail = fail

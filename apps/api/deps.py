@@ -148,7 +148,9 @@ def _reachable(url: str, *, client: httpx.Client | None = None) -> Component:
     latency = int((time.perf_counter() - started) * 1000)
     if 200 <= response.status_code < 400:
         return Component(
-            name="", state="available", detail=f"{url} answered {response.status_code}",
+            name="",
+            state="available",
+            detail=f"{url} answered {response.status_code}",
             latency_ms=latency,
         )
     return Component(
@@ -227,7 +229,11 @@ class Container:
         truth about this request's token, which is verified per request regardless.
         """
         cached = self._probes.get(name)
-        if cached is not None and not force and (time.time() - cached.checked_at) < PROBE_CACHE_SECONDS:
+        if (
+            cached is not None
+            and not force
+            and (time.time() - cached.checked_at) < PROBE_CACHE_SECONDS
+        ):
             return cached
         probed = self._probe(name)
         self._probes[name] = probed
@@ -237,9 +243,7 @@ class Container:
         return [self.component(name) for name in PROBED_COMPONENTS]
 
     def degraded_components(self) -> list[str]:
-        return [
-            component.name for component in self.components() if component.state != "available"
-        ]
+        return [component.name for component in self.components() if component.state != "available"]
 
     def status(self) -> Literal["ok", "degraded"]:
         return "ok" if not self.degraded_components() else "degraded"
@@ -385,7 +389,6 @@ def _warn(message: str) -> None:
     get_logger("oxbow.api.deps").warning(message)
 
 
-
 # --- the individual probes --------------------------------------------------
 
 
@@ -393,9 +396,7 @@ def _probe_redis(url: str) -> Component:
     try:
         import redis
     except ImportError as exc:  # pragma: no cover - redis is a pinned dependency
-        return Component(
-            name="redis", state="unavailable", detail=f"redis client missing: {exc}"
-        )
+        return Component(name="redis", state="unavailable", detail=f"redis client missing: {exc}")
     try:
         client = redis.Redis.from_url(url, socket_connect_timeout=PROBE_TIMEOUT_SECONDS)
         client.ping()
@@ -465,9 +466,7 @@ def _engine_for(settings: Settings) -> Engine:
     return create_engine(settings.sqlalchemy_url, pool_pre_ping=True, future=True)
 
 
-def _case_sinks(
-    settings: Settings, backend: BackendName, root: Path
-) -> Callable[[], CaseSink]:
+def _case_sinks(settings: Settings, backend: BackendName, root: Path) -> Callable[[], CaseSink]:
     """The case destination chosen by environment, not by a caller's argument.
 
     A webhook endpoint plus a signing secret means the real sink; either missing
@@ -477,7 +476,12 @@ def _case_sinks(
     """
     endpoint = settings.webhook_endpoint
     secret = settings.webhook_signing_secret
-    if backend == "postgres" and endpoint and secret and endpoint.startswith(("http://", "https://")):
+    if (
+        backend == "postgres"
+        and endpoint
+        and secret
+        and endpoint.startswith(("http://", "https://"))
+    ):
 
         def build() -> CaseSink:
             return WebhookCaseSink(url=endpoint, secret=secret)

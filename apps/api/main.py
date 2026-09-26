@@ -170,7 +170,9 @@ def create_app() -> FastAPI:
         ),
     )
     def healthz(request: Request) -> dict[str, Any]:
-        container: Container = getattr(request.app.state, "container", None) or _detached_container(request)
+        container: Container = getattr(request.app.state, "container", None) or _detached_container(
+            request
+        )
         return envelope(_health_body(container), **_health_meta(container).model_dump())
 
     @app.get(
@@ -293,7 +295,9 @@ def _health_meta(container: Container) -> Any:
         generated_at=_now(),
         disclaimer=ReadModel.disclaimer(),
         degraded=container.status() != "ok",
-        degraded_reason=None if container.status() == "ok" else ", ".join(container.degraded_components()),
+        degraded_reason=None
+        if container.status() == "ok"
+        else ", ".join(container.degraded_components()),
     )
 
 
@@ -382,7 +386,10 @@ _TAGS: Final = [
     {"name": "decisions", "description": "Append-only decisions, four-eyes, outbox ledger"},
     {"name": "graph", "description": "Bounded subgraphs with communities collapsed"},
     {"name": "policy", "description": "The active policy and a real re-allocation"},
-    {"name": "validation", "description": "Folds, ablation, calibration, fairness, scorecard studio"},
+    {
+        "name": "validation",
+        "description": "Folds, ablation, calibration, fairness, scorecard studio",
+    },
     {"name": "dashboard", "description": "Currency KPIs with their assumption bands"},
     {"name": "jobs", "description": "Pipeline and backtest jobs"},
     {"name": "auth", "description": "OIDC discovery, demo token, current principal"},

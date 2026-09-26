@@ -101,11 +101,7 @@ def registry() -> FeatureRegistry:
 
 def _side(computed: pl.DataFrame, entity: str, column: str) -> list[Any]:
     """One entity's values for one column, in the canonical total order."""
-    return (
-        computed.filter(pl.col(ENTITY) == entity)
-        .sort([EVENT_TS, "txn_id"])[column]
-        .to_list()
-    )
+    return computed.filter(pl.col(ENTITY) == entity).sort([EVENT_TS, "txn_id"])[column].to_list()
 
 
 # --- the boundary case that broke the per-row identity -------------------------------
@@ -304,6 +300,7 @@ def test_a_bounded_window_is_refused_on_a_lifetime_distinct_kind() -> None:
     no window. A registry that let it declare ``30d`` would put the under-counting identity
     straight back into the matrix, with the honest name still on the column.
     """
+
     def widen(entries: list[dict[str, object]]) -> None:
         for entry in entries:
             if entry["id"] == "lifetime_counterparties":

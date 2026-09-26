@@ -52,8 +52,7 @@ class NullWarehouse:
         self._root = resolve_out_root(root) / _PORT_DIRNAME
         self._root.mkdir(parents=True, exist_ok=True)
         self._runs: dict[str, dict[str, Any]] = {
-            str(record["run_id"]): record
-            for record in read_jsonl(self._root / _RUNS_FILE)
+            str(record["run_id"]): record for record in read_jsonl(self._root / _RUNS_FILE)
         }
         self._events: list[dict[str, Any]] = list(read_jsonl(self._root / _STAGE_EVENTS_FILE))
 

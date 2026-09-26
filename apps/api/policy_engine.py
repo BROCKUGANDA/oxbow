@@ -121,7 +121,9 @@ def account_score(
     )
 
 
-def repriced_at_rate(rows: Sequence[AccountEV], rate: float, assumptions: Assumptions) -> list[AccountEV]:
+def repriced_at_rate(
+    rows: Sequence[AccountEV], rate: float, assumptions: Assumptions
+) -> list[AccountEV]:
     """Re-price each stored row at a different ``r``, keeping the ranking inputs intact.
 
     Only the intercept depends on the recovery rate — the review cost is spent either
@@ -220,9 +222,7 @@ def run_simulation(
             )
         effective = repriced_at_rate(rows, request.recovery_rate, assumptions)
 
-    allocator = (
-        AllocatorId.CP_SAT if request.solver == "cpsat_exact" else AllocatorId.GREEDY
-    )
+    allocator = AllocatorId.CP_SAT if request.solver == "cpsat_exact" else AllocatorId.GREEDY
     degraded_reason: str | None = None
     try:
         allocation = allocate(
@@ -237,9 +237,7 @@ def run_simulation(
         # sub-floor review time), and an unlabelled greedy result would be the worst
         # possible way to absorb them: the response says which allocator produced it
         # and why, and the degraded flag is set.
-        raise Unprocessable(
-            f"the allocator refused this request: {exc}", run_id=run_id
-        ) from exc
+        raise Unprocessable(f"the allocator refused this request: {exc}", run_id=run_id) from exc
     solver_label = str(allocation.allocator.value)
     del allocator
     degraded = allocation.allocator in (
@@ -257,7 +255,11 @@ def run_simulation(
     decimals = assumptions.minor_units_per_major
     cutoff_rank = len(allocation.selected) if allocation.selected else None
     frontier = frontier_points(effective, assumptions, request.capacity_minutes)
-    gap = optimality_gap_view(effective, assumptions, request.capacity_minutes) if include_gap else None
+    gap = (
+        optimality_gap_view(effective, assumptions, request.capacity_minutes)
+        if include_gap
+        else None
+    )
     tail = residual_tail(effective, allocation, assumptions)
     elapsed = int((time.perf_counter() - started) * 1000)
 
@@ -352,7 +354,9 @@ def totals_view(
             allocation.friction_cost.minor, allocation.friction_cost.currency, decimals=decimals
         ),
         "net_benefit": money(net.minor, net.currency, decimals=decimals),
-        "benefit_per_analyst_hour": money(benefit_per_hour, assumptions.currency, decimals=decimals),
+        "benefit_per_analyst_hour": money(
+            benefit_per_hour, assumptions.currency, decimals=decimals
+        ),
         "max_drawdown": money(0, assumptions.currency, decimals=decimals),
         "zero_drawdown": True,
         "zero_drawdown_note": (
@@ -360,9 +364,13 @@ def totals_view(
             "draw down across; the stored fold figures are where drawdown is measured"
         ),
         "var_alpha": assumptions.tail_risk.var_alpha,
-        "var95": money(0 if tail is None else tail["var_minor"], assumptions.currency, decimals=decimals),
+        "var95": money(
+            0 if tail is None else tail["var_minor"], assumptions.currency, decimals=decimals
+        ),
         "es_alpha": assumptions.tail_risk.es_alpha,
-        "es975": money(0 if tail is None else tail["es_minor"], assumptions.currency, decimals=decimals),
+        "es975": money(
+            0 if tail is None else tail["es_minor"], assumptions.currency, decimals=decimals
+        ),
         "monte_carlo_runs": assumptions.monte_carlo.runs,
         "monte_carlo_seed": assumptions.monte_carlo.seed,
         "alerts_per_10k_accounts": 0.0,
@@ -416,14 +424,18 @@ def frontier_points(
                 "selected_count": point.accounts_reviewed,
                 "minutes_used": point.minutes_used,
                 "net_benefit": money(
-                    allocation.total_ev.minor, assumptions.currency,
+                    allocation.total_ev.minor,
+                    assumptions.currency,
                     decimals=assumptions.minor_units_per_major,
                 ),
                 "loss_avoided": money(
-                    allocation.expected_loss_avoided.minor, assumptions.currency,
+                    allocation.expected_loss_avoided.minor,
+                    assumptions.currency,
                     decimals=assumptions.minor_units_per_major,
                 ),
-                "max_drawdown": money(0, assumptions.currency, decimals=assumptions.minor_units_per_major),
+                "max_drawdown": money(
+                    0, assumptions.currency, decimals=assumptions.minor_units_per_major
+                ),
                 "var95": money(0, assumptions.currency, decimals=assumptions.minor_units_per_major),
                 "es975": money(0, assumptions.currency, decimals=assumptions.minor_units_per_major),
                 "current_point": point.capacity_minutes == operating_capacity,
@@ -558,11 +570,15 @@ def stored_policies(session: Session) -> list[dict[str, Any]]:
 def stored_allocation_map(
     session: Session, *, run_id: str, policy_id: str
 ) -> dict[str, dict[str, Any]]:
-    rows = session.execute(
-        select(PolicyAllocation).where(
-            PolicyAllocation.run_id == run_id, PolicyAllocation.policy_id == policy_id
+    rows = (
+        session.execute(
+            select(PolicyAllocation).where(
+                PolicyAllocation.run_id == run_id, PolicyAllocation.policy_id == policy_id
+            )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     return {
         str(row.account_key): {
             "rank": int(row.rank),
@@ -590,7 +606,9 @@ def _policy_dict(row: Policy) -> dict[str, Any]:
         "four_eyes_threshold_exposure": money(
             int(row.four_eyes_threshold_minor), str(row.currency), decimals=decimals
         ),
-        "review_minutes_by_band": {k: float(v) for k, v in (row.review_minutes_by_band or {}).items()},
+        "review_minutes_by_band": {
+            k: float(v) for k, v in (row.review_minutes_by_band or {}).items()
+        },
         "currency": str(row.currency),
         "solver": str(row.solver),
         "degraded": bool(row.degraded),
@@ -605,9 +623,7 @@ def _policy_dict(row: Policy) -> dict[str, Any]:
 
 def score_bands(session: Session, run_id: str) -> dict[str, int]:
     """Band populations, from the ``score`` table. Counts, not scores."""
-    rows = session.execute(
-        select(Score.band).where(Score.run_id == run_id)
-    ).scalars().all()
+    rows = session.execute(select(Score.band).where(Score.run_id == run_id)).scalars().all()
     counts: dict[str, int] = {}
     for band in rows:
         counts[str(band)] = counts.get(str(band), 0) + 1

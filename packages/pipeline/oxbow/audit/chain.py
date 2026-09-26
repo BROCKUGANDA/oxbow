@@ -239,7 +239,11 @@ def verify_chain(rows: Sequence[ChainRow]) -> ChainVerification:
     checked_at = datetime.now(UTC)
     if not rows:
         return ChainVerification(
-            ok=True, rows_checked=0, first_broken=None, checked_at=checked_at, head_hash=GENESIS_HASH
+            ok=True,
+            rows_checked=0,
+            first_broken=None,
+            checked_at=checked_at,
+            head_hash=GENESIS_HASH,
         )
 
     head = GENESIS_HASH

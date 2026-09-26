@@ -61,7 +61,10 @@ class _DiskSink:
     def _land(self, key: str, payload: dict[str, Any]) -> SinkReceipt:
         write_json_atomic(self._directory / f"{key}.json", payload)
         return SinkReceipt(
-            accepted=True, idempotency_key=key, consumer=self._sink_id, accepted_at=datetime.now(UTC)
+            accepted=True,
+            idempotency_key=key,
+            consumer=self._sink_id,
+            accepted_at=datetime.now(UTC),
         )
 
 

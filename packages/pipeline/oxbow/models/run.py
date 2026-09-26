@@ -207,7 +207,11 @@ def assert_no_leakage(
     leakage even when the ids happen not to collide with this fold's evaluation slice
     (the provider handed back the whole corpus, which is the exact mistake plan §8 names).
     """
-    roles = set(fit_rows.get_column(COL_ROLE).unique().to_list()) if COL_ROLE in fit_rows.columns else set()
+    roles = (
+        set(fit_rows.get_column(COL_ROLE).unique().to_list())
+        if COL_ROLE in fit_rows.columns
+        else set()
+    )
     unallowed = sorted(roles - set(FIT_ROLES))
     if unallowed:
         raise FrameContractViolationError(
@@ -309,7 +313,9 @@ class ExpandingWindowFoldProvider:
 
     def __init__(self, *, embargo_days: int, validation_offset: int = 1) -> None:
         if validation_offset < 1:
-            raise ModelLayerError("validation_offset must be >= 1: validation cannot be the evaluation window")
+            raise ModelLayerError(
+                "validation_offset must be >= 1: validation cannot be the evaluation window"
+            )
         self._embargo_days = int(embargo_days)
         self._validation_offset = int(validation_offset)
 
@@ -459,7 +465,10 @@ def drift_gate(
         scorecard_cfg.drift.score_psi_bins,
     )
     report = drift_decision(psi, (), scorecard_cfg.drift)
-    if report.action == "degrade_to_rules_plus_scorecard" and report.action != model_cfg.drift.on_action:
+    if (
+        report.action == "degrade_to_rules_plus_scorecard"
+        and report.action != model_cfg.drift.on_action
+    ):
         raise ModelLayerError(
             f"scoring's drift layer emitted {report.action!r} but model.yaml declares "
             f"drift.on_action={model_cfg.drift.on_action!r}; the degradation path this run "
@@ -484,9 +493,13 @@ def ordered_queue(scored: pl.DataFrame, score_column: str, tie_break: str) -> pl
     """
     for name, label in ((score_column, "score"), (tie_break, "tie-break")):
         if name not in scored.columns:
-            raise ModelLayerError(f"the queue needs the {label} column {name!r}, absent from the frame")
+            raise ModelLayerError(
+                f"the queue needs the {label} column {name!r}, absent from the frame"
+            )
     ordered = scored.sort([score_column, tie_break], descending=[True, False])
-    return ordered.with_columns(pl.arange(1, ordered.height + 1, dtype=pl.Int64).alias(QUEUE_RANK_COLUMN))
+    return ordered.with_columns(
+        pl.arange(1, ordered.height + 1, dtype=pl.Int64).alias(QUEUE_RANK_COLUMN)
+    )
 
 
 def _ranking_slice(frame: pl.DataFrame, score_column: str, tie_break: str) -> pl.DataFrame:
@@ -533,11 +546,7 @@ def _metrics_for(
         ordered = _ranking_slice(frame, column, COL_ACCOUNT_KEY)
         labels = ordered.get_column(COL_LABEL).cast(pl.Int32).to_numpy().astype(np.int32)
         scores = ordered.get_column(column).cast(pl.Float64).to_numpy().astype(np.float64)
-        probabilities = (
-            scores
-            if name in {"fused", "scorecard"}
-            else None
-        )
+        probabilities = scores if name in {"fused", "scorecard"} else None
         out[name] = measure(
             f"{prefix}_{name}",
             labels,
@@ -582,10 +591,18 @@ class GateOutcome:
             "metric": "pr_auc",
             "passed": self.passed,
             "fused_pr_auc": self.fused_pr_auc.to_dict(),
-            "rules_only_pr_auc": None if self.rules_only_pr_auc is None else self.rules_only_pr_auc.to_dict(),
-            "scorecard_pr_auc": None if self.scorecard_pr_auc is None else self.scorecard_pr_auc.to_dict(),
-            "delta_vs_rules_only": None if self.delta_rules_only is None else round(self.delta_rules_only, 8),
-            "delta_vs_scorecard": None if self.delta_scorecard is None else round(self.delta_scorecard, 8),
+            "rules_only_pr_auc": None
+            if self.rules_only_pr_auc is None
+            else self.rules_only_pr_auc.to_dict(),
+            "scorecard_pr_auc": None
+            if self.scorecard_pr_auc is None
+            else self.scorecard_pr_auc.to_dict(),
+            "delta_vs_rules_only": None
+            if self.delta_rules_only is None
+            else round(self.delta_rules_only, 8),
+            "delta_vs_scorecard": None
+            if self.delta_scorecard is None
+            else round(self.delta_scorecard, 8),
             "ci_overlap_with_rules_only": self.ci_overlap_with_rules_only,
             "ci_overlap_with_scorecard": self.ci_overlap_with_scorecard,
             "provenance": self.provenance,
@@ -633,8 +650,12 @@ def day7_gate(validation: Mapping[str, MetricSet], provenance: str) -> GateOutco
         scorecard_pr_auc=None if scorecard is None else scorecard.pr_auc,
         beats_rules_only=_beats(fused.pr_auc, None if rules_only is None else rules_only.pr_auc),
         beats_scorecard=_beats(fused.pr_auc, None if scorecard is None else scorecard.pr_auc),
-        ci_overlap_with_rules_only=_ci_overlap(fused.pr_auc, None if rules_only is None else rules_only.pr_auc),
-        ci_overlap_with_scorecard=_ci_overlap(fused.pr_auc, None if scorecard is None else scorecard.pr_auc),
+        ci_overlap_with_rules_only=_ci_overlap(
+            fused.pr_auc, None if rules_only is None else rules_only.pr_auc
+        ),
+        ci_overlap_with_scorecard=_ci_overlap(
+            fused.pr_auc, None if scorecard is None else scorecard.pr_auc
+        ),
         delta_rules_only=_delta(fused.pr_auc, None if rules_only is None else rules_only.pr_auc),
         delta_scorecard=_delta(fused.pr_auc, None if scorecard is None else scorecard.pr_auc),
         provenance=provenance,
@@ -699,7 +720,9 @@ class FoldRun:
                 "train_prior": round(self.gbm.train_prior, 8),
                 "best_iteration": self.gbm.best_iteration,
                 "best_valid_pr_auc": (
-                    None if np.isnan(self.gbm.best_valid_pr_auc) else round(self.gbm.best_valid_pr_auc, 8)
+                    None
+                    if np.isnan(self.gbm.best_valid_pr_auc)
+                    else round(self.gbm.best_valid_pr_auc, 8)
                 ),
                 "estimators_requested": self.gbm.n_estimators_requested,
                 "degenerate": self.gbm.degenerate,
@@ -746,7 +769,9 @@ def build_fold_training_frame(
     )
 
 
-def with_scorecard_channel(scored: pl.DataFrame, train_positive_share: float, population_share: float, cfg: ModelConfig) -> tuple[pl.DataFrame, dict[str, object]]:
+def with_scorecard_channel(
+    scored: pl.DataFrame, train_positive_share: float, population_share: float, cfg: ModelConfig
+) -> tuple[pl.DataFrame, dict[str, object]]:
     """``p_scorecard``: the scorecard's raw probability with the prior correction applied.
 
     Corrected but not calibrated. The correction is a single stated logit shift that
@@ -829,7 +854,11 @@ def annotate_rows(
         label = (
             calibration.confidence_label(value)
             if calibration is not None
-            else {"text": f"{UNCALIBRATED_UI_TEXT}: no calibration was fitted for this fold", "observed_rate": None, "sample_size": None}
+            else {
+                "text": f"{UNCALIBRATED_UI_TEXT}: no calibration was fitted for this fold",
+                "observed_rate": None,
+                "sample_size": None,
+            }
         )
         labels.append(str(label["text"]))
         if label["observed_rate"] is not None:
@@ -870,7 +899,9 @@ def annotate_rows(
     ]
     for name, value in lineage_row.items():
         dtype = pl.Boolean if isinstance(value, bool) else pl.Utf8
-        coerced: object = value if isinstance(value, bool) else (None if value is None else str(value))
+        coerced: object = (
+            value if isinstance(value, bool) else (None if value is None else str(value))
+        )
         columns.append(pl.Series(name, [coerced] * height, dtype=dtype))
     return scored.with_columns(columns)
 
@@ -926,7 +957,9 @@ class FoldModelRunner:
     def fold_training_frame(self, frame: TrainingFrame, fold: int) -> TrainingFrame:
         """A fold-scoped TrainingFrame: this fold's rows only, roles preserved."""
         slices = self.provider().fold_slices(frame, fold, ROLE_TEST)
-        rows = pl.concat([slices[ROLE_TRAIN], slices[ROLE_VALIDATION], slices[EVALUATION_SLICE_KEY]])
+        rows = pl.concat(
+            [slices[ROLE_TRAIN], slices[ROLE_VALIDATION], slices[EVALUATION_SLICE_KEY]]
+        )
         return build_fold_training_frame(
             rows,
             self.feature_registry,
@@ -993,9 +1026,15 @@ class FoldModelRunner:
         scored = scored.with_columns(
             pl.Series(RULES_ONLY_COLUMN, rules_only_severity_sum(scored, self.model_cfg.baselines))
         )
-        train_positive_share = float(np.mean(train.get_column(COL_LABEL).cast(pl.Float64).to_numpy())) if train.height else 0.0
+        train_positive_share = (
+            float(np.mean(train.get_column(COL_LABEL).cast(pl.Float64).to_numpy()))
+            if train.height
+            else 0.0
+        )
         population_share = self._population_base_rate(validation)
-        scored, prior_correction = with_scorecard_channel(scored, train_positive_share, population_share, self.model_cfg)
+        scored, prior_correction = with_scorecard_channel(
+            scored, train_positive_share, population_share, self.model_cfg
+        )
 
         gbm: GbmBundle | None = None
         anomaly: AnomalyBundle | None = None
@@ -1004,7 +1043,9 @@ class FoldModelRunner:
         tuning: TuningResult | None = None
         explanation: ExplanationOutcome | None = None
 
-        validation_positives = int(validation.get_column(COL_LABEL).sum()) if validation.height else 0
+        validation_positives = (
+            int(validation.get_column(COL_LABEL).sum()) if validation.height else 0
+        )
         train_positives = int(train.get_column(COL_LABEL).sum()) if train.height else 0
 
         if degrade:
@@ -1032,7 +1073,9 @@ class FoldModelRunner:
             features = self.feature_registry.names
             categorical = tuple(self.scorecard_cfg.binning.categorical_features)
             anomaly = fit_anomaly(train, validation, features, categorical, self.model_cfg.anomaly)
-            gbm, tuning = self._fit_gbm(train, validation, features, categorical, run_seed, channel_skips)
+            gbm, tuning = self._fit_gbm(
+                train, validation, features, categorical, run_seed, channel_skips
+            )
             if gbm is None:
                 anomaly = None
                 channel_skips.setdefault("fusion", "unavailable without a gbm channel")
@@ -1059,9 +1102,13 @@ class FoldModelRunner:
             if tracked_run is not None:
                 if gbm is not None:
                     lineage = tracked_run.log_model(gbm.booster, gbm.fingerprint())
-                tracked_run.log_metrics(self._metrics_to_log(calibration, gbm, fusion, prior_correction))
+                tracked_run.log_metrics(
+                    self._metrics_to_log(calibration, gbm, fusion, prior_correction)
+                )
                 if calibration is not None:
-                    tracked_run.log_reliability_curve([entry.to_dict() for entry in calibration.reliability])
+                    tracked_run.log_reliability_curve(
+                        [entry.to_dict() for entry in calibration.reliability]
+                    )
 
         scored = annotate_rows(
             scored,
@@ -1151,7 +1198,9 @@ class FoldModelRunner:
         seed: int,
         channel_skips: dict[str, str],
     ) -> tuple[GbmBundle | None, TuningResult | None]:
-        budget = self.model_cfg.optuna.n_trials if self.trial_budget is None else int(self.trial_budget)
+        budget = (
+            self.model_cfg.optuna.n_trials if self.trial_budget is None else int(self.trial_budget)
+        )
         tuning: TuningResult | None = None
         try:
             if budget > 1:
@@ -1176,7 +1225,9 @@ class FoldModelRunner:
             return None, None
         return bundle, tuning
 
-    def _fit_fusion(self, scored: pl.DataFrame, channel_skips: dict[str, str]) -> FusionModel | None:
+    def _fit_fusion(
+        self, scored: pl.DataFrame, channel_skips: dict[str, str]
+    ) -> FusionModel | None:
         validation = scored.filter(pl.col(COL_ROLE) == ROLE_VALIDATION)
         try:
             return fit_fusion(validation, self.model_cfg.fusion, FUSION_INPUTS)
@@ -1188,13 +1239,19 @@ class FoldModelRunner:
         self, scored: pl.DataFrame, train: pl.DataFrame, channel_skips: dict[str, str]
     ) -> CalibrationOutcome:
         validation = scored.filter(pl.col(COL_ROLE) == ROLE_VALIDATION)
-        raw = validation.get_column(P_FUSED_RAW_COLUMN).cast(pl.Float64).to_numpy().astype(np.float64)
+        raw = (
+            validation.get_column(P_FUSED_RAW_COLUMN).cast(pl.Float64).to_numpy().astype(np.float64)
+        )
         labels = validation.get_column(COL_LABEL).cast(pl.Int32).to_numpy().astype(np.int32)
         outcome = calibrate(
             raw,
             labels,
             self.model_cfg.calibration,
-            train_positive_share=float(np.mean(train.get_column(COL_LABEL).cast(pl.Float64).to_numpy())) if train.height else 0.0,
+            train_positive_share=float(
+                np.mean(train.get_column(COL_LABEL).cast(pl.Float64).to_numpy())
+            )
+            if train.height
+            else 0.0,
             population_positive_share=self._population_base_rate(validation),
         )
         if outcome.refused:
@@ -1210,9 +1267,13 @@ class FoldModelRunner:
         the score either way, so the ranking is unaffected while the money multiplication
         downstream is protected by the ``calibrated`` flag.
         """
-        mapped = outcome.apply(scored.get_column(P_FUSED_RAW_COLUMN).cast(pl.Float64).to_numpy().astype(np.float64))
+        mapped = outcome.apply(
+            scored.get_column(P_FUSED_RAW_COLUMN).cast(pl.Float64).to_numpy().astype(np.float64)
+        )
         if mapped is None:
-            mapped = scored.get_column(P_FUSED_RAW_COLUMN).cast(pl.Float64).to_numpy().astype(np.float64)
+            mapped = (
+                scored.get_column(P_FUSED_RAW_COLUMN).cast(pl.Float64).to_numpy().astype(np.float64)
+            )
         return scored.with_columns(pl.Series(P_FUSED_COLUMN, mapped))
 
     def _explain(
@@ -1251,7 +1312,9 @@ class FoldModelRunner:
                 "provenance": self.provenance,
                 "optuna_trials_configured": self.model_cfg.optuna.n_trials,
                 "optuna_trial_budget_effective": (
-                    self.model_cfg.optuna.n_trials if self.trial_budget is None else self.trial_budget
+                    self.model_cfg.optuna.n_trials
+                    if self.trial_budget is None
+                    else self.trial_budget
                 ),
                 "prior_correction": json.dumps(prior_correction, sort_keys=True, default=str),
             },
@@ -1372,7 +1435,9 @@ class P4bScorer:
     registry the model was fitted against (plan §8, 02 §B seam 3).
     """
 
-    def __init__(self, runner: FoldModelRunner, *, fold: int = 0, embargo_days: int | None = None) -> None:
+    def __init__(
+        self, runner: FoldModelRunner, *, fold: int = 0, embargo_days: int | None = None
+    ) -> None:
         self._runner = runner
         self._fold = fold
         self._embargo = runner.split_cfg.embargo_days if embargo_days is None else int(embargo_days)
@@ -1400,7 +1465,11 @@ class P4bScorer:
                 f"frame carries {frame.feature_spec_hash[:16]}…: scoring with a feature set the "
                 "model never saw produces confident nonsense, so it is refused (plan §8)"
             )
-        evaluation_role = str(scored.get_column(COL_ROLE).unique().to_list()[0]) if COL_ROLE in scored.columns else ROLE_TEST
+        evaluation_role = (
+            str(scored.get_column(COL_ROLE).unique().to_list()[0])
+            if COL_ROLE in scored.columns
+            else ROLE_TEST
+        )
         run = self._runner.run_fold(
             frame,
             self._fold,
@@ -1424,7 +1493,11 @@ class P4bScorer:
             model_version=(
                 run.lineage.model_version
                 if run.lineage is not None and run.lineage.model_version is not None
-                else (run.gbm.fingerprint()[:12] if run.gbm is not None else f"fold-{self._fold}-{run.mode}")
+                else (
+                    run.gbm.fingerprint()[:12]
+                    if run.gbm is not None
+                    else f"fold-{self._fold}-{run.mode}"
+                )
             ),
             feature_spec_hash=frame.feature_spec_hash,
             calibrated=run.calibrated,
@@ -1474,7 +1547,9 @@ def pooled_slice(runs: Sequence[FoldRun], role: str) -> pl.DataFrame:
     return pl.concat(kept).sort([COL_AS_OF_TS, COL_ACCOUNT_KEY])
 
 
-def pooled_gate(runs: Sequence[FoldRun], *, model_cfg: ModelConfig, split_cfg: SplitConfig) -> GateOutcome:
+def pooled_gate(
+    runs: Sequence[FoldRun], *, model_cfg: ModelConfig, split_cfg: SplitConfig
+) -> GateOutcome:
     """The day-7 gate on the pooled validation slice.
 
     Pooling is the right unit for the gate: five small folds each give a noisy PR-AUC, and
@@ -1489,7 +1564,11 @@ def pooled_gate(runs: Sequence[FoldRun], *, model_cfg: ModelConfig, split_cfg: S
         model_cfg=model_cfg,
         split_cfg=split_cfg,
         provenance=runs[0].provenance,
-        score_columns={"fused": P_FUSED_COLUMN, "scorecard": P_SCORECARD_COLUMN, "rules_only": RULES_ONLY_COLUMN},
+        score_columns={
+            "fused": P_FUSED_COLUMN,
+            "scorecard": P_SCORECARD_COLUMN,
+            "rules_only": RULES_ONLY_COLUMN,
+        },
     )
     return day7_gate(metrics, runs[0].provenance)
 
@@ -1508,6 +1587,7 @@ def seed_stability_over_folds(
     seeds come from config/splits.yaml so this phase and the backtest cannot quietly tune
     a different set.
     """
+
     def run_for_seed(seed: int) -> float:
         runner = runner_factory(seed)
         active = provider or runner.provider()
@@ -1552,12 +1632,18 @@ def write_run_artifacts(
         scored.write_parquet(parquet_path)
         written[parquet_path.name] = _artifact_record(parquet_path, reporting, rows=scored.height)
     payloads: dict[str, Mapping[str, object]] = {"model_card.json": model_card}
-    for name, payload in (("gate.json", gate), ("seed_stability.json", stability), ("folds.json", fold_table)):
+    for name, payload in (
+        ("gate.json", gate),
+        ("seed_stability.json", stability),
+        ("folds.json", fold_table),
+    ):
         if payload is not None:
             payloads[name] = payload
     for name, payload in payloads.items():
         path = directory / name
-        path.write_text(json.dumps(payload, indent=2, sort_keys=True, default=str), encoding="utf-8")
+        path.write_text(
+            json.dumps(payload, indent=2, sort_keys=True, default=str), encoding="utf-8"
+        )
         written[name] = _artifact_record(path, reporting)
     manifest = directory / "artifacts.json"
     manifest.write_text(

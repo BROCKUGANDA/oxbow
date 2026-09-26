@@ -112,7 +112,9 @@ def _demo_fold_provider(config: BacktestConfig) -> fakes.FakeFoldProvider:
     # arithmetic ``assert_fold_discipline`` checks. The 500-day span is chosen precisely
     # because a 5-fold walk-forward with a 30-day embargo cannot fit in PaySim's 30 days or
     # IBM's 18 (DEV-013); the fake demonstration uses a synthetic window that can.
-    folds = fakes.make_fold_masks(height=500, n_folds=config.n_folds, embargo_days=config.embargo_days)
+    folds = fakes.make_fold_masks(
+        height=500, n_folds=config.n_folds, embargo_days=config.embargo_days
+    )
     return fakes.FakeFoldProvider(folds, embargo_days=config.embargo_days)
 
 
@@ -213,8 +215,10 @@ def _print_demo(variants: list[VariantResult], control: Any, config: BacktestCon
     formula — this console output is the third surface plan §12 requires (with the JSON and
     the model card) to carry the "explicitly NOT a Sharpe ratio" label.
     """
-    print(f"OXBOW P6 walk-forward backtest — seed {config.seed}, "
-          f"embargo {config.embargo_days}d, provenance=fake_harness")
+    print(
+        f"OXBOW P6 walk-forward backtest — seed {config.seed}, "
+        f"embargo {config.embargo_days}d, provenance=fake_harness"
+    )
     print("provenance: these are harness-verification numbers, NOT a corpus result")
     print()
     header = f"{'variant':38} {'policy':14} {'PR-AUC':>8} {'CI 95%':>16} {'net_benefit_minor':>18}"
@@ -280,7 +284,9 @@ def main(argv: list[str] | None = None) -> int:
         "until they land this path raises a named blocked-on message rather than fake-run.",
     )
     parser.add_argument("--mlflow-uri", default=None, help="Optional MLflow tracking URI.")
-    parser.add_argument("--baselines-only", action="store_true", help="Run only the four baselines.")
+    parser.add_argument(
+        "--baselines-only", action="store_true", help="Run only the four baselines."
+    )
     args = parser.parse_args(argv)
 
     out_dir = args.out

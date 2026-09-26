@@ -80,7 +80,9 @@ class PostgresAuditSink:
 
     def load(self, *, from_seq: int = 1) -> Sequence[ChainRow]:
         rows = self._session.scalars(
-            select(AuditEvent).where(AuditEvent.chain_seq >= from_seq).order_by(AuditEvent.chain_seq)
+            select(AuditEvent)
+            .where(AuditEvent.chain_seq >= from_seq)
+            .order_by(AuditEvent.chain_seq)
         ).all()
         return [_to_chain_row(row) for row in rows]
 

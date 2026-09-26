@@ -65,6 +65,7 @@ from api.schemas.common import ENVELOPE_KEYS  # noqa: E402
 from api.schemas.health import ComponentName  # noqa: E402
 from api.security import Principal, b64url_encode, decode_token, mint_local_token  # noqa: E402
 from api.settings import reset_settings_cache  # noqa: E402
+
 from oxbow.adapters.signing import (  # noqa: E402
     REPLAY_WINDOW_SECONDS,
     SIGNATURE_HEADER,
@@ -194,11 +195,9 @@ def _provision_database() -> str:
         tried.append(_redact(admin_url))
         try:
             with psycopg.connect(admin_url, autocommit=True, connect_timeout=3) as conn:
-                conn.execute(
-                    f"DROP DATABASE IF EXISTS {TEST_DB_NAME} WITH (FORCE)"
-                )
+                conn.execute(f"DROP DATABASE IF EXISTS {TEST_DB_NAME} WITH (FORCE)")
                 conn.execute(f"CREATE DATABASE {TEST_DB_NAME}")
-        except Exception as exc:  # noqa: BLE001 - the reason is the finding, reported below
+        except Exception as exc:
             last_error = f"{type(exc).__name__}: {str(exc).splitlines()[0][:140]}"
             continue
         parsed = urlparse(admin_url)
@@ -206,9 +205,11 @@ def _provision_database() -> str:
         # scheme to the psycopg2 dialect, which is not installed (02 F pins psycopg3), and
         # this URL is used by `create_engine` directly as well as through
         # `Settings.sqlalchemy_url`. Same normalisation the app applies.
-        return urlunparse(parsed._replace(path=f"/{TEST_DB_NAME}")).replace(
-            "postgresql://", "postgresql+psycopg://", 1
-        ).replace("postgres://", "postgresql+psycopg://", 1)
+        return (
+            urlunparse(parsed._replace(path=f"/{TEST_DB_NAME}"))
+            .replace("postgresql://", "postgresql+psycopg://", 1)
+            .replace("postgres://", "postgresql+psycopg://", 1)
+        )
     pytest.fail(
         "The P7 write-path tests need a real Postgres and none was reachable. Tried "
         f"{tried}; last failure {last_error}. Start it with `make up` (compose Postgres on "
@@ -235,9 +236,7 @@ def _migrate(database_url: str) -> None:
     os.environ["DATABASE_URL"] = database_url
     try:
         config = Config()
-        config.set_main_option(
-            "script_location", str(REPO_ROOT / "apps" / "api" / "alembic")
-        )
+        config.set_main_option("script_location", str(REPO_ROOT / "apps" / "api" / "alembic"))
         config.set_main_option("version_path_separator", "os")
         command.upgrade(config, "head")
     finally:
@@ -258,11 +257,9 @@ def _drop_database(database_url: str) -> None:
                     "SELECT pg_terminate_backend(pid) FROM pg_stat_activity "
                     "WHERE datname = current_database() AND pid <> pg_backend_pid()"
                 )
-                conn.execute(
-                    f"DROP DATABASE IF EXISTS {TEST_DB_NAME} WITH (FORCE)"
-                )
+                conn.execute(f"DROP DATABASE IF EXISTS {TEST_DB_NAME} WITH (FORCE)")
             return
-        except Exception:  # noqa: BLE001 - teardown must not mask a test failure
+        except Exception:
             continue
 
 
@@ -727,8 +724,15 @@ def _seed_warehouse(engine: Any, run_id: str, keys: list[str]) -> dict[str, Any]
         )
         raw(
             "scorecard_attribute",
-            [{"attribute": "out_degree", "iv": 0.42, "n_bins": 1, "monotone": True,
-              "family": "network"}],
+            [
+                {
+                    "attribute": "out_degree",
+                    "iv": 0.42,
+                    "n_bins": 1,
+                    "monotone": True,
+                    "family": "network",
+                }
+            ],
         )
         raw(
             "scorecard_bin",
@@ -863,9 +867,9 @@ def null_client():
     mp = pytest.MonkeyPatch()
     _configure_env(mp)
     container = build_container()
-    assert container.backend == "null-file", (
-        f"the null fixture asked for OXBOW_WAREHOUSE=null and got {container.backend}"
-    )
+    assert (
+        container.backend == "null-file"
+    ), f"the null fixture asked for OXBOW_WAREHOUSE=null and got {container.backend}"
     app = create_app()
     with TestClient(app, raise_server_exceptions=False) as client:
         # The lifespan builds its own container from the ambient environment; this fixture
@@ -980,25 +984,25 @@ def assert_envelope(body: Any, *, where: str) -> dict[str, Any]:
 
 def assert_problem(response: Any, *, status: int, where: str) -> dict[str, Any]:
     """RFC 9457 on the wire: media type, required members, and a status that agrees."""
-    assert response.status_code == status, (
-        f"{where}: expected {status}, got {response.status_code} {response.text[:240]}"
-    )
+    assert (
+        response.status_code == status
+    ), f"{where}: expected {status}, got {response.status_code} {response.text[:240]}"
     content_type = response.headers.get("content-type", "")
-    assert content_type.startswith(PROBLEM_MEDIA_TYPE), (
-        f"{where}: error body is {content_type!r}, expected {PROBLEM_MEDIA_TYPE!r}"
-    )
+    assert content_type.startswith(
+        PROBLEM_MEDIA_TYPE
+    ), f"{where}: error body is {content_type!r}, expected {PROBLEM_MEDIA_TYPE!r}"
     body = response.json()
     missing = [name for name in RFC9457_REQUIRED if name not in body]
     assert not missing, f"{where}: problem document lacks {missing}: {body}"
     assert body["status"] == status, f"{where}: body status {body['status']} != HTTP {status}"
     assert isinstance(body["title"], str) and body["title"], f"{where}: empty title"
     assert isinstance(body["detail"], str) and body["detail"], f"{where}: empty detail"
-    assert body["type"].startswith((PROBLEM_TYPE_BASE, "about:blank")), (
-        f"{where}: type {body['type']!r} is neither an OXBOW problem URI nor about:blank"
-    )
-    assert isinstance(body["instance"], str) and body["instance"].startswith("/"), (
-        f"{where}: instance {body['instance']!r} is not the request URI"
-    )
+    assert body["type"].startswith(
+        (PROBLEM_TYPE_BASE, "about:blank")
+    ), f"{where}: type {body['type']!r} is neither an OXBOW problem URI nor about:blank"
+    assert isinstance(body["instance"], str) and body["instance"].startswith(
+        "/"
+    ), f"{where}: instance {body['instance']!r} is not the request URI"
     return body
 
 
@@ -1025,9 +1029,7 @@ def api_routes(app: Any) -> list[Any]:
 
 
 def sse_event_ids(text_body: str) -> list[int]:
-    return [
-        int(line.split(":", 1)[1]) for line in text_body.splitlines() if line.startswith("id:")
-    ]
+    return [int(line.split(":", 1)[1]) for line in text_body.splitlines() if line.startswith("id:")]
 
 
 # --- 1. boot, route table, OpenAPI --------------------------------------------
@@ -1087,7 +1089,9 @@ def test_openapi_schema_builds_and_declares_the_problem_union(
     assert document["openapi"].startswith("3."), document["openapi"]
     declared = set(document["paths"])
     registered = {route.path for route in api_routes(app) if route.include_in_schema}
-    assert registered <= declared, f"routes missing from the document: {sorted(registered - declared)}"
+    assert (
+        registered <= declared
+    ), f"routes missing from the document: {sorted(registered - declared)}"
 
     schemas = document["components"]["schemas"]
     assert "ProblemDetail" in schemas, sorted(schemas)
@@ -1152,9 +1156,9 @@ def test_health_schema_literal_covers_every_probed_component() -> None:
     )
     from api.schemas.health import FALLBACKS
 
-    assert probed <= set(FALLBACKS) | {"warehouse"}, (
-        f"components with no fallback copy: {sorted(probed - set(FALLBACKS))}"
-    )
+    assert probed <= set(FALLBACKS) | {
+        "warehouse"
+    }, f"components with no fallback copy: {sorted(probed - set(FALLBACKS))}"
 
 
 def test_run_schema_covers_every_field_the_read_model_builds() -> None:
@@ -1339,7 +1343,7 @@ def test_no_reachable_route_answers_with_an_undesigned_internal_error(
             continue
         try:
             problem = response.json()
-        except Exception:  # noqa: BLE001
+        except Exception:
             offenders.append(f"GET {path} -> {response.status_code} with a non-JSON body")
             continue
         if problem.get("type") == undesigned:
@@ -1373,9 +1377,7 @@ def test_alg_none_and_the_algorithm_confusion_attack_are_refused() -> None:
     # HS256 signed with the local secret but claiming the OIDC issuer: the algorithm is
     # chosen by the issuer, never by the token header. This is the classic confusion attack
     # that turns a public JWKS into an HMAC secret.
-    foreign = b64url_encode(
-        json.dumps({"iss": ISSUER, "sub": "x", "aud": "oxbow-web"}).encode()
-    )
+    foreign = b64url_encode(json.dumps({"iss": ISSUER, "sub": "x", "aud": "oxbow-web"}).encode())
     hs_header = b64url_encode(json.dumps({"alg": "HS256", "typ": "JWT"}).encode())
     signature = b64url_encode(
         hmac.new(
@@ -1472,7 +1474,11 @@ def test_every_operational_endpoint_answers_200_with_the_documented_shape(
     failures: list[str] = []
     for path in paths:
         url, _, query = path.partition("?")
-        response = wh_client.get(url, params=dict(pair.split("=") for pair in query.split("&")) if query else None, headers=headers)
+        response = wh_client.get(
+            url,
+            params=dict(pair.split("=") for pair in query.split("&")) if query else None,
+            headers=headers,
+        )
         if response.status_code != 200:
             failures.append(f"GET {path} -> {response.status_code} {response.text[:200]}")
             continue
@@ -1536,9 +1542,9 @@ def test_only_pseudonymous_account_keys_reach_a_response(wh_client: TestClient) 
     seen: list[str] = []
     for location, key, value in walk(alerts):
         if key in key_names:
-            assert isinstance(value, str) and ACCOUNT_KEY_SHAPE.match(value), (
-                f"{location} = {value!r} is not a pseudonymous account key"
-            )
+            assert isinstance(value, str) and ACCOUNT_KEY_SHAPE.match(
+                value
+            ), f"{location} = {value!r} is not a pseudonymous account key"
             seen.append(value)
     assert seen, "no account key was exercised"
 
@@ -1547,9 +1553,9 @@ def test_only_pseudonymous_account_keys_reach_a_response(wh_client: TestClient) 
         for location, key, value in walk(wh_client.get(path, headers=headers).json()):
             if not isinstance(value, str):
                 continue
-            assert not RAW_ACCOUNT_ID_SHAPE.match(value), (
-                f"{path}{location} carries what looks like a raw account identifier: {value!r}"
-            )
+            assert not RAW_ACCOUNT_ID_SHAPE.match(
+                value
+            ), f"{path}{location} carries what looks like a raw account identifier: {value!r}"
             if key in key_names:
                 assert ACCOUNT_KEY_SHAPE.match(value), f"{path}{location} = {value!r}"
 
@@ -1597,8 +1603,10 @@ def test_the_envelope_guard_bites_on_a_known_bad_body(wh_client: TestClient) -> 
         assert_envelope({"rows": [], "total": 0}, where="negative control")
     # And a domain object inside data may still carry its own `error` — RunDetail.error and
     # JobStatus.error are facts about a run, not a second request status.
-    assert_envelope({"data": {"error": "stage failed"}, "meta": {"disclaimer": "d"}},
-                    where="nested domain error")
+    assert_envelope(
+        {"data": {"error": "stage failed"}, "meta": {"disclaimer": "d"}},
+        where="nested domain error",
+    )
 
 
 # --- 4. the write path: decision, audit chain, outbox --------------------------
@@ -1615,7 +1623,9 @@ def _open_case(client: TestClient, headers: dict[str, str], run_id: str, key: st
 def _counts(warehouse: dict[str, Any]) -> dict[str, int]:
     with Session(warehouse["engine"]) as session:
         return {
-            "decision": int(session.execute(select(func.count()).select_from(Decision)).scalar_one()),
+            "decision": int(
+                session.execute(select(func.count()).select_from(Decision)).scalar_one()
+            ),
             "audit_event": int(
                 session.execute(select(func.count()).select_from(AuditEvent)).scalar_one()
             ),
@@ -1658,15 +1668,17 @@ def test_a_decision_commit_writes_the_three_rows_together(
         row = session.get(Decision, data["decision_id"])
         assert row is not None
         assert row.row_hash == data["row_hash"]
-        assert row.reason == "counterparty verified as a registered market stall", (
-            "the reason is the sentence that survives; it must not be reworded"
-        )
+        assert (
+            row.reason == "counterparty verified as a registered market stall"
+        ), "the reason is the sentence that survives; it must not be reworded"
         assert isinstance(row.exposure_minor, int) and not isinstance(row.exposure_minor, bool)
         assert row.exposure_minor == LOW_EXPOSURE_MINOR, "exposure came from the code, not the row"
         assert row.account_key == low[0]
-        outbox_row = session.execute(
-            select(OutboxMessage).where(OutboxMessage.case_id == case_id)
-        ).scalars().one()
+        outbox_row = (
+            session.execute(select(OutboxMessage).where(OutboxMessage.case_id == case_id))
+            .scalars()
+            .one()
+        )
         assert outbox_row.status == "pending"
         assert outbox_row.case_seq == 1
         assert outbox_row.idempotency_key == build_idempotency_key(run_id, case_id, 1)
@@ -1674,9 +1686,9 @@ def test_a_decision_commit_writes_the_three_rows_together(
         assert isinstance(outbox_row.payload["economics"]["exposure_minor"], int)
         audit = session.execute(select(AuditEvent).order_by(AuditEvent.chain_seq)).scalars().all()
         assert len(audit) == 1
-        assert audit[0].payload["decision_row_hash"] == row.row_hash, (
-            "the audit row must pin the digest the decision row carries"
-        )
+        assert (
+            audit[0].payload["decision_row_hash"] == row.row_hash
+        ), "the audit row must pin the digest the decision row carries"
 
 
 def test_outbox_write_failure_rolls_back_the_audit_and_decision_rows(
@@ -1744,7 +1756,10 @@ def test_outbox_write_failure_rolls_back_the_audit_and_decision_rows(
     with Session(warehouse["engine"]) as session:
         case = session.get(Case, case_id)
         assert case is not None and case.version == 1, "a rolled back write bumped the version"
-        assert session.execute(select(Decision).where(Decision.case_id == case_id)).scalars().all() == []
+        assert (
+            session.execute(select(Decision).where(Decision.case_id == case_id)).scalars().all()
+            == []
+        )
 
 
 def test_confirmation_outbox_failure_rolls_back_the_confirmation_audit_row(
@@ -1760,17 +1775,20 @@ def test_confirmation_outbox_failure_rolls_back_the_confirmation_audit_row(
 
     created = wh_client.post(
         f"/api/cases/{case_id}/decisions",
-        json={"action": "escalate", "reason": "exposure above the four-eyes threshold",
-              "expected_version": 1},
+        json={
+            "action": "escalate",
+            "reason": "exposure above the four-eyes threshold",
+            "expected_version": 1,
+        },
         headers=headers,
     )
     assert created.status_code == 200, created.text
     decision = assert_envelope(created.json(), where="four-eyes decision")["data"]
     assert decision["four_eyes_required"] is True
     assert decision["four_eyes_state"] == "pending"
-    assert decision["outbox_queued"] is False, (
-        "a decision awaiting second review must not already have a delivery promise"
-    )
+    assert (
+        decision["outbox_queued"] is False
+    ), "a decision awaiting second review must not already have a delivery promise"
     assert _counts(warehouse)["outbox"] == 0
 
     with Session(warehouse["engine"]) as session:
@@ -1809,9 +1827,9 @@ def test_confirmation_outbox_failure_rolls_back_the_confirmation_audit_row(
         assert row.confirmed_by is None
         case = session.get(Case, case_id)
         assert case is not None and case.version == 2, "a rolled back confirm bumped the version"
-    assert _counts(warehouse)["audit_event"] == audit_before, (
-        "the confirmation's audit row was written while its outbox row was refused"
-    )
+    assert (
+        _counts(warehouse)["audit_event"] == audit_before
+    ), "the confirmation's audit row was written while its outbox row was refused"
 
 
 def test_four_eyes_needs_a_different_subject_not_a_different_role(
@@ -1822,8 +1840,11 @@ def test_four_eyes_needs_a_different_subject_not_a_different_role(
     case_id = _open_case(wh_client, headers, run_id, high[0])
     created = wh_client.post(
         f"/api/cases/{case_id}/decisions",
-        json={"action": "escalate", "reason": "structured deposits then an immediate payout",
-              "expected_version": 1},
+        json={
+            "action": "escalate",
+            "reason": "structured deposits then an immediate payout",
+            "expected_version": 1,
+        },
         headers=headers,
     )
     assert created.status_code == 200, created.text
@@ -1853,19 +1874,21 @@ def test_four_eyes_needs_a_different_subject_not_a_different_role(
     assert data["outbox_queued"] is True
 
     with Session(warehouse["engine"]) as session:
-        rows = session.execute(
-            select(OutboxMessage).where(OutboxMessage.case_id == case_id).order_by(
-                OutboxMessage.case_seq
+        rows = (
+            session.execute(
+                select(OutboxMessage)
+                .where(OutboxMessage.case_id == case_id)
+                .order_by(OutboxMessage.case_seq)
             )
-        ).scalars().all()
+            .scalars()
+            .all()
+        )
         assert [row.sink_id for row in rows] == [
             api_decisions.OUTBOX_SINK_CASE,
             api_decisions.OUTBOX_SINK_NOTIFY,
         ], "an escalation owes the case sink and a notification, in that order"
         assert rows[0].decision_seq == 1
-        depth = session.execute(
-            select(func.count()).select_from(OutboxMessage)
-        ).scalar_one()
+        depth = session.execute(select(func.count()).select_from(OutboxMessage)).scalar_one()
         assert depth == 2
 
     again = wh_client.post(
@@ -1922,11 +1945,7 @@ def test_concurrent_append_gives_one_success_and_one_409(warehouse: dict[str, An
 
     loader = container.new_session()
     case_ids = [
-        str(
-            api_decisions.open_case(
-                loader, read_model, run_id=run_id, account_key=key
-            ).case_id
-        )
+        str(api_decisions.open_case(loader, read_model, run_id=run_id, account_key=key).case_id)
         for key in (low[0], low[1])
     ]
     loader.commit()
@@ -1970,9 +1989,11 @@ def test_concurrent_append_gives_one_success_and_one_409(warehouse: dict[str, An
         loser.rollback()
 
         assert result["chain_seq"] == 1
-        assert _counts(warehouse) == {"decision": 1, "audit_event": 1, "outbox": 1}, (
-            "the loser left rows behind"
-        )
+        assert _counts(warehouse) == {
+            "decision": 1,
+            "audit_event": 1,
+            "outbox": 1,
+        }, "the loser left rows behind"
 
         # The next writer after the race is not poisoned by it.
         third = container.new_session()
@@ -1996,8 +2017,11 @@ def test_audit_chain_verifies_after_the_write_path(
         case_id = _open_case(wh_client, headers, run_id, key)
         response = wh_client.post(
             f"/api/cases/{case_id}/decisions",
-            json={"action": "dismiss", "reason": f"cleared on review {index}",
-                  "expected_version": 1},
+            json={
+                "action": "dismiss",
+                "reason": f"cleared on review {index}",
+                "expected_version": 1,
+            },
             headers=headers,
         )
         assert response.status_code == 200, response.text
@@ -2042,8 +2066,11 @@ def test_outbox_ordering_is_per_case_and_never_global(
         for case_id in (case_a, case_b):
             response = wh_client.post(
                 f"/api/cases/{case_id}/decisions",
-                json={"action": "review", "reason": f"review pass {pass_number}",
-                      "expected_version": pass_number},
+                json={
+                    "action": "review",
+                    "reason": f"review pass {pass_number}",
+                    "expected_version": pass_number,
+                },
                 headers=headers,
             )
             assert response.status_code == 200, response.text
@@ -2052,9 +2079,11 @@ def test_outbox_ordering_is_per_case_and_never_global(
         rows_a = api_decisions.outbox_rows_for(session, case_a)
         rows_b = api_decisions.outbox_rows_for(session, case_b)
         assert [row.case_seq for row in rows_a] == [1, 2, 3]
-        assert [row.case_seq for row in rows_b] == [1, 2, 3], (
-            "case_seq continued from the other case, i.e. global ordering"
-        )
+        assert [row.case_seq for row in rows_b] == [
+            1,
+            2,
+            3,
+        ], "case_seq continued from the other case, i.e. global ordering"
         assert [row.decision_seq for row in rows_a] == [1, 2, 3]
         assert [row.idempotency_key for row in rows_a] == [
             build_idempotency_key(run_id, case_a, seq) for seq in (1, 2, 3)
@@ -2111,14 +2140,14 @@ def test_decision_and_outbox_money_columns_are_bigint_minor_units(
         (PolicySummary, "net_benefit_minor"),
     ):
         column_type = model.__table__.columns[column].type
-        assert isinstance(column_type, BigInteger), (
-            f"{model.__tablename__}.{column} is {column_type}; money is integer minor units"
-        )
+        assert isinstance(
+            column_type, BigInteger
+        ), f"{model.__tablename__}.{column} is {column_type}; money is integer minor units"
     with Session(warehouse["engine"]) as session:
         row = session.execute(
-            select(PolicyAllocation.expected_value_minor).where(
-                PolicyAllocation.run_id == warehouse["run_id"]
-            ).limit(1)
+            select(PolicyAllocation.expected_value_minor)
+            .where(PolicyAllocation.run_id == warehouse["run_id"])
+            .limit(1)
         ).scalar_one()
         assert isinstance(row, int) and not isinstance(row, bool)
 
@@ -2186,8 +2215,10 @@ def test_a_wrong_signature_is_refused(echo_client: TestClient) -> None:
     wrong_secret = echo_client.post(
         "/webhook",
         content=body,
-        headers={SIGNATURE_HEADER: _signed(body, secret="some-other-tenant-secret"),
-                 "Idempotency-Key": "idem-3"},
+        headers={
+            SIGNATURE_HEADER: _signed(body, secret="some-other-tenant-secret"),
+            "Idempotency-Key": "idem-3",
+        },
     )
     assert wrong_secret.status_code == 401, wrong_secret.text
     assert wrong_secret.json()["error_type"] == "bad_signature"
@@ -2229,7 +2260,7 @@ def test_the_scheme_is_hmac_sha256_over_the_timestamp_and_the_raw_body() -> None
     at = 1_800_000_000
     expected = hmac.new(
         TEST_WEBHOOK_SECRET.encode("utf-8"),
-        f"{at}".encode("utf-8") + b"." + body,
+        f"{at}".encode() + b"." + body,
         hashlib.sha256,
     ).hexdigest()
     header, stamp = sign_body(body, TEST_WEBHOOK_SECRET, now=at)
@@ -2258,9 +2289,9 @@ def test_the_replay_window_is_300_seconds_and_the_compare_is_constant_time() -> 
         "the digest comparison is no longer constant-time; a timing oracle in a webhook "
         "receiver is a forgery search, not a theoretical concern"
     )
-    assert "==" not in source[source.index("expected =") :], (
-        "the expected digest is being compared with `==` before the constant-time compare"
-    )
+    assert (
+        "==" not in source[source.index("expected =") :]
+    ), "the expected digest is being compared with `==` before the constant-time compare"
 
 
 def test_sender_and_receiver_agree_over_a_retried_delivery(echo_client: TestClient) -> None:
@@ -2281,9 +2312,9 @@ def test_sender_and_receiver_agree_over_a_retried_delivery(echo_client: TestClie
         assert response.json()["idempotency_key"] == f"retry-{attempt}"
     recorded = echo_client.get("/deliveries").json()["deliveries"]
     assert len(recorded) == 2
-    assert len({item["body_sha256"] for item in recorded}) == 1, (
-        "the same bytes produced two digests, so the signed body is not the body that arrived"
-    )
+    assert (
+        len({item["body_sha256"] for item in recorded}) == 1
+    ), "the same bytes produced two digests, so the signed body is not the body that arrived"
     assert all(item["signature_verified"] for item in recorded)
 
 
@@ -2303,7 +2334,7 @@ def test_the_outbox_uses_the_same_implementation_the_receiver_verifies_against()
         "receiver can disagree by construction"
     )
     assert "hmac.new" not in sender, "the sender has grown its own HMAC implementation"
-    assert "hmac.new" not in inspect.getsource(echo_module.webhook), (
-        "the echo receiver has grown its own HMAC, which is the duplicate that drifted once"
-    )
+    assert "hmac.new" not in inspect.getsource(
+        echo_module.webhook
+    ), "the echo receiver has grown its own HMAC, which is the duplicate that drifted once"
     assert SIGNATURE_HEADER in sender

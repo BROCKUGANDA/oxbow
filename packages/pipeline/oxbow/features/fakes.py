@@ -299,7 +299,9 @@ def wide_fixture(events: int = 400, *, accounts: int = 24, seed: int = 1337) -> 
     printed and re-run, and ``seed`` is threaded in rather than read from a global.
     """
     if events <= 0 or accounts < 2:
-        raise ValueError(f"events must be positive and accounts at least 2, got {events}, {accounts}")
+        raise ValueError(
+            f"events must be positive and accounts at least 2, got {events}, {accounts}"
+        )
     modulus = 2**31 - 1
     state = seed % modulus
     rows: list[dict[str, object]] = []

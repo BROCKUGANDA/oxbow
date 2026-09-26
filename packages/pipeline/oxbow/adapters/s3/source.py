@@ -144,7 +144,9 @@ class ObjectStoreZoneSource:
         for ref in self._store.list(f"{self._prefix}/"):
             if ref.key.endswith(SUCCESS_MARKER) or ref.key.endswith(".manifest.json"):
                 continue
-            total += sum(1 for line in self._store.get(ref.key).decode("utf-8").splitlines() if line.strip())
+            total += sum(
+                1 for line in self._store.get(ref.key).decode("utf-8").splitlines() if line.strip()
+            )
         return total
 
     def _prefix_digest(self) -> str:

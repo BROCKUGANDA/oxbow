@@ -606,8 +606,10 @@ def load_split_config(root: Path | None = None) -> SplitConfig:
         entity_disjoint_report_as=require_str(entity, "report_as"),
     )
     if config.shuffle:
-        raise ConfigError("walk_forward.shuffle must be false: a random split on temporal "
-                          "data is the classic tell and a leakage source")
+        raise ConfigError(
+            "walk_forward.shuffle must be false: a random split on temporal "
+            "data is the classic tell and a leakage source"
+        )
     if config.on_zero_positive_fold != "skip_with_named_reason":
         raise ConfigError(
             "walk_forward.on_zero_positive_fold must be 'skip_with_named_reason' (03 H: "

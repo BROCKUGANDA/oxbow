@@ -285,9 +285,7 @@ class ExposureInterval:
 
     def __post_init__(self) -> None:
         if self.high.minor < self.low.minor:
-            raise PropagationError(
-                f"interval endpoints are inverted: {self.low} below {self.high}"
-            )
+            raise PropagationError(f"interval endpoints are inverted: {self.low} below {self.high}")
 
     @property
     def width(self) -> Money:

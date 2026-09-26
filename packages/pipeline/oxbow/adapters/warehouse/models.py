@@ -105,9 +105,7 @@ class Run(Base):
     dataset_ref: Mapped[str | None] = mapped_column(String(128))
     source_revision: Mapped[str | None] = mapped_column(String(64))
     error: Mapped[str | None] = mapped_column(Text)
-    superseded_by: Mapped[str | None] = mapped_column(
-        CHAR(RUN_ID_LEN), ForeignKey("run.run_id")
-    )
+    superseded_by: Mapped[str | None] = mapped_column(CHAR(RUN_ID_LEN), ForeignKey("run.run_id"))
     notes: Mapped[str | None] = mapped_column(Text)
     artifact_hashes: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
 
@@ -209,7 +207,9 @@ class DatasetSource(Base):
     label_caveat: Mapped[str] = mapped_column(Text, nullable=False)
     known_biases: Mapped[list[str]] = mapped_column(JSONB, nullable=False)
     synthetic_fields: Mapped[list[str]] = mapped_column(JSONB, nullable=False)
-    ingest_allowed: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("true"))
+    ingest_allowed: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("true")
+    )
     retrieved_at: Mapped[date | None] = mapped_column(Date)
 
 
@@ -472,9 +472,7 @@ class EvidenceEvent(Base):
     """One row of a case's timeline: a transaction, a rule hit, a screening hit."""
 
     __tablename__ = "evidence_event"
-    __table_args__ = (
-        Index("ix_evidence_run_key_ts", "run_id", "account_key", "occurred_at"),
-    )
+    __table_args__ = (Index("ix_evidence_run_key_ts", "run_id", "account_key", "occurred_at"),)
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
     run_id: Mapped[str] = mapped_column(CHAR(RUN_ID_LEN), ForeignKey("run.run_id"), nullable=False)
@@ -634,7 +632,9 @@ class ScorecardBin(Base):
     """One WOE bin: edges, weight, points, population share, bad rate."""
 
     __tablename__ = "scorecard_bin"
-    __table_args__ = (UniqueConstraint("run_id", "attribute", "bin_index", name="uq_scorecard_bin"),)
+    __table_args__ = (
+        UniqueConstraint("run_id", "attribute", "bin_index", name="uq_scorecard_bin"),
+    )
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
     run_id: Mapped[str] = mapped_column(CHAR(RUN_ID_LEN), ForeignKey("run.run_id"), nullable=False)
@@ -733,7 +733,9 @@ class Policy(Base):
 
     __tablename__ = "policy"
     __table_args__ = (
-        CheckConstraint("recovery_rate > 0 AND recovery_rate < 1", name="ck_policy_recovery_bounds"),
+        CheckConstraint(
+            "recovery_rate > 0 AND recovery_rate < 1", name="ck_policy_recovery_bounds"
+        ),
         CheckConstraint(
             "min_review_minutes > 0",
             name="ck_policy_positive_review_minutes",
@@ -779,7 +781,9 @@ class PolicyAllocation(Base):
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
     run_id: Mapped[str] = mapped_column(CHAR(RUN_ID_LEN), ForeignKey("run.run_id"), nullable=False)
-    policy_id: Mapped[str] = mapped_column(String(64), ForeignKey("policy.policy_id"), nullable=False)
+    policy_id: Mapped[str] = mapped_column(
+        String(64), ForeignKey("policy.policy_id"), nullable=False
+    )
     account_key: Mapped[str] = mapped_column(CHAR(ACCOUNT_KEY_LEN), nullable=False)
     rank: Mapped[int] = mapped_column(Integer, nullable=False)
     selected: Mapped[bool] = mapped_column(Boolean, nullable=False)
@@ -804,7 +808,9 @@ class PolicySummary(Base):
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
     run_id: Mapped[str] = mapped_column(CHAR(RUN_ID_LEN), ForeignKey("run.run_id"), nullable=False)
-    policy_id: Mapped[str] = mapped_column(String(64), ForeignKey("policy.policy_id"), nullable=False)
+    policy_id: Mapped[str] = mapped_column(
+        String(64), ForeignKey("policy.policy_id"), nullable=False
+    )
     currency: Mapped[str] = mapped_column(CHAR(CURRENCY_LEN), nullable=False)
     capacity_minutes: Mapped[int] = mapped_column(Integer, nullable=False)
     selected_count: Mapped[int] = mapped_column(Integer, nullable=False)
@@ -930,9 +936,7 @@ class ValidationMetric(Base):
     """A named scalar from the validation run, with its unit and its caveat."""
 
     __tablename__ = "validation_metric"
-    __table_args__ = (
-        UniqueConstraint("run_id", "name", "corpus", name="uq_validation_metric"),
-    )
+    __table_args__ = (UniqueConstraint("run_id", "name", "corpus", name="uq_validation_metric"),)
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
     run_id: Mapped[str] = mapped_column(CHAR(RUN_ID_LEN), ForeignKey("run.run_id"), nullable=False)
@@ -970,7 +974,9 @@ class CurvePoint(Base):
     y: Mapped[float] = mapped_column(Double, nullable=False)
     n: Mapped[int | None] = mapped_column(Integer)
     label: Mapped[str | None] = mapped_column(String(128))
-    operating_point: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"))
+    operating_point: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("false")
+    )
     currency: Mapped[str | None] = mapped_column(CHAR(CURRENCY_LEN))
 
 
@@ -1083,9 +1089,7 @@ class Decision(Base):
         UniqueConstraint("case_id", "decision_seq", name="uq_decision_case_seq"),
         UniqueConstraint("chain_seq", name="uq_decision_chain_seq"),
         CheckConstraint(_state_check("action", DECISION_ACTIONS), name="ck_decision_action"),
-        CheckConstraint(
-            "length(btrim(reason)) > 0", name="ck_decision_reason_not_blank"
-        ),
+        CheckConstraint("length(btrim(reason)) > 0", name="ck_decision_reason_not_blank"),
         CheckConstraint(
             _state_check("four_eyes_state", FOUR_EYES_STATES), name="ck_decision_four_eyes"
         ),
@@ -1098,7 +1102,9 @@ class Decision(Base):
 
     decision_id: Mapped[str] = mapped_column(String(64), primary_key=True)
     chain_seq: Mapped[int] = mapped_column(Integer, nullable=False)
-    case_id: Mapped[str] = mapped_column(CHAR(RUN_ID_LEN), ForeignKey("review_case.case_id"), nullable=False)
+    case_id: Mapped[str] = mapped_column(
+        CHAR(RUN_ID_LEN), ForeignKey("review_case.case_id"), nullable=False
+    )
     run_id: Mapped[str] = mapped_column(CHAR(RUN_ID_LEN), ForeignKey("run.run_id"), nullable=False)
     account_key: Mapped[str] = mapped_column(CHAR(ACCOUNT_KEY_LEN), nullable=False)
     decision_seq: Mapped[int] = mapped_column(Integer, nullable=False)
@@ -1186,14 +1192,18 @@ class OutboxMessage(Base):
     outbox_id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
     idempotency_key: Mapped[str] = mapped_column(String(64), nullable=False)
     run_id: Mapped[str] = mapped_column(CHAR(RUN_ID_LEN), ForeignKey("run.run_id"), nullable=False)
-    case_id: Mapped[str] = mapped_column(CHAR(RUN_ID_LEN), ForeignKey("review_case.case_id"), nullable=False)
+    case_id: Mapped[str] = mapped_column(
+        CHAR(RUN_ID_LEN), ForeignKey("review_case.case_id"), nullable=False
+    )
     decision_seq: Mapped[int] = mapped_column(Integer, nullable=False)
     case_seq: Mapped[int] = mapped_column(Integer, nullable=False)
     sink_id: Mapped[str] = mapped_column(String(64), nullable=False)
     target_url: Mapped[str | None] = mapped_column(Text)
     schema_version: Mapped[str] = mapped_column(String(16), nullable=False)
     payload: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
-    status: Mapped[str] = mapped_column(String(16), nullable=False, server_default=text("'pending'"))
+    status: Mapped[str] = mapped_column(
+        String(16), nullable=False, server_default=text("'pending'")
+    )
     attempts: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
     max_attempts: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("5"))
     next_attempt_at: Mapped[datetime] = mapped_column(

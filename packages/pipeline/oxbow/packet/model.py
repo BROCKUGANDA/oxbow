@@ -29,6 +29,12 @@ from datetime import datetime
 from typing import Any, Final
 
 from oxbow.audit.chain import ChainRow
+from oxbow.packet.errors import (
+    AuditMismatchError,
+    EmptyDecisionReasonError,
+    MissingAssumptionLineError,
+    PinnedRunMismatchError,
+)
 from oxbow.ports.case_sink import (
     DECISION_ACTIONS,
     OXBOW_DISCLAIMER,
@@ -37,13 +43,6 @@ from oxbow.ports.case_sink import (
 )
 from oxbow.quant.economics import AssumptionBlock, Economics
 from oxbow.quant.money import Money, ratio_to_micro, to_major_text
-
-from oxbow.packet.errors import (
-    AuditMismatchError,
-    EmptyDecisionReasonError,
-    MissingAssumptionLineError,
-    PinnedRunMismatchError,
-)
 
 #: Bumped when the *layout contract* changes, not when a number changes. Printed on
 #: the cover so a reader can tell which packet renderer produced a document.
@@ -714,8 +713,7 @@ class PacketCase:
             ):
                 lines.append(
                     money_line(
-                        f"Modelled exposure if unactioned — {name} of the {span_pct} % "
-                        "interval",
+                        f"Modelled exposure if unactioned — {name} of the {span_pct} % " "interval",
                         Money(minor, econ.currency),
                         block=block,
                         basis=(

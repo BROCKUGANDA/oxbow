@@ -65,8 +65,7 @@ def chain(hops: int = 5) -> tuple[list[str], list[FlowEdge]]:
     """``hops`` movements of ``ARRIVAL`` each, in a line from ACC-A onwards."""
     accounts = [f"ACC-{chr(ord('A') + index)}" for index in range(hops + 1)]
     edges = [
-        edge(f"txn:{index}", accounts[index], accounts[index + 1], ARRIVAL)
-        for index in range(hops)
+        edge(f"txn:{index}", accounts[index], accounts[index + 1], ARRIVAL) for index in range(hops)
     ]
     return accounts, edges
 
@@ -79,9 +78,7 @@ def eight_way() -> tuple[list[str], list[FlowEdge]]:
     return accounts, edges
 
 
-def graph_from(
-    cfg: Economics, accounts: list[str], edges: list[FlowEdge], arrival: int = ARRIVAL
-):
+def graph_from(cfg: Economics, accounts: list[str], edges: list[FlowEdge], arrival: int = ARRIVAL):
     return build_propagation_graph(
         edges,
         component=accounts,
@@ -204,7 +201,10 @@ def test_transmission_probability_is_the_value_share(cfg: Economics) -> None:
     star = graph_from(
         cfg,
         star_accounts,
-        [edge("txn:heavy", "ACC-A", "ACC-H", 750_000), edge("txn:light", "ACC-A", "ACC-L", 250_000)],
+        [
+            edge("txn:heavy", "ACC-A", "ACC-H", 750_000),
+            edge("txn:light", "ACC-A", "ACC-L", 250_000),
+        ],
         arrival=1_000_000,
     )
     assert star.value_share == (0.75, 0.25)
@@ -254,9 +254,7 @@ def test_arrivals_at_one_account_are_merged_per_level(cfg: Economics) -> None:
         edge("txn:4", "ACC-C", "ACC-D", 3_000_000),
         edge("txn:5", "ACC-D", "ACC-E", 4_000_000),
     ]
-    graph = graph_from(
-        cfg, ["ACC-A", "ACC-B", "ACC-C", "ACC-D", "ACC-E"], edges, arrival=4_000_000
-    )
+    graph = graph_from(cfg, ["ACC-A", "ACC-B", "ACC-C", "ACC-D", "ACC-E"], edges, arrival=4_000_000)
     interval = simulate_exposure_interval(graph, cfg, max_depth=4)
     assert (interval.low.minor, interval.high.minor) == (0, 12_000_000)
 

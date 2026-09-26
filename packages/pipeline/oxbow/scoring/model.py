@@ -175,9 +175,7 @@ class ScorecardModel:
                     "strength": self.cfg.fit.regularisation_strength,
                 },
             },
-            "binning": {
-                name: binning.to_dict() for name, binning in sorted(self.binnings.items())
-            },
+            "binning": {name: binning.to_dict() for name, binning in sorted(self.binnings.items())},
             "selection": self.selection.to_dict(),
             "band_table": self.bands.to_dict(),
             "guard_log": self.guard_log.to_dict(),
@@ -247,8 +245,8 @@ def _column_values(frame: pl.DataFrame, feature: str, dtype: str) -> np.ndarray:
     column = frame.get_column(feature)
     if dtype == "categorical":
         return np.array(column.to_list(), dtype=object)
-    return column.cast(pl.Float64).fill_null(np.nan).to_numpy(zero_copy_only=False).astype(
-        np.float64
+    return (
+        column.cast(pl.Float64).fill_null(np.nan).to_numpy(zero_copy_only=False).astype(np.float64)
     )
 
 

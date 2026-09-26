@@ -117,9 +117,7 @@ def false_positive_rate_by_axis(
     for index in range(len(edges) - 1):
         low, high = edges[index], edges[index + 1]
         member_positions = [
-            i
-            for i, value in enumerate(array)
-            if not math.isnan(value) and low < value <= high
+            i for i, value in enumerate(array) if not math.isnan(value) and low < value <= high
         ]
         clean = [i for i in member_positions if accounts[i].label == 0]
         false_positives = [i for i in clean if accounts[i].account_key in reviewed]
@@ -217,8 +215,12 @@ def amount_shift_rank_correlation(
         for a in accounts
     ]
     rho = spearman_rank_correlation(nominal, shifted)
-    nominal_order = sorted(range(len(accounts)), key=lambda i: (-nominal[i], accounts[i].account_key))
-    shifted_order = sorted(range(len(accounts)), key=lambda i: (-shifted[i], accounts[i].account_key))
+    nominal_order = sorted(
+        range(len(accounts)), key=lambda i: (-nominal[i], accounts[i].account_key)
+    )
+    shifted_order = sorted(
+        range(len(accounts)), key=lambda i: (-shifted[i], accounts[i].account_key)
+    )
     top_nominal = set(nominal_order[:cutoff_rank])
     top_shifted = set(shifted_order[:cutoff_rank])
     return AmountShiftResult(

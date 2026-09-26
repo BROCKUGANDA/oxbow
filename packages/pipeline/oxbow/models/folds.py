@@ -138,9 +138,7 @@ def fold_plan_from_frame(
     if COL_ROLE not in data.columns:
         raise ModelLayerError("frame carries no role column; role assignment happens upstream")
     role_source = (
-        "splits_module"
-        if frame.validation_fraction == 0.0
-        else "derived_from_fold_and_as_of_ts"
+        "splits_module" if frame.validation_fraction == 0.0 else "derived_from_fold_and_as_of_ts"
     )
     plans: list[FoldPlan] = []
     for fold in frame.folds:

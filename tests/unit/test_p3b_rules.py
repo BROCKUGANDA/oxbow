@@ -200,7 +200,7 @@ def test_rules_are_not_allowed_to_import_adapters_or_http() -> None:
     # a rank; `scripts/no_float_money.py` owns the annotation audit, so this asserts the
     # one thing it cannot: that no amount column is ever cast on the way through.
     assert "amount_minor" in text
-    assert 'cast(pl.Float' not in text and "Float64" not in text
+    assert "cast(pl.Float" not in text and "Float64" not in text
 
 
 # ---------------------------------------------------------------------------
@@ -271,6 +271,7 @@ def test_r1_does_not_pair_across_currencies() -> None:
 # R2 / R3 fan in and out
 # ---------------------------------------------------------------------------
 
+
 # Background block: 30 large-value transfers, so the corpus p25 that R2's tau is fitted
 # from lands at 1_000_000 rather than among the nine gatherer amounts. Amounts sorted:
 # 18 rows at 1000 (two gatherers x nine senders), then the large rows; n = 30 + 18 + 2,
@@ -297,7 +298,13 @@ def test_r2_fires_on_many_small_senders_and_respects_the_tau_condition() -> None
         # the tau case would be decided by the external exclusion instead of by tau
         + [Row("pay", instant(6, 23), 3_000, "ACC-GATHER", "ACC-PAYEE")]
         + [
-            Row(f"w{i}", instant(7, i // 6, (i * 11) % 60), 5_000_000, f"ACC-WHALE{i}", "ACC-GATHER-W")
+            Row(
+                f"w{i}",
+                instant(7, i // 6, (i * 11) % 60),
+                5_000_000,
+                f"ACC-WHALE{i}",
+                "ACC-GATHER-W",
+            )
             for i in range(9)
         ]
         + [Row("payw", instant(7, 23), 3_000, "ACC-GATHER-W", "ACC-PAYEE2")]
@@ -317,7 +324,13 @@ def test_r2_window_is_sliding_not_calendar() -> None:
     # nine senders, but arrivals span 26 hours: any 24-hour window holds seven.
     # k = 8 -> must stay silent. Calendar day buckets would report 2+5+2 and could fire.
     rows = _background() + [
-        Row(f"v{i}", instant(9) + dt.timedelta(hours=[0, 0, 13, 13, 13, 13, 13, 26, 26][i]), 1_000, f"ACC-V{i}", "ACC-GATHER-V")
+        Row(
+            f"v{i}",
+            instant(9) + dt.timedelta(hours=[0, 0, 13, 13, 13, 13, 13, 26, 26][i]),
+            1_000,
+            f"ACC-V{i}",
+            "ACC-GATHER-V",
+        )
         for i in range(9)
     ]
     assert accounts(evaluate(frame(rows)), "R2") == set()
@@ -326,7 +339,10 @@ def test_r2_window_is_sliding_not_calendar() -> None:
 def test_r2_and_r3_exclude_self_transfers_and_count_them() -> None:
     # one account moving money to itself 45000 times the fan threshold: not a gather,
     # not a scatter, and the graph still has to report the self-transfer it dropped.
-    rows = [Row(f"self{i}", instant(0, i // 60, i % 60), 45_000, "ACC-SELF", "ACC-SELF") for i in range(12)]
+    rows = [
+        Row(f"self{i}", instant(0, i // 60, i % 60), 45_000, "ACC-SELF", "ACC-SELF")
+        for i in range(12)
+    ]
     result = evaluate(frame(rows))
     assert result.self_transfer_count == 12
     assert accounts(result, "R2") == set()
@@ -340,8 +356,14 @@ def test_r3_fires_on_nine_receivers_and_stops_at_seven() -> None:
     # decoy: 7 distinct receivers -> silent even though the volume is identical.
     result = evaluate(
         frame(
-            [Row(f"o{i}", instant(0, 0, i * 5), 30_000, "ACC-SCATTER", f"ACC-RECV{i}") for i in range(9)]
-            + [Row(f"d{i}", instant(1, 0, i * 5), 30_000, "ACC-SCATTER-N", f"ACC-DEC{i}") for i in range(7)]
+            [
+                Row(f"o{i}", instant(0, 0, i * 5), 30_000, "ACC-SCATTER", f"ACC-RECV{i}")
+                for i in range(9)
+            ]
+            + [
+                Row(f"d{i}", instant(1, 0, i * 5), 30_000, "ACC-SCATTER-N", f"ACC-DEC{i}")
+                for i in range(7)
+            ]
         )
     )
     assert accounts(result, "R3") == {"ACC-SCATTER"}
@@ -360,15 +382,16 @@ def test_rails_are_excluded_from_fan_rules_by_node_type() -> None:
         Row(f"g{i}", instant(0, 0, i), 500, f"ACC-POOL{i}", "ACC-HUB") for i in range(40)
     ] + [Row(f"p{i}", instant(1, 0, i), 500, "ACC-HUB", f"ACC-PAY{i}") for i in range(2)]
     background = [
-        Row(f"b{i}", instant(2, 0, i % 60), 2_000_000, f"ACC-Q{i}", f"ACC-Z{i}")
-        for i in range(130)
+        Row(f"b{i}", instant(2, 0, i % 60), 2_000_000, f"ACC-Q{i}", f"ACC-Z{i}") for i in range(130)
     ]
     events = frame(gathered + background)
     pipeline = load_pipeline_config(REPO_ROOT)
     graph = build_graph(events, pipeline)
     assert graph.stats.rail_degree_threshold == 1, graph.stats.degree_all_nodes
     assert graph.node_types["ACC-HUB"] == "rail"
-    rail_scored = evaluate_rules(events, graph, load_rules_settings(REPO_ROOT), enforce_hit_rate_ceiling=False)
+    rail_scored = evaluate_rules(
+        events, graph, load_rules_settings(REPO_ROOT), enforce_hit_rate_ceiling=False
+    )
     assert "ACC-HUB" not in accounts(rail_scored, "R2")
     assert rail_scored.thresholds[0].value == 2_000_000
 
@@ -438,9 +461,7 @@ def test_r4_seven_node_loop_is_excluded_by_length_only() -> None:
     # amounts flat, times increasing, seven distinct nodes > max_length 6.
     # Near-miss reasons must name length and nothing else.
     nodes = [f"ACC-N{i}" for i in range(7)]
-    rows = [
-        Row(f"l{i}", instant(0, i), 100_000, nodes[i], nodes[(i + 1) % 7]) for i in range(7)
-    ]
+    rows = [Row(f"l{i}", instant(0, i), 100_000, nodes[i], nodes[(i + 1) % 7]) for i in range(7)]
     result = evaluate(frame(rows))
     assert accounts(result, "R4") == set()
     assert [miss.reasons for miss in result.near_misses] == [("length_above_max_length",)]
@@ -487,7 +508,10 @@ def test_r4_periodic_payroll_ring_is_down_weighted_not_suppressed() -> None:
     assert hit.evidence["recurrence_period_hours"] == 168.0
     assert hit.evidence["distinct_lap_starts"] == 3
     # one pattern, one hit per account, even though three laps were observed
-    assert sum(1 for other in result.hits if other.rule_id == "R4" and other.account_key == "ACC-EMP") == 1
+    assert (
+        sum(1 for other in result.hits if other.rule_id == "R4" and other.account_key == "ACC-EMP")
+        == 1
+    )
 
 
 def test_r4_ignores_the_periodic_weight_when_config_turns_it_off() -> None:
@@ -556,10 +580,16 @@ def test_r4_default_policy_agrees_with_the_graph_engine() -> None:
     ]
     events = frame(rows)
     pipeline = load_pipeline_config(REPO_ROOT)
-    graph = build_graph(events, dataclasses.replace(pipeline, raw={
-        **pipeline.raw,
-        "graph": {**pipeline.raw["graph"], "rail_degree_percentile": 99.9},
-    }))
+    graph = build_graph(
+        events,
+        dataclasses.replace(
+            pipeline,
+            raw={
+                **pipeline.raw,
+                "graph": {**pipeline.raw["graph"], "rail_degree_percentile": 99.9},
+            },
+        ),
+    )
     assert graph.search.count == 1  # the A-B-C ring; X->Y->X is two legs, below min_length
     assert accounts(evaluate(events), "R4") == {"ACC-A", "ACC-B", "ACC-C"}
 
@@ -598,7 +628,15 @@ def test_r5_fires_on_a_ladder_and_is_ranked_by_count_and_tightness() -> None:
     #   tightness   = mean(amount/T) = 0.98; (0.98 - 0.80) / (1.00 - 0.80) = 0.90
     #   severity    = mean(0, 0.90) = 0.45
     rows = [
-        Row(f"a{i}", instant(i * 2, 9), 2_450_000, "ACC-SMURF", "ACC-AGENT", txn_type="CASH_OUT", channel="AGENT")
+        Row(
+            f"a{i}",
+            instant(i * 2, 9),
+            2_450_000,
+            "ACC-SMURF",
+            "ACC-AGENT",
+            txn_type="CASH_OUT",
+            channel="AGENT",
+        )
         for i in range(3)
     ]
     result = evaluate(frame(rows))
@@ -658,7 +696,9 @@ def test_r5_threshold_can_be_derived_from_the_histogram_mode() -> None:
 def test_threshold_fit_is_pinned_to_the_window_that_produced_it() -> None:
     # tau and T are both fitted, and both must carry the window they were fitted on: a
     # threshold with no provenance is indistinguishable from one tuned on the test set.
-    events = frame([Row(f"g{i}", instant(i), 1_000_000 + i, f"ACC-S{i}", f"ACC-D{i}") for i in range(8)])
+    events = frame(
+        [Row(f"g{i}", instant(i), 1_000_000 + i, f"ACC-S{i}", f"ACC-D{i}") for i in range(8)]
+    )
     fit_window = Window(start_us=0, end_us=10**18, label="train")
     result = evaluate(events, fit_window=fit_window)
     assert [fit.window.label for fit in result.thresholds] == ["train", "train"]
@@ -799,9 +839,9 @@ def test_r8_near_misses_share_and_minimum_volume() -> None:
     # three recent transactions in quiet hours: jump 0.30 < q 0.40
     assert accounts(evaluate(frame(_odd_hour_rows(3))), "R8") == set()
     # and fewer than min_transactions 10 recent rows at all, whatever the share
-    thin = [
-        Row(f"b{i}", instant(i, 7), 25_000, "ACC-FEW", "ACC-FP") for i in range(10)
-    ] + [Row(f"n{i}", instant(40, 21 + (i % 2)), 25_000, "ACC-FEW", "ACC-FP") for i in range(5)]
+    thin = [Row(f"b{i}", instant(i, 7), 25_000, "ACC-FEW", "ACC-FP") for i in range(10)] + [
+        Row(f"n{i}", instant(40, 21 + (i % 2)), 25_000, "ACC-FEW", "ACC-FP") for i in range(5)
+    ]
     assert accounts(evaluate(frame(thin)), "R8") == set()
 
 
@@ -846,7 +886,9 @@ def test_r9_near_miss_inside_the_band_and_collapse_side() -> None:
     ] + [Row(f"e{i}", instant(40 + i, 1), 200_000, "ACC-REG-L", "ACC-RQ") for i in range(5)]
     result = evaluate(frame(collapsed))
     assert accounts(result, "R9") == {"ACC-REG-L"}
-    assert float(only(result, "R9", "ACC-REG-L").evidence["observation"]) == pytest.approx(0.2, abs=1e-9)
+    assert float(only(result, "R9", "ACC-REG-L").evidence["observation"]) == pytest.approx(
+        0.2, abs=1e-9
+    )
 
 
 def test_log_band_severity_is_symmetric_around_one() -> None:
@@ -865,8 +907,24 @@ def test_r10_fires_on_the_episode_total_not_a_single_withdrawal() -> None:
     # severity = (0.775 - 0.70)/(1 - 0.70) = 0.075/0.30 = 0.25
     rows = [
         Row("i1", instant(0, 6), 800_000, "ACC-IN", "ACC-CASH"),
-        Row("o1", instant(0, 8), 320_000, "ACC-CASH", "ACC-ATM", txn_type="CASH_OUT", channel="AGENT"),
-        Row("o2", instant(0, 10), 300_000, "ACC-CASH", "ACC-ATM", txn_type="CASH_OUT", channel="AGENT"),
+        Row(
+            "o1",
+            instant(0, 8),
+            320_000,
+            "ACC-CASH",
+            "ACC-ATM",
+            txn_type="CASH_OUT",
+            channel="AGENT",
+        ),
+        Row(
+            "o2",
+            instant(0, 10),
+            300_000,
+            "ACC-CASH",
+            "ACC-ATM",
+            txn_type="CASH_OUT",
+            channel="AGENT",
+        ),
     ]
     result = evaluate(frame(rows))
     assert accounts(result, "R10") == {"ACC-CASH"}
@@ -903,15 +961,19 @@ def test_r11_fires_on_a_first_time_surge() -> None:
 def test_r11_near_misses_share_and_count() -> None:
     # six counterparties inside the window, two of which are returning from an earlier
     # encounter -> share 4/6 = 0.667 < g 0.80 even though the count clears c.
-    returning = [
-        Row(f"r{i}", instant(0, 0, i), 40_000, "ACC-SURGE-A", f"ACC-OLD{i}") for i in range(2)
-    ] + [
-        Row(f"m{i}", instant(30, 0, i), 40_000, "ACC-SURGE-A", f"ACC-OLD{i}") for i in range(2)
-    ] + [
-        Row(f"n{i}", instant(30, 0, 10 + i), 40_000, "ACC-SURGE-A", f"ACC-NEW{i}") for i in range(4)
-    ]
+    returning = (
+        [Row(f"r{i}", instant(0, 0, i), 40_000, "ACC-SURGE-A", f"ACC-OLD{i}") for i in range(2)]
+        + [Row(f"m{i}", instant(30, 0, i), 40_000, "ACC-SURGE-A", f"ACC-OLD{i}") for i in range(2)]
+        + [
+            Row(f"n{i}", instant(30, 0, 10 + i), 40_000, "ACC-SURGE-A", f"ACC-NEW{i}")
+            for i in range(4)
+        ]
+    )
     # five fresh counterparties in one window: share 1.0, count 5 < c 6.
-    few = [Row(f"f{i}", instant(60, 0, i * 4), 40_000, "ACC-SURGE-B", f"ACC-FRESH{i}") for i in range(5)]
+    few = [
+        Row(f"f{i}", instant(60, 0, i * 4), 40_000, "ACC-SURGE-B", f"ACC-FRESH{i}")
+        for i in range(5)
+    ]
     assert accounts(evaluate(frame(returning + few)), "R11") == set()
 
 
@@ -922,9 +984,7 @@ def test_r11_reads_pair_history_from_either_side() -> None:
     # one that received. Fresh 4 of 8 -> share 0.50 < g 0.80 -> silent.
     met_before = [
         Row(f"p{i}", instant(0, 0, i), 40_000, f"ACC-OLD{i}", "ACC-HUB") for i in range(4)
-    ] + [
-        Row(f"r{i}", instant(30, 0, 40 + i), 40_000, f"ACC-OLD{i}", "ACC-HUB") for i in range(4)
-    ]
+    ] + [Row(f"r{i}", instant(30, 0, 40 + i), 40_000, f"ACC-OLD{i}", "ACC-HUB") for i in range(4)]
     brand_new = [
         Row(f"n{i}", instant(30, 0, i), 40_000, f"ACC-NEW{i}", "ACC-HUB") for i in range(4)
     ]
@@ -1001,7 +1061,9 @@ def test_r12_reversal_does_not_extend_a_chain() -> None:
     baseline = evaluate(frame(rows))
     assert len(accounts(baseline, "R12")) == 5
     with_refund = evaluate(
-        frame([*rows, Row("m5", instant(0, 12), 814506, "ACC-RV-5", "ACC-RV-1", txn_type="REVERSAL")])
+        frame(
+            [*rows, Row("m5", instant(0, 12), 814506, "ACC-RV-5", "ACC-RV-1", txn_type="REVERSAL")]
+        )
     )
     # the refund is not a hop: the chain stays five nodes long rather than closing a ring
     assert len(accounts(with_refund, "R12")) == 5
@@ -1036,7 +1098,9 @@ def test_overlapping_rules_are_counted_once_per_account() -> None:
 
 def test_overlap_grouping_is_config_driven_not_a_blanket_dedupe() -> None:
     # FAN_OUT is in no group, so a scatter account that also surges keeps two units.
-    rows = [Row(f"p{i}", instant(0, 0, i * 4), 30_000, "ACC-SCATTER-X", f"ACC-T{i}") for i in range(9)]
+    rows = [
+        Row(f"p{i}", instant(0, 0, i * 4), 30_000, "ACC-SCATTER-X", f"ACC-T{i}") for i in range(9)
+    ]
     result = evaluate(frame(rows))
     assert accounts(result, "R3") == {"ACC-SCATTER-X"}
     assert accounts(result, "R11") == {"ACC-SCATTER-X"}
@@ -1085,7 +1149,14 @@ def test_a_ladder_across_midnight_is_detected_once() -> None:
     # three in-band withdrawals at 23:00, 23:50 and 00:40 the next day: the pattern
     # straddles the day boundary, and one ladder has to be reported.
     rows = [
-        Row(f"m{i}", instant(0, hour, minute), 2_400_000, "ACC-MID", "ACC-AGENT", txn_type="CASH_OUT")
+        Row(
+            f"m{i}",
+            instant(0, hour, minute),
+            2_400_000,
+            "ACC-MID",
+            "ACC-AGENT",
+            txn_type="CASH_OUT",
+        )
         for i, (hour, minute) in enumerate([(23, 0), (23, 50), (24, 40)])
     ]
     result = evaluate(frame(rows))
@@ -1192,7 +1263,9 @@ def test_money_stays_integer_across_the_whole_layer() -> None:
 
 
 def test_result_ordering_is_deterministic_and_tie_broken() -> None:
-    rows = [Row(f"o{i}", instant(0, 0, i * 3), 30_000, "ACC-SCATTER", f"ACC-RECV{i}") for i in range(9)]
+    rows = [
+        Row(f"o{i}", instant(0, 0, i * 3), 30_000, "ACC-SCATTER", f"ACC-RECV{i}") for i in range(9)
+    ]
     events = frame(rows)
     first, second = evaluate(events), evaluate(events)
     assert [hit.sort_key() for hit in first.hits] == sorted(hit.sort_key() for hit in first.hits)

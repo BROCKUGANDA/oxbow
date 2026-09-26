@@ -88,9 +88,7 @@ class ResumeCursor:
         return self.requested_last_id is not None
 
 
-def read_cursor(
-    last_event_id_header: str | None, last_event_id_query: int | None
-) -> ResumeCursor:
+def read_cursor(last_event_id_header: str | None, last_event_id_query: int | None) -> ResumeCursor:
     """Parse ``Last-Event-ID`` into a cursor, preferring the header EventSource sends.
 
     A non-integer value is a 400 naming the bad input rather than a silent 0: starting
@@ -176,7 +174,11 @@ def stream_events(
     while True:
         run = read_model.run_row(run_id)
         state = str(run["state"])
-        fresh = [event for event in load_backfill(read_model, run_id, ResumeCursor(last, None, "poll")) if event.id > last]
+        fresh = [
+            event
+            for event in load_backfill(read_model, run_id, ResumeCursor(last, None, "poll"))
+            if event.id > last
+        ]
         for event in fresh:
             last = event.id
             sent += 1
@@ -245,7 +247,9 @@ def meta_for(container: Container, read_model: ReadModel, run_id: str, **extra: 
         generated_at=datetime.now(UTC),
         disclaimer=read_model.disclaimer(),
         degraded=container.status() != "ok",
-        degraded_reason=None if container.status() == "ok" else ", ".join(container.degraded_components()),
+        degraded_reason=None
+        if container.status() == "ok"
+        else ", ".join(container.degraded_components()),
         **extra,
     )
 
@@ -268,7 +272,9 @@ def run_event_ledger(
     container: Container = Depends(get_container),
     principal: Principal = Depends(analyst_or_higher),
 ) -> dict[str, Any]:
-    cursor = ResumeCursor(after_id=last_event_id or 0, requested_last_id=last_event_id, source="query")
+    cursor = ResumeCursor(
+        after_id=last_event_id or 0, requested_last_id=last_event_id, source="query"
+    )
     read_model = container.read_model
     run = read_model.run_row(run_id)
     events = load_backfill(read_model, run_id, cursor)
@@ -291,7 +297,9 @@ def run_event_ledger(
         **problem_responses(COMMON_ERROR_STATUSES),
         200: {
             "description": "An ``text/event-stream`` of ``StageEvent`` frames.",
-            "content": {"text/event-stream": {"schema": {"$ref": "#/components/schemas/StageEvent"}}},
+            "content": {
+                "text/event-stream": {"schema": {"$ref": "#/components/schemas/StageEvent"}}
+            },
         },
     },
 )

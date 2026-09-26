@@ -70,9 +70,7 @@ def test_stage_verbs_do_the_work_or_refuse_loudly(tmp_path: Path) -> None:
     assert dry.exit_code == 0, dry.output
     assert "NOT IMPLEMENTED" not in dry.output, dry.output
 
-    refused = CliRunner().invoke(
-        app, ["graph", "--config-dir", str(tmp_path / "config")]
-    )
+    refused = CliRunner().invoke(app, ["graph", "--config-dir", str(tmp_path / "config")])
     assert refused.exit_code == 2, refused.output
     assert "REFUSED" in refused.output, refused.output
 

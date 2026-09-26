@@ -74,7 +74,9 @@ def require_optional_float(mapping: Mapping[str, object], path: str) -> float | 
     if value is None:
         return None
     if isinstance(value, bool) or not isinstance(value, int | float):
-        raise ConfigError(f"config key '{path}' must be a number or null, got {type(value).__name__}")
+        raise ConfigError(
+            f"config key '{path}' must be a number or null, got {type(value).__name__}"
+        )
     return float(value)
 
 
@@ -453,7 +455,9 @@ def load_scorecard_config(root: Path | None = None) -> ScorecardConfig:
         max_abs_correlation_with_label=require_float(raw, "fit.max_abs_correlation_with_label"),
     )
     if fit.regularisation not in {"l1", "l2", "elasticnet", "none"}:
-        raise ConfigError(f"fit.regularisation must be l1/l2/elasticnet/none, got {fit.regularisation!r}")
+        raise ConfigError(
+            f"fit.regularisation must be l1/l2/elasticnet/none, got {fit.regularisation!r}"
+        )
     if fit.regularisation == "none":
         # Plan §10: regularisation is ON by default precisely because separation
         # diverges an unregularised fit. Turning it off must be a config edit with a
@@ -489,8 +493,10 @@ def load_scorecard_config(root: Path | None = None) -> ScorecardConfig:
             "example in plan §10 gives risky bins negative points, which fixes the scale direction"
         )
     if bands.fit_on != "validation":
-        raise ConfigError("bands.fit_on must be 'validation': fitting bands on the fold you "
-                          "report on is the leakage the split exists to prevent")
+        raise ConfigError(
+            "bands.fit_on must be 'validation': fitting bands on the fold you "
+            "report on is the leakage the split exists to prevent"
+        )
 
     reasons = ReasonConfig(
         top_n=require_int(raw, "reason_codes.top_n"),
@@ -525,7 +531,9 @@ def load_scorecard_config(root: Path | None = None) -> ScorecardConfig:
         hash_algorithm=require_str(raw, "determinism.hash_algorithm"),
     )
     if determinism.tie_break[-1] != "account_key":
-        raise ConfigError("determinism.tie_break must end in account_key or queue order is not total")
+        raise ConfigError(
+            "determinism.tie_break must end in account_key or queue order is not total"
+        )
 
     return ScorecardConfig(
         root=repo_root,

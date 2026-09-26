@@ -67,7 +67,9 @@ class Notification:
                 "A queue that sorts on an unknown severity silently sorts last."
             )
         if not self.title.strip() or not self.body.strip():
-            raise ValueError("a notification must carry a title and a body; empty text is a bug, not a message")
+            raise ValueError(
+                "a notification must carry a title and a body; empty text is a bug, not a message"
+            )
         if self.money_minor is not None and not (self.currency and self.assumptions):
             raise ValueError(
                 "a money figure in a notification must carry its currency and assumptions "

@@ -129,9 +129,7 @@ def top_reason_codes(
     makes the sentence checkable against the points table.
     """
     negatives = [
-        (points, feature)
-        for feature, points in points_by_feature.items()
-        if int(points) < 0
+        (points, feature) for feature, points in points_by_feature.items() if int(points) < 0
     ]
     # Total order: most negative first, then the feature name. A reason list that
     # shuffled between runs would look like the model had changed.

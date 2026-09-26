@@ -177,9 +177,7 @@ class KernelCache:
         cached = self.sizes.get(key)
         if cached is None:
             cached = (
-                subset.group_by(list(groups), maintain_order=True)
-                .len()
-                .rename({"len": GROUP_ROWS})
+                subset.group_by(list(groups), maintain_order=True).len().rename({"len": GROUP_ROWS})
             )
             self.sizes[key] = cached
         return cached
@@ -380,9 +378,7 @@ def _window_totals(
         ROWS: (head[ROWS].fill_null(0) - tail["_b_rows"].fill_null(0)).cast(pl.Int64)
     }
     for name in names:
-        out[name] = (
-            head[f"c_{name}"].fill_null(0) - tail[f"b_{name}"].fill_null(0)
-        ).cast(pl.Int64)
+        out[name] = (head[f"c_{name}"].fill_null(0) - tail[f"b_{name}"].fill_null(0)).cast(pl.Int64)
     return out
 
 
@@ -663,7 +659,9 @@ def _kind_window_agg(work: pl.DataFrame, entry: FeatureSpec, context: KernelCont
     return filled.cast(entry.polars_dtype, strict=True).rename(entry.id)
 
 
-def _kind_forward_window(work: pl.DataFrame, entry: FeatureSpec, context: KernelContext) -> pl.Series:
+def _kind_forward_window(
+    work: pl.DataFrame, entry: FeatureSpec, context: KernelContext
+) -> pl.Series:
     """Aggregate over [cutoff, cutoff + window): the outcome side, never a model input.
 
     Exposure E_i is defined by plan §11 as the value still interceptable *after* the
@@ -765,7 +763,9 @@ def _kind_cumulative_distinct(
     return totals.rename(entry.id)
 
 
-def _kind_first_seen_flag(work: pl.DataFrame, entry: FeatureSpec, context: KernelContext) -> pl.Series:
+def _kind_first_seen_flag(
+    work: pl.DataFrame, entry: FeatureSpec, context: KernelContext
+) -> pl.Series:
     """1 on the row that first ever pairs this partition with the subject."""
     if entry.subject is None:
         raise KernelError(f"feature {entry.id}: first_seen_flag needs a subject")
@@ -786,7 +786,9 @@ def _kind_quotient_int(work: pl.DataFrame, entry: FeatureSpec, context: KernelCo
     kept share than it is.
     """
     if entry.numerator is None or entry.denominator is None or not entry.scale:
-        raise KernelError(f"feature {entry.id}: quotient_int needs numerator, denominator and scale")
+        raise KernelError(
+            f"feature {entry.id}: quotient_int needs numerator, denominator and scale"
+        )
     power = entry.denominator_power or 1
     numerator = pl.col(entry.numerator).cast(pl.Int64)
     denominator = pl.col(entry.denominator).cast(pl.Int64)
@@ -862,7 +864,9 @@ def _kind_float_stat(work: pl.DataFrame, entry: FeatureSpec, context: KernelCont
         raise KernelError(f"feature {entry.id}: float_stat needs a trailing reference window")
     population = _filtered(work, _resolve_where(entry, work))
     stat_source = source_column(entry.source or "")
-    population = population.with_columns(pl.col(stat_source).alias(stat_source)) if False else population
+    population = (
+        population.with_columns(pl.col(stat_source).alias(stat_source)) if False else population
+    )
     if formula == "benford_dev":
         # Benford's law makes log10 of the mantissa uniform on [0,1), so its mean is 0.5.
         # One running mean answers the question; a chi-square over a digit histogram would
@@ -876,8 +880,14 @@ def _kind_float_stat(work: pl.DataFrame, entry: FeatureSpec, context: KernelCont
         pair = pl.DataFrame({"s": totals["_mantissa_log"], "n": totals[ROWS]})
         scored = pair.select(
             (
-                ((pl.when(pl.col("n") > 0).then(pl.col("s").cast(pl.Float64) / pl.col("n")).otherwise(None)) - 0.5)
-                .abs()
+                (
+                    (
+                        pl.when(pl.col("n") > 0)
+                        .then(pl.col("s").cast(pl.Float64) / pl.col("n"))
+                        .otherwise(None)
+                    )
+                    - 0.5
+                ).abs()
                 * 2.0
             )
             .clip(0.0, 1.0)
@@ -1048,7 +1058,9 @@ def _prejoined(work: pl.DataFrame, entry: FeatureSpec) -> pl.Series:
             f"feature {entry.id}: the builder supplied no fold-scoped column {column}. Graph "
             "and rule features are read from a fold-sealed table or not at all."
         )
-    return work.select(pl.col(column).cast(entry.polars_dtype, strict=False).alias(entry.id))[entry.id]
+    return work.select(pl.col(column).cast(entry.polars_dtype, strict=False).alias(entry.id))[
+        entry.id
+    ]
 
 
 Kernel = Callable[[pl.DataFrame, FeatureSpec, KernelContext], pl.Series]
@@ -1114,19 +1126,19 @@ __all__ = [
     "ENTITY",
     "EVENT_TS",
     "KIND_IMPLEMENTATIONS",
-    "KernelContext",
-    "KernelError",
-    "PREDICATE_PREFIX",
     "POSITION",
+    "PREDICATE_PREFIX",
     "ROW_UNIT",
     "ROW_VALUE_PREFIX",
     "TXN_ID",
+    "KernelContext",
+    "KernelError",
     "dispatch",
     "fold_column",
     "group_column",
     "partition_columns",
-    "source_column",
     "predicate_column",
     "row_value_column",
+    "source_column",
     "window_totals",
 ]

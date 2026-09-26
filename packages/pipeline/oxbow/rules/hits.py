@@ -231,7 +231,11 @@ class RuleHitRate:
         return (
             f"{self.rule_id:<4} {self.rule_name:<24} hits={self.accounts_hit:>6}/{self.accounts_scored:<6} "
             f"rate={self.hit_rate:>7.4f}  {self.status}"
-            + ("" if self.suggestion is None else f" -> {self.suggestion.param}={self.suggestion.suggested}")
+            + (
+                ""
+                if self.suggestion is None
+                else f" -> {self.suggestion.param}={self.suggestion.suggested}"
+            )
             + ("" if self.note is None else f"  [{self.note}]")
         )
 
@@ -332,7 +336,9 @@ class RuleResult:
         visible.
         """
         collapsed = {
-            (group.account_key, rule_id) for group in self.evidence_groups for rule_id in group.rule_ids
+            (group.account_key, rule_id)
+            for group in self.evidence_groups
+            for rule_id in group.rule_ids
         }
         units = 0
         seen_groups: set[tuple[str, str]] = set()
@@ -385,10 +391,7 @@ class RuleResult:
 
     def hit_rate_table(self) -> str:
         """The printed report §9 asks for every run. Sorted by rule id, always twelve rows."""
-        header = (
-            f"{'id':<4} {'rule':<24} {'hits/scored':>14} {'rate':>9}  status"
-            f"\n{'-' * 78}"
-        )
+        header = f"{'id':<4} {'rule':<24} {'hits/scored':>14} {'rate':>9}  status" f"\n{'-' * 78}"
         return "\n".join([header, *(row.as_row() for row in self.hit_rates)])
 
 
@@ -406,9 +409,7 @@ def deduplicate_by_signature(hits: Iterable[RuleHit]) -> tuple[RuleHit, ...]:
         if current is None:
             merged[key] = hit
             continue
-        best, loser = (
-            (current, hit) if current.severity >= hit.severity else (hit, current)
-        )
+        best, loser = (current, hit) if current.severity >= hit.severity else (hit, current)
         union = sorted({*best.txn_ids, *loser.txn_ids})
         evidence = dict(best.evidence)
         evidence[TXN_IDS_KEY] = union
@@ -494,7 +495,9 @@ def build_hit_rate_report(
                     accounts_hit=accounts_hit,
                     accounts_scored=accounts_scored,
                     ceiling=settings.hit_rate_ceiling,
-                    suggested_params={} if suggestion is None else {suggestion.param: suggestion.suggested},
+                    suggested_params={}
+                    if suggestion is None
+                    else {suggestion.param: suggestion.suggested},
                 )
             )
         elif rate < settings.hit_rate_floor:

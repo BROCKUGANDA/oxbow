@@ -82,7 +82,9 @@ def economics() -> tuple[Economics, AssumptionBlock]:
 
 
 @pytest.fixture(scope="module")
-def workspace(tmp_path_factory: pytest.TempPathFactory, economics: tuple[Economics, AssumptionBlock]) -> dict[str, Any]:
+def workspace(
+    tmp_path_factory: pytest.TempPathFactory, economics: tuple[Economics, AssumptionBlock]
+) -> dict[str, Any]:
     """A landed packet workspace: graph artifact, chain, bundles, run ledger, scored rows."""
     econ, block = economics
     root = tmp_path_factory.mktemp("p9-workspace")
@@ -321,9 +323,7 @@ def test_superseded_run_stamp_reaches_the_cover(
         run_id=RUN_A,
         decided_on_superseded_run=True,
     )
-    fixture = packet_fixture(
-        tmp_path / "superseded", economics=econ, block=block, bundles=[bundle]
-    )
+    fixture = packet_fixture(tmp_path / "superseded", economics=econ, block=block, bundles=[bundle])
     html = compose_packet(_case(fixture)).html
     cover = html.split('<table class="facts">')[1].split("</table>")[0]
     assert "decided_on_superseded_run" in cover
@@ -654,9 +654,7 @@ def test_scorecard_explained_is_labelled_as_a_different_explanation(
             "rows": [{"feature": "pass_through_ratio", "value": -48.0}],
         },
     )
-    fixture = packet_fixture(
-        tmp_path / "fallback", economics=econ, block=block, bundles=[bundle]
-    )
+    fixture = packet_fixture(tmp_path / "fallback", economics=econ, block=block, bundles=[bundle])
     case = build_packet_case(
         Path(fixture["case_sink"]) / f"{bundle.idempotency_key}.json",
         graph_artifact_dir=fixture["graph_dir"],
@@ -733,7 +731,9 @@ def test_recovery_rate_outside_the_configured_band_is_refused(tmp_path: Path) ->
         )
 
 
-def test_written_packet_files_are_utf8_and_self_contained(workspace: dict[str, Any], tmp_path: Path) -> None:
+def test_written_packet_files_are_utf8_and_self_contained(
+    workspace: dict[str, Any], tmp_path: Path
+) -> None:
     """The HTML carries its stylesheet, so the artifact renders without a directory."""
     case = _case(workspace)
     composed = compose_packet(case)
@@ -780,9 +780,9 @@ def _ts_constant(source: str, name: str) -> str:
     start = source.index(f"export const {name} =")
     end = source.index(";", start)
     chunks = source[start:end].split("'")[1::2]
-    assert all("\\" not in chunk for chunk in chunks), (
-        f"{name} uses a TS escape, which this reader does not decode"
-    )
+    assert all(
+        "\\" not in chunk for chunk in chunks
+    ), f"{name} uses a TS escape, which this reader does not decode"
     return "".join(chunks)
 
 
@@ -796,33 +796,37 @@ def test_disclaimer_present_everywhere(workspace: dict[str, Any]) -> None:
     case = _case(workspace)
     composed = compose_packet(case)
     cover = composed.html[: composed.html.index("</header>")]
-    assert _normalise(PLAN_DISCLAIMER) == _normalise(OXBOW_DISCLAIMER), (
-        "the constant is no longer plan §15's text verbatim"
-    )
-    assert _normalise(OXBOW_DISCLAIMER) in _normalise(cover), (
-        "the disclaimer is not on page one (the cover section) of the rendered packet"
-    )
+    assert _normalise(PLAN_DISCLAIMER) == _normalise(
+        OXBOW_DISCLAIMER
+    ), "the constant is no longer plan §15's text verbatim"
+    assert _normalise(OXBOW_DISCLAIMER) in _normalise(
+        cover
+    ), "the disclaimer is not on page one (the cover section) of the rendered packet"
 
     readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
-    assert _normalise(OXBOW_DISCLAIMER) in _normalise(readme), (
-        "README.md does not carry the disclaimer"
-    )
+    assert _normalise(OXBOW_DISCLAIMER) in _normalise(
+        readme
+    ), "README.md does not carry the disclaimer"
     for needle, why in (
         ("Lopez-Rojas", "the PaySim citation (plan §15 requires author + EMSS 2016)"),
         ("CDLA-Sharing", "IBM-AML's share-alike licence obligation"),
-        ("config/economics.yaml", "the statement that money figures depend on the "
-         "recovery-rate and cost assumptions, and that those are illustrative"),
-        ("illustrative scenario dressing", "the note that any East-African "
-         "mobile-money framing is scenario dressing over permitted public data"),
+        (
+            "config/economics.yaml",
+            "the statement that money figures depend on the "
+            "recovery-rate and cost assumptions, and that those are illustrative",
+        ),
+        (
+            "illustrative scenario dressing",
+            "the note that any East-African "
+            "mobile-money framing is scenario dressing over permitted public data",
+        ),
     ):
         assert needle in readme, f"README.md is missing {why}: no {needle!r}"
 
-    copy_ts = (REPO_ROOT / "apps" / "web" / "src" / "lib" / "copy.ts").read_text(
-        encoding="utf-8"
-    )
-    assert _normalise(_ts_constant(copy_ts, "DISCLAIMER")) == _normalise(OXBOW_DISCLAIMER), (
-        "apps/web/src/lib/copy.ts DISCLAIMER has drifted from the canonical text"
-    )
+    copy_ts = (REPO_ROOT / "apps" / "web" / "src" / "lib" / "copy.ts").read_text(encoding="utf-8")
+    assert _normalise(_ts_constant(copy_ts, "DISCLAIMER")) == _normalise(
+        OXBOW_DISCLAIMER
+    ), "apps/web/src/lib/copy.ts DISCLAIMER has drifted from the canonical text"
     shell = (REPO_ROOT / "apps" / "web" / "src" / "components" / "Shell.tsx").read_text(
         encoding="utf-8"
     )

@@ -86,7 +86,9 @@ def dumps(value: Any) -> str:
     Sorted keys are not cosmetic here — the audit chain digests this exact
     encoding, so two writes of the same mapping must produce the same bytes.
     """
-    return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False, default=_json_default)
+    return json.dumps(
+        value, sort_keys=True, separators=(",", ":"), ensure_ascii=False, default=_json_default
+    )
 
 
 def pretty(value: Any) -> str:

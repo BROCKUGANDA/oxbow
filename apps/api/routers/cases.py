@@ -115,7 +115,10 @@ def case_detail(
         allow_missing=True,
     )
     rule_hits, _ = source.select(
-        "rule_hit", where={"run_id": run_id, "account_key": account_key}, order="rule_id", allow_missing=True
+        "rule_hit",
+        where={"run_id": run_id, "account_key": account_key},
+        order="rule_id",
+        allow_missing=True,
     )
     evidence, _ = source.select(
         "evidence_event",
@@ -125,9 +128,7 @@ def case_detail(
         limit=EVIDENCE_CAP,
         allow_missing=True,
     )
-    transactions, txn_total = _transactions(
-        source, run_id, account_key, transaction_limit
-    )
+    transactions, txn_total = _transactions(source, run_id, account_key, transaction_limit)
     allocation_rows, _ = source.select(
         "policy_allocation",
         where={"run_id": run_id, "account_key": account_key},
@@ -141,7 +142,8 @@ def case_detail(
         case_id=str(case["case_id"]),
         pinned_run_id=run_id,
         run_state=str(run["state"]),
-        superseded=str(run["run_id"]) != str(read_model.resolve_run(None, state="complete")["run_id"]),
+        superseded=str(run["run_id"])
+        != str(read_model.resolve_run(None, state="complete")["run_id"]),
         account_key=account_key,
         band=str(score["band"]),
         fused_score=float(score["fused_score"]),
@@ -157,11 +159,11 @@ def case_detail(
         model_version=str(score["model_version"]),
         reason_codes=list(score.get("reason_codes") or []),
         rule_ids=list(score.get("rule_ids") or []),
-        economics=_economics_block(economic, decimals=decimals, assumptions_config=container.economics),
+        economics=_economics_block(
+            economic, decimals=decimals, assumptions_config=container.economics
+        ),
         evidence=[EvidenceRow.model_validate(row) for row in evidence],
-        transactions=[
-            _transaction_row(row, decimals=decimals) for row in transactions
-        ],
+        transactions=[_transaction_row(row, decimals=decimals) for row in transactions],
         transaction_total=txn_total,
         shap=[ShapRow.model_validate(row) for row in shap],
         rule_hits=[RuleHitRow.model_validate(row) for row in rule_hits],
@@ -170,7 +172,9 @@ def case_detail(
         case_version=int(case["version"]),
         status=str(case["status"]),
         rank_under_active_policy=None if not allocation_rows else int(allocation_rows[0]["rank"]),
-        counterfactual=counterfactual(read_model, run_id=run_id, account_key=account_key, points=points),
+        counterfactual=counterfactual(
+            read_model, run_id=run_id, account_key=account_key, points=points
+        ),
     )
     return envelope(
         body,
@@ -297,7 +301,8 @@ def _decisions(container: Container, case_id: str) -> list[dict[str, Any]]:
                 "actor_roles": row["actor_roles"],
                 "occurred_at": row["occurred_at"],
                 "exposure": money(
-                    int(row["exposure_minor"]), str(row["currency"]),
+                    int(row["exposure_minor"]),
+                    str(row["currency"]),
                     decimals=container.economics.minor_units_per_major,
                 ),
                 "four_eyes_required": bool(row["four_eyes_required"]),
@@ -318,7 +323,9 @@ def _economics_block(
 ) -> EconomicsBlock:
     assumptions = dict(economic.get("assumptions") or {})
     return EconomicsBlock(
-        exposure=money(int(economic["exposure_minor"]), str(economic["currency"]), decimals=decimals),
+        exposure=money(
+            int(economic["exposure_minor"]), str(economic["currency"]), decimals=decimals
+        ),
         expected_value=money(
             int(economic["expected_value_minor"]), str(economic["currency"]), decimals=decimals
         ),

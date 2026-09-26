@@ -38,10 +38,8 @@ from zoneinfo import ZoneInfo
 
 import jinja2
 from markupsafe import Markup
-from oxbow.audit.chain import ChainVerification, verify_chain
-from oxbow.ports.case_sink import OXBOW_DISCLAIMER
-from oxbow.quant.money import to_major_text
 
+from oxbow.audit.chain import ChainVerification, verify_chain
 from oxbow.packet.errors import (
     ChainIntegrityError,
     PacketError,
@@ -53,6 +51,8 @@ from oxbow.packet.subgraph_image import (
     render_subgraph_svg,
     value_basis_lines,
 )
+from oxbow.ports.case_sink import OXBOW_DISCLAIMER
+from oxbow.quant.money import to_major_text
 
 TEMPLATE_DIR: Final = Path(__file__).parent / "templates"
 TEMPLATE_NAME: Final = "case_packet.html.j2"
@@ -278,8 +278,7 @@ def compose_packet(case: PacketCase) -> ComposedPacket:
         per_major=case.economics.minor_units_per_major,
         band_letter=case.bundle.score.band,
         title=(
-            f"Subgraph for {case.account_key} in case {case.case_id}, "
-            f"run {case.bundle.run_id}"
+            f"Subgraph for {case.account_key} in case {case.case_id}, " f"run {case.bundle.run_id}"
         ),
     )
     context: dict[str, object] = {
@@ -315,16 +314,16 @@ def compose_packet(case: PacketCase) -> ComposedPacket:
         "chain_head_hash": case.chain[-1].row_hash if case.chain else "",
         "evidence_totals": case.evidence.totals_by_currency(),
         "format_instant": lambda value: format_instant(value, zone),
-        "iso_instant": lambda value: value.astimezone(UTC)
-        .isoformat()
-        .replace("+00:00", "Z"),
+        "iso_instant": lambda value: value.astimezone(UTC).isoformat().replace("+00:00", "Z"),
         "per_major": case.economics.minor_units_per_major,
     }
     try:
         template = _environment().get_template(TEMPLATE_NAME)
         html = template.render(**context)
     except jinja2.UndefinedError as exc:  # StrictUndefined makes this the only failure mode
-        raise TemplateRenderError(f"the packet template asked for a value that is not there: {exc}") from exc
+        raise TemplateRenderError(
+            f"the packet template asked for a value that is not there: {exc}"
+        ) from exc
     return ComposedPacket(stem=packet_stem(case), html=html, svg=image)
 
 
@@ -416,7 +415,7 @@ def _write_pdf(html: str, target: Path, *, case: PacketCase) -> None:
     """
     created, modified = _pdf_dates(case)
     try:
-        from weasyprint import HTML  # noqa: PLC0415 - late by design, see docstring
+        from weasyprint import HTML
     except OSError as exc:  # pragma: no cover - environment-dependent
         raise PacketError(
             f"WeasyPrint is installed but its native libraries are not available on this "

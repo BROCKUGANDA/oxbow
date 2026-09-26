@@ -98,7 +98,11 @@ def cycle_member(ctx: RuleContext) -> RuleOutcome:
     for _pattern, laps in _group_by_pattern(loops).items():
         periodic = _is_periodic(laps, settings)
         anchor = min(laps, key=lambda loop: (-loop.value_retention, loop.ts_us[0], loop.txn_ids))
-        severity = share_severity(anchor.value_retention, settings.retention) if settings.retention < 1.0 else 0.0
+        severity = (
+            share_severity(anchor.value_retention, settings.retention)
+            if settings.retention < 1.0
+            else 0.0
+        )
         severity = combine(
             severity,
             excess_severity(
@@ -128,7 +132,9 @@ def cycle_member(ctx: RuleContext) -> RuleOutcome:
                         "pattern_observations": len(laps),
                         "distinct_lap_starts": len({loop.ts_us[0] for loop in laps}),
                         "recurrence_period_hours": periodic,
-                        "down_weighted": bool(periodic is not None and settings.down_weight_periodic),
+                        "down_weighted": bool(
+                            periodic is not None and settings.down_weight_periodic
+                        ),
                         "currency_policy": settings.currency_policy,
                         "non_increasing_required": settings.non_increasing,
                         "txn_ids": sorted(anchor.txn_ids),

@@ -141,7 +141,9 @@ def _shares(labels: Sequence[str], universe: Sequence[str]) -> dict[str, float]:
     return {label: counts[label] / total for label in universe}
 
 
-def psi_from_shares(expected: Mapping[str, float], actual: Mapping[str, float]) -> tuple[float, list[BinShift]]:
+def psi_from_shares(
+    expected: Mapping[str, float], actual: Mapping[str, float]
+) -> tuple[float, list[BinShift]]:
     """PSI and its per-bin contributions, with empty bins floored and recorded."""
     universe = sorted(set(expected) | set(actual))
     total = 0.0
@@ -234,7 +236,9 @@ def _histogram_share(values: np.ndarray, edges: np.ndarray) -> dict[str, float]:
     return {f"bin{index}": float(counts[index] / total) for index in range(counts.size)}
 
 
-def drift_decision(score_psi_worst: float, feature_drift: Sequence[FeatureDrift], cfg: DriftConfig) -> DriftReport:
+def drift_decision(
+    score_psi_worst: float, feature_drift: Sequence[FeatureDrift], cfg: DriftConfig
+) -> DriftReport:
     """Turn drift numbers into the run's mode, with the banner text that explains it.
 
     Action triggers on *either* the score distribution or a single feature crossing
@@ -328,7 +332,9 @@ def rating_migration(
     """
     if not cfg.migration_matrix:
         return ()
-    missing = [name for name in (COL_FOLD, COL_ACCOUNT_KEY, "band") if name not in scored_periods.columns]
+    missing = [
+        name for name in (COL_FOLD, COL_ACCOUNT_KEY, "band") if name not in scored_periods.columns
+    ]
     if missing:
         raise ValueError(f"rating migration needs {missing}; the scored frame lacks them")
     periods = sorted(int(value) for value in scored_periods.get_column(COL_FOLD).unique().to_list())

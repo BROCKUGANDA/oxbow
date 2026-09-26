@@ -47,9 +47,7 @@ DURATION_PATTERN: Final = re.compile(r"^(\d+)([hd])$")
 # Window values that mean "this kind does not use a bounded rolling window". They are
 # written explicitly rather than left out: an absent lookback is indistinguishable
 # from an omitted one, and plan §8 treats a missing lookback as a load failure.
-NON_ROLLING_WINDOWS: Final[frozenset[str]] = frozenset(
-    {"lifetime", "point_in_time", "fold_scoped"}
-)
+NON_ROLLING_WINDOWS: Final[frozenset[str]] = frozenset({"lifetime", "point_in_time", "fold_scoped"})
 
 # The accepted kinds. kinds.py must implement exactly this set, checked at import.
 #
@@ -196,9 +194,7 @@ NULL_POLICIES: Final[frozenset[str]] = frozenset(
 )
 
 AS_OF_RULES: Final[frozenset[str]] = frozenset({"row_event_ts", "fold_scoped"})
-GROUP_KEYS: Final[frozenset[str]] = frozenset(
-    {"entity", "currency", "counterparty", "direction"}
-)
+GROUP_KEYS: Final[frozenset[str]] = frozenset({"entity", "currency", "counterparty", "direction"})
 ROLES: Final[frozenset[str]] = frozenset({"feature", "intermediate", "outcome"})
 
 # The shortest published sentence in this registry is 43 characters. The floor is a
@@ -417,7 +413,9 @@ class FeatureRegistry:
     def graph_fields(self) -> tuple[str, ...]:
         """Node attributes the P3a fold-sealed graph table has to carry."""
         return tuple(
-            entry.graph_field for entry in self.entries if entry.kind == "graph_node" and entry.graph_field
+            entry.graph_field
+            for entry in self.entries
+            if entry.kind == "graph_node" and entry.graph_field
         )
 
     @property
@@ -619,7 +617,9 @@ def _validate_entry(
             "column is a feature or an intermediate"
         )
     if entry.kind in FORWARD_KINDS and not entry.leakage_sensitive:
-        problems.append(f"{where}: a forward-looking column cannot declare itself leakage-insensitive")
+        problems.append(
+            f"{where}: a forward-looking column cannot declare itself leakage-insensitive"
+        )
 
     if len(entry.sentence) < MIN_SENTENCE_CHARS:
         problems.append(
@@ -694,10 +694,15 @@ def _validate_entry(
                 "included row's window. Use a cumulative aggregation (count, sum, mean_int, "
                 "std) or partition by the direction instead of filtering on it."
             )
-        if entry.agg == "std" and entry.where in (None, "always") and entry.source in {
-            "balance_after_minor",
-            "amount_minor",
-        }:
+        if (
+            entry.agg == "std"
+            and entry.where in (None, "always")
+            and entry.source
+            in {
+                "balance_after_minor",
+                "amount_minor",
+            }
+        ):
             problems.append(
                 f"{where}: an unfiltered {entry.agg} over {entry.source} includes the rows a "
                 "value feature should ignore; declare the predicate the value stands for"
@@ -752,7 +757,9 @@ def _validate_entry(
         if entry.subject not in DISTINCT_SUBJECTS:
             problems.append(f"{where}: first_seen_flag needs a declared subject")
         if entry.window != "lifetime":
-            problems.append(f"{where}: first_seen_flag is a lifetime quantity; window must be 'lifetime'")
+            problems.append(
+                f"{where}: first_seen_flag is a lifetime quantity; window must be 'lifetime'"
+            )
         check_reference("where", entry.where, required=False)
     elif entry.kind in {"quotient_int", "diff_int"}:
         numerator = entry.numerator if entry.kind == "quotient_int" else entry.a
@@ -789,7 +796,9 @@ def _validate_entry(
         if entry.dtype != "bool":
             problems.append(f"{where}: row_flag publishes a bool column")
         if entry.window != "point_in_time":
-            problems.append(f"{where}: a row predicate reads the scored row; window must be point_in_time")
+            problems.append(
+                f"{where}: a row predicate reads the scored row; window must be point_in_time"
+            )
     elif entry.kind == "row_value":
         if entry.value not in ROW_VALUES:
             problems.append(
@@ -831,7 +840,9 @@ def _validate_entry(
         if duration is None:
             problems.append(f"{where}: float_stat needs a trailing reference window")
         if entry.null_policy != "null_when_indeterminate":
-            problems.append(f"{where}: a score with too few samples or zero spread is null, not 0.0")
+            problems.append(
+                f"{where}: a score with too few samples or zero spread is null, not 0.0"
+            )
     elif entry.kind == "recency":
         check_reference("where", entry.where, required=True)
         if entry.source != "event_ts_utc":
@@ -876,7 +887,9 @@ def _validate_entry(
         if entry.as_of != "fold_scoped":
             problems.append(f"{where}: rule severities arrive fold-sealed, or not at all")
         if entry.null_policy != "null_when_no_rule_hit":
-            problems.append(f"{where}: no hit inside the fold is null with a reason, not zero severity")
+            problems.append(
+                f"{where}: no hit inside the fold is null with a reason, not zero severity"
+            )
         if not entry.null_reason:
             problems.append(f"{where}: null_when_no_rule_hit requires null_reason")
 
@@ -920,8 +933,13 @@ def _parse_guards(raw: Mapping[str, object]) -> RegistryGuards:
     if not isinstance(banned, list) or not banned:
         raise RegistryError("guards.banned_sources must name the label columns")
     overnight = guards.get("overnight_local_hours")
-    if not isinstance(overnight, list) or not overnight or not all(
-        isinstance(hour, int) and not isinstance(hour, bool) and 0 <= hour <= 23 for hour in overnight
+    if (
+        not isinstance(overnight, list)
+        or not overnight
+        or not all(
+            isinstance(hour, int) and not isinstance(hour, bool) and 0 <= hour <= 23
+            for hour in overnight
+        )
     ):
         raise RegistryError("guards.overnight_local_hours must be hours in 0-23")
     reversals = guards.get("reversal_txn_types")
@@ -949,7 +967,9 @@ def _parse_guards(raw: Mapping[str, object]) -> RegistryGuards:
 def _parse_semantics(raw: Mapping[str, object]) -> WindowSemantics:
     semantics = raw.get("window_semantics")
     if not isinstance(semantics, dict):
-        raise RegistryError("window_semantics: the block describing how windows are anchored is missing")
+        raise RegistryError(
+            "window_semantics: the block describing how windows are anchored is missing"
+        )
     sort_order = semantics.get("sort_order")
     if not isinstance(sort_order, list) or not sort_order:
         raise RegistryError("window_semantics.sort_order must name the total order")
@@ -1147,16 +1167,16 @@ __all__ = [
     "CONFIG_DIRNAME",
     "COUNT_LIKE_AGGREGATIONS",
     "CUMULATIVE_AGGREGATIONS",
-    "DTYPE_TO_POLARS",
     "DISTINCT_IN_WINDOW_SUBJECTS",
     "DISTINCT_SUBJECTS",
-    "LIFETIME_DISTINCT_SUBJECTS",
+    "DTYPE_TO_POLARS",
     "EVENT_FIELDS",
     "FEATURES_FILENAME",
     "FLOAT_STAT_FORMULAS",
     "GROUP_KEYS",
     "ID_PATTERN",
     "KIND_NAMES",
+    "LIFETIME_DISTINCT_SUBJECTS",
     "MATRIX_FEATURE_CEILING",
     "MATRIX_FEATURE_FLOOR",
     "NON_ROLLING_WINDOWS",
@@ -1166,13 +1186,13 @@ __all__ = [
     "ROLES",
     "ROW_SOURCES",
     "ROW_VALUES",
-    "RegistryError",
     "FeatureRegistry",
     "FeatureSpec",
+    "RegistryError",
     "RegistryGuards",
     "WindowSemantics",
-    "load_registry",
     "hash_registry",
+    "load_registry",
     "parse_registry",
     "parse_window",
     "registry_from_config_dir",

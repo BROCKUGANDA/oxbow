@@ -264,11 +264,11 @@ def measure(
     values = np.asarray(scores, dtype=np.float64)
     if y.size != values.size:
         raise ModelLayerError(f"{name}: labels and scores disagree on length")
-    pr = bootstrap_ci(average_precision, y, values, resamples=resamples, confidence=confidence, seed=seed)
+    pr = bootstrap_ci(
+        average_precision, y, values, resamples=resamples, confidence=confidence, seed=seed
+    )
     brier_value = (
-        None
-        if probabilities is None
-        else brier(y, np.asarray(probabilities, dtype=np.float64))
+        None if probabilities is None else brier(y, np.asarray(probabilities, dtype=np.float64))
     )
     return MetricSet(
         name=name,
@@ -415,13 +415,23 @@ def agreement_matrix(
         (
             pl.col(gbm_band_column).replace_strict(order, return_dtype=pl.Int64)
             - pl.col(scorecard_band_column).replace_strict(order, return_dtype=pl.Int64)
-        ).abs().alias("band_distance"),
+        )
+        .abs()
+        .alias("band_distance"),
     )
     ordered = distances.sort(
         ["band_distance", "probability_gap", COL_ACCOUNT_KEY], descending=[True, True, False]
     )
     top = ordered.select(
-        [COL_ACCOUNT_KEY, scorecard_band_column, gbm_band_column, "p_scorecard", "p_gbm", "band_distance", "probability_gap"]
+        [
+            COL_ACCOUNT_KEY,
+            scorecard_band_column,
+            gbm_band_column,
+            "p_scorecard",
+            "p_gbm",
+            "band_distance",
+            "probability_gap",
+        ]
     ).head(top_n)
     disagreements = tuple(
         {
@@ -490,7 +500,10 @@ def percentile_table(scores: np.ndarray) -> dict[str, float]:
     values = np.asarray(scores, dtype=np.float64)
     if values.size == 0:
         return {}
-    return {f"p{percentile}": float(np.percentile(values, percentile)) for percentile in PERCENTILE_EDGES}
+    return {
+        f"p{percentile}": float(np.percentile(values, percentile))
+        for percentile in PERCENTILE_EDGES
+    }
 
 
 __all__ = [

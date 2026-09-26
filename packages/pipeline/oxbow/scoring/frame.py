@@ -261,9 +261,7 @@ def _validate(frame: pl.DataFrame, registry: FeatureRegistry, categorical: Seque
 
     dtypes = dict(zip(frame.columns, frame.dtypes, strict=True))
     if dtypes[COL_ACCOUNT_KEY] != pl.String:
-        raise FrameContractError(
-            f"{COL_ACCOUNT_KEY} must be String, got {dtypes[COL_ACCOUNT_KEY]}"
-        )
+        raise FrameContractError(f"{COL_ACCOUNT_KEY} must be String, got {dtypes[COL_ACCOUNT_KEY]}")
     if dtypes[COL_AS_OF_TS] != pl.Datetime("us", "UTC"):
         raise FrameContractError(
             f"{COL_AS_OF_TS} must be Datetime[μs, UTC], got {dtypes[COL_AS_OF_TS]}"
@@ -447,7 +445,9 @@ def assign_roles(
     reordered = ordered.select([COL_ACCOUNT_KEY, COL_AS_OF_TS]).with_columns(
         pl.Series("role", roles)
     )
-    joined = frame.join(reordered, on=[COL_ACCOUNT_KEY, COL_AS_OF_TS], how="left").get_column("role")
+    joined = frame.join(reordered, on=[COL_ACCOUNT_KEY, COL_AS_OF_TS], how="left").get_column(
+        "role"
+    )
     if joined.null_count():
         raise FrameContractError(
             "role assignment lost rows during the join back: the frame's "

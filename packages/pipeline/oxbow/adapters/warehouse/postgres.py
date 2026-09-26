@@ -116,9 +116,7 @@ class PostgresWarehouseSink:
         assert_writable_table(table)
         assert_run_id(run_id)
         target = _TABLES[table]
-        result = self._session.execute(
-            select(target).where(target.c.run_id == run_id).limit(limit)
-        )
+        result = self._session.execute(select(target).where(target.c.run_id == run_id).limit(limit))
         return [dict(mapping) for mapping in result.mappings().all()]
 
     def record_stage_event(

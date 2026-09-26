@@ -180,7 +180,10 @@ def test_labelled_cycle_reality_matches_the_dev_015_measurement(
             f"  rings: {len(cycles)}  hops min/median/max: "
             f"{min(lengths)}/{sorted(lengths)[len(lengths) // 2]}/{max(lengths)}",
             "  how many labelled cycles each setting excludes:",
-            *[f"    {reason:<34} {counts.get(reason, 0):>3} / {len(cycles)}" for reason in sorted(counts)],
+            *[
+                f"    {reason:<34} {counts.get(reason, 0):>3} / {len(cycles)}"
+                for reason in sorted(counts)
+            ],
             f"  excluded by at least one setting: "
             f"{sum(1 for legs, _ in cycles if _reasons_for(legs, specified))} / {len(cycles)}",
             f"  admitted by the shipped settings (non_increasing="
@@ -209,7 +212,9 @@ def test_labelled_cycle_reality_matches_the_dev_015_measurement(
     admitted = [legs for legs, _ in cycles if not _reasons_for(legs, cycle_settings)]
     assert len(admitted) == 3, f"measured {len(admitted)} admitted, DEV-015 claims 0"
     assert {leg.currency for legs in admitted for leg in legs} == {"SAR"}
-    assert all(cycle_settings.min_length <= len(legs) <= cycle_settings.max_length for legs in admitted)
+    assert all(
+        cycle_settings.min_length <= len(legs) <= cycle_settings.max_length for legs in admitted
+    )
 
 
 def test_relaxing_one_setting_admits_different_cycles_not_the_same_ones(
@@ -233,7 +238,10 @@ def test_relaxing_one_setting_admits_different_cycles_not_the_same_ones(
     no_currency = _cycle_settings(retention=0.60, non_increasing=False, same_currency=False)
     both_free = _cycle_settings(retention=0.0, non_increasing=False, same_currency=False)
     admits = lambda s: sum(1 for legs, _ in cycles if not _reasons_for(legs, s))  # noqa: E731
-    retained_by_floor, freed_by_currency = admits(no_retention) - admits(base), admits(no_currency) - admits(base)
+    retained_by_floor, freed_by_currency = (
+        admits(no_retention) - admits(base),
+        admits(no_currency) - admits(base),
+    )
     with capsys.disabled():
         print(
             "knob independence (labelled cycles admitted, 3-6 hops, time-respecting):\n"
@@ -340,12 +348,8 @@ def test_a_labelled_cycle_is_a_near_miss_with_reasons_end_to_end(
     assert "value_retention_below_floor" in reasons, reasons
     assert "cross_currency_legs" in reasons, reasons
     assert not any(hit.rule_id == "R4" for hit in result.hits)
-    assert set(result.near_misses[0].measurements["currencies"]) == {
-        leg.currency for leg in legs
-    }
-    assert (
-        result.near_misses[0].measurements["retention_comparable_across_currencies"] is False
-    )
+    assert set(result.near_misses[0].measurements["currencies"]) == {leg.currency for leg in legs}
+    assert result.near_misses[0].measurements["retention_comparable_across_currencies"] is False
 
 
 def test_quoted_dev_015_ring_scores_zero_hits_but_names_every_refusal(
@@ -411,7 +415,10 @@ def _quoted_ring_within_horizon(settings: CycleMemberSettings) -> tuple[Leg, ...
     kept = quoted[:3]
     day = 24 * 3_600_000_000
     return (
-        *(dataclasses.replace(leg, ts_us=leg.ts_us + index * day) for index, leg in enumerate(kept)),
+        *(
+            dataclasses.replace(leg, ts_us=leg.ts_us + index * day)
+            for index, leg in enumerate(kept)
+        ),
         Leg(
             src=kept[-1].dst,
             dst=kept[0].src,
@@ -449,4 +456,3 @@ def _dev015_quoted_ring() -> tuple[Leg, ...]:
         )
         for index in range(len(amounts))
     )
-

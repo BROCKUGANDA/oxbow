@@ -65,9 +65,7 @@ class ReportSubmission:
 
     def __post_init__(self) -> None:
         if self.report_type not in REPORT_TYPES:
-            raise ValueError(
-                f"report_type {self.report_type!r} is not one of {REPORT_TYPES}"
-            )
+            raise ValueError(f"report_type {self.report_type!r} is not one of {REPORT_TYPES}")
         if self.period_end < self.period_start:
             raise ValueError("period_end precedes period_start; a negative window is a bug")
 

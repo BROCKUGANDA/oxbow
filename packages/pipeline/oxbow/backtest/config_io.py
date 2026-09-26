@@ -186,7 +186,9 @@ def load_backtest_config(root: Path | None = None) -> BacktestConfig:
         bootstrap_confidence=_as_float(
             _require(bootstrap, ("confidence",)), "report.bootstrap.confidence"
         ),
-        stability_seeds=_as_int_list(_require(stability, ("seeds",)), "report.seed_stability.seeds"),
+        stability_seeds=_as_int_list(
+            _require(stability, ("seeds",)), "report.seed_stability.seeds"
+        ),
         reliability_bins=5,
         mc_draws=_as_int(_require(mc, ("runs",)), "report.monte_carlo.runs"),
         mc_seed=_as_int(_require(mc, ("seed",)), "report.monte_carlo.seed"),

@@ -126,7 +126,10 @@ PHASES: tuple[Phase, ...] = (
             Gate(
                 "cycle detection matches the hand-built fixture; rails and cap enforced",
                 (
-                    "uv", "run", "pytest", "-q",
+                    "uv",
+                    "run",
+                    "pytest",
+                    "-q",
                     "tests/unit/test_p3a_graph.py",
                     "tests/unit/test_p3a_cycles.py",
                     "tests/unit/test_p3a_self_edges.py",
@@ -138,9 +141,14 @@ PHASES: tuple[Phase, ...] = (
             Gate(
                 "two graph runs over the same bytes land identical artifacts",
                 (
-                    "uv", "run", "python", "scripts/verify_determinism.py",
-                    "--command", "uv run oxbow graph",
-                    "--artifacts", "out/graph",
+                    "uv",
+                    "run",
+                    "python",
+                    "scripts/verify_determinism.py",
+                    "--command",
+                    "uv run oxbow graph",
+                    "--artifacts",
+                    "out/graph",
                 ),
                 timeout_s=2400,
             ),
@@ -195,7 +203,10 @@ PHASES: tuple[Phase, ...] = (
             Gate(
                 "EV economics, both solvers, Monte Carlo exposure",
                 (
-                    "uv", "run", "pytest", "-q",
+                    "uv",
+                    "run",
+                    "pytest",
+                    "-q",
                     "tests/unit/test_p5_economics.py",
                     "tests/unit/test_p5_allocate.py",
                     "tests/unit/test_p5_exposure.py",

@@ -32,9 +32,7 @@ def _as_float_array(values: Sequence[float]) -> np.ndarray:
     return np.asarray(values, dtype=np.float64)
 
 
-def _deterministic_score_order(
-    scores: Sequence[float], keys: Sequence[str]
-) -> list[int]:
+def _deterministic_score_order(scores: Sequence[float], keys: Sequence[str]) -> list[int]:
     """Descending by score, ties broken ascending by account key.
 
     Determinism (01 §A rule 4): queue order must not move between runs. Sorting only
@@ -112,7 +110,9 @@ def precision_at(scores: Sequence[float], labels: Sequence[int], keys: Sequence[
     return precision, recall, len(selected)
 
 
-def recall_at(scores: Sequence[float], labels: Sequence[int], keys: Sequence[str], budget: int) -> float | None:
+def recall_at(
+    scores: Sequence[float], labels: Sequence[int], keys: Sequence[str], budget: int
+) -> float | None:
     """Recall for the top ``budget`` ranked accounts; ``None`` if there are no positives."""
     precision, recall, _ = precision_at(scores, labels, keys, budget)
     del precision
@@ -386,7 +386,11 @@ def monte_carlo_tail_risk(
     var_minor = _empirical_inverse_cdf(ordered, alpha_var)
     es_alpha_rank = _empirical_inverse_cdf(ordered, alpha_es)
     tail_values = ordered[ordered >= es_alpha_rank]
-    es_minor = int(scale_div(int(tail_values.sum()), int(tail_values.size))) if tail_values.size else int(es_alpha_rank)
+    es_minor = (
+        int(scale_div(int(tail_values.sum()), int(tail_values.size)))
+        if tail_values.size
+        else int(es_alpha_rank)
+    )
     return TailRisk(
         var_minor=int(var_minor),
         es_minor=int(es_minor),

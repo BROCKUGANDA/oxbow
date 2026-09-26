@@ -61,7 +61,7 @@ def _parse_instant(value: Any) -> datetime:
 
 
 def _postgres_engine(url: str) -> Any:
-    from sqlalchemy import create_engine  # noqa: PLC0415 - only needed on the DB path
+    from sqlalchemy import create_engine
 
     return create_engine(url)
 
@@ -73,7 +73,7 @@ def _rows_from_table(engine: Any, table: str) -> list[ChainRow]:
     same ``decision:`` action form — because the digest is over those strings, and a
     verifier that reconstructed them differently would report a valid chain as broken.
     """
-    from sqlalchemy import text  # noqa: PLC0415 - DB path only
+    from sqlalchemy import text
 
     columns = _table_columns(engine, table)
     if columns is None:
@@ -112,10 +112,18 @@ def _rows_from_table(engine: Any, table: str) -> list[ChainRow]:
 
 
 def _table_columns(engine: Any, table: str) -> Sequence[str] | None:
-    from sqlalchemy import inspect  # noqa: PLC0415 - DB path only
+    from sqlalchemy import inspect
 
     names = {str(column["name"]) for column in inspect(engine).get_columns(table)}
-    required = {"chain_seq", "occurred_at", "actor_id", "action", "payload", "prev_hash", "row_hash"}
+    required = {
+        "chain_seq",
+        "occurred_at",
+        "actor_id",
+        "action",
+        "payload",
+        "prev_hash",
+        "row_hash",
+    }
     if not required.issubset(names):
         return None
     return sorted(names)
@@ -143,7 +151,7 @@ def verify_database_chain(url: str, table: str) -> tuple[str, str]:
     engine = _postgres_engine(url)
     try:
         rows = _rows_from_table(engine, table)
-    except Exception as exc:  # noqa: BLE001 - reported as a named skip, never as a pass
+    except Exception as exc:
         return STATUS_SKIP, f"{table}: not reachable ({type(exc).__name__}: {exc})"
     if not rows:
         return (
@@ -174,9 +182,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         help="Postgres URL. Defaults to $DATABASE_URL; unset or unreachable is SKIPPED, "
         "never passed.",
     )
-    parser.add_argument(
-        "--no-database", action="store_true", help="Verify the file chain only."
-    )
+    parser.add_argument("--no-database", action="store_true", help="Verify the file chain only.")
     args = parser.parse_args(argv)
 
     results: list[tuple[str, str]] = [verify_file_chain(args.audit_dir)]

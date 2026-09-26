@@ -212,9 +212,7 @@ class Frontier:
         )
         if rival is None:
             raise FrontierError(f"{policy.value} has no point at the operating capacity")
-        return Money(
-            operating.captured_value.minor - rival.captured_value.minor, self.cfg.currency
-        )
+        return Money(operating.captured_value.minor - rival.captured_value.minor, self.cfg.currency)
 
     def render_table(self) -> str:
         """The sweep as text: counts, minutes, wrong touches, and minor units.
@@ -270,9 +268,7 @@ def sweep_frontier(
         ),
         dominated=MappingProxyType(
             {
-                policy: tuple(
-                    FrontierPoint(queue.allocate(capacity, policy)) for capacity in grid
-                )
+                policy: tuple(FrontierPoint(queue.allocate(capacity, policy)) for capacity in grid)
                 for policy in dominated_policies
             }
         ),
@@ -291,7 +287,9 @@ def exact_frontier_point(
     sweeping an exact solver across 31 capacities would be a batch job pretending
     to be an interaction.
     """
-    budget = cfg.capacity.review_minutes_per_period if capacity_minutes is None else capacity_minutes
+    budget = (
+        cfg.capacity.review_minutes_per_period if capacity_minutes is None else capacity_minutes
+    )
     comparison = compare_solvers(rows, budget, cfg)
     return (
         FrontierPoint(comparison.greedy),

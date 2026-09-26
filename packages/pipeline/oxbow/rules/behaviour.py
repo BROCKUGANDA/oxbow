@@ -193,7 +193,11 @@ def dormant_reactivation(ctx: RuleContext) -> RuleOutcome:
             burst_end = previous + gap
             burst = tuple(
                 sorted(
-                    (event.txn_id for event in legs if burst_end <= event.ts_us <= burst_end + burst_us),
+                    (
+                        event.txn_id
+                        for event in legs
+                        if burst_end <= event.ts_us <= burst_end + burst_us
+                    ),
                 )
             )
             if len(burst) < settings.k:
@@ -268,14 +272,18 @@ def odd_hour_shift(ctx: RuleContext) -> RuleOutcome:
         # tie-break on the hour number is what keeps the set identical between runs.
         quiet = {
             hour
-            for _count, hour in sorted(
-                (count, hour) for hour, count in enumerate(per_hour)
-            )[:QUIET_HOUR_COUNT]
+            for _count, hour in sorted((count, hour) for hour, count in enumerate(per_hour))[
+                :QUIET_HOUR_COUNT
+            ]
         }
         if not quiet:
             continue
-        baseline_share = ratio_of(sum(1 for event in baseline if event.local_hour in quiet), len(baseline))
-        recent_share = ratio_of(sum(1 for event in recent if event.local_hour in quiet), len(recent))
+        baseline_share = ratio_of(
+            sum(1 for event in baseline if event.local_hour in quiet), len(baseline)
+        )
+        recent_share = ratio_of(
+            sum(1 for event in recent if event.local_hour in quiet), len(recent)
+        )
         jump = recent_share - baseline_share
         if jump < settings.q:
             continue
@@ -351,7 +359,9 @@ def amount_regime_shift(ctx: RuleContext) -> RuleOutcome:
                 continue
             if best is None or abs(log(ratio)) > abs(log(best[0])):
                 txn_ids = tuple(
-                    sorted(event.txn_id for event in recent + baseline if event.currency == currency)
+                    sorted(
+                        event.txn_id for event in recent + baseline if event.currency == currency
+                    )
                 )
                 best = (ratio, currency, recent_median, baseline_median, txn_ids)
         if best is None:
@@ -377,7 +387,9 @@ def amount_regime_shift(ctx: RuleContext) -> RuleOutcome:
                     "txn_ids": list(txn_ids),
                 },
                 window=Window(
-                    start_us=baseline_start, end_us=anchor + MICROSECONDS_PER_DAY, label="R9_compare"
+                    start_us=baseline_start,
+                    end_us=anchor + MICROSECONDS_PER_DAY,
+                    label="R9_compare",
                 ),
                 hit_signature=pattern_signature("R9", account, txn_ids),
             )

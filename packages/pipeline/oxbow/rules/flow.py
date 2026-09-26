@@ -47,6 +47,7 @@ from oxbow.rules.severity import share_severity
 # rather than changing the answer silently.
 MAX_WINDOW_SCAN_LEGS: Final[int] = 4096
 
+
 def rapid_pass_through(ctx: RuleContext) -> RuleOutcome:
     """R1: receives ``A``, then sends at least ``p * A`` within ``delta_minutes``.
 
@@ -100,7 +101,9 @@ def rapid_pass_through(ctx: RuleContext) -> RuleOutcome:
                     "window_scan_truncated": scan_truncated,
                 },
                 window=Window(start_us=receive.ts_us, end_us=send.ts_us, label="R1_pair"),
-                hit_signature=pattern_signature("R1", account, sorted([receive.txn_id, send.txn_id])),
+                hit_signature=pattern_signature(
+                    "R1", account, sorted([receive.txn_id, send.txn_id])
+                ),
             )
         )
     return outcome
@@ -167,7 +170,9 @@ def fast_cash_out(ctx: RuleContext) -> RuleOutcome:
                     "holding_hours": settings.holding_hours,
                     "txn_ids": sorted([inflow.txn_id, *txn_ids]),
                 },
-                window=Window(start_us=inflow.ts_us, end_us=inflow.ts_us + longest_hold, label="R10_episode"),
+                window=Window(
+                    start_us=inflow.ts_us, end_us=inflow.ts_us + longest_hold, label="R10_episode"
+                ),
                 hit_signature=pattern_signature("R10", account, inflow.txn_id, sorted(txn_ids)),
             )
         )

@@ -423,9 +423,7 @@ class _AssumptionFile:
             raise ConfigError(f"{self._name}::{path} must be a non-empty string")
         return value
 
-    def scalars(
-        self, path: str, *, expected: int | None = None
-    ) -> tuple[float | int | str, ...]:
+    def scalars(self, path: str, *, expected: int | None = None) -> tuple[float | int | str, ...]:
         """A list of scalars, with each element recorded as consumed.
 
         ``expected`` is checked here rather than by the caller unpacking the

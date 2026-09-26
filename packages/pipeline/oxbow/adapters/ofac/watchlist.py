@@ -107,7 +107,9 @@ class OfacWatchlistAdapter:
     def from_repo_default(cls, repo_root: Path) -> OfacWatchlistAdapter:
         """The snapshot the demo uses, unless the environment names another."""
         override = os.environ.get(WATCHLIST_PATH_ENV, "").strip()
-        path = Path(override) if override else repo_root / "data" / "watchlist" / DEFAULT_SNAPSHOT_NAME
+        path = (
+            Path(override) if override else repo_root / "data" / "watchlist" / DEFAULT_SNAPSHOT_NAME
+        )
         return cls.from_path(path)
 
     # --- the port -----------------------------------------------------------
@@ -150,9 +152,7 @@ class OfacWatchlistAdapter:
         hits.sort(key=lambda hit: (-hit.similarity, hit.reference))
         return hits[:MAX_CANDIDATES]
 
-    def _best_match(
-        self, record: dict[str, Any], query: ScreeningQuery
-    ) -> WatchlistHit | None:
+    def _best_match(self, record: dict[str, Any], query: ScreeningQuery) -> WatchlistHit | None:
         reference = str(record.get("reference") or "")
         for identifier in query.identifiers:
             if identifier.strip() and identifier.strip() == reference:

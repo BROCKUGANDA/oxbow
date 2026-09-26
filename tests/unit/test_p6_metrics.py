@@ -18,9 +18,9 @@ from oxbow.backtest import metrics
 def test_pr_auc_hand_computed() -> None:
     # scores [0.9,0.8,0.7,0.6], labels [1,0,1,0]. Descending order A,B,C,D.
     # positives at rank 1 (precision 1/1) and rank 3 (precision 2/3). AP = (1 + 0.6667)/2 = 0.8333.
-    assert metrics.pr_auc([0.9, 0.8, 0.7, 0.6], [1, 0, 1, 0], ["A", "B", "C", "D"]) == pytest.approx(
-        0.8333333333, abs=1e-9
-    )
+    assert metrics.pr_auc(
+        [0.9, 0.8, 0.7, 0.6], [1, 0, 1, 0], ["A", "B", "C", "D"]
+    ) == pytest.approx(0.8333333333, abs=1e-9)
 
 
 def test_pr_auc_undefined_with_zero_positives() -> None:
@@ -163,9 +163,7 @@ def test_bootstrap_ci_brackets_point_estimate() -> None:
     probs = [0.9, 0.8, 0.7, 0.6, 0.5, 0.4, 0.3, 0.2]
     labels = [1, 1, 1, 0, 1, 0, 0, 0]
     keys = [f"K{i}" for i in range(len(probs))]
-    ci = metrics.bootstrap_ci(
-        probs, labels, keys, metrics.pr_auc, resamples=200, seed=1337
-    )
+    ci = metrics.bootstrap_ci(probs, labels, keys, metrics.pr_auc, resamples=200, seed=1337)
     assert ci.low <= ci.point <= ci.high
     assert ci.seed == 1337
     assert ci.resamples == 200

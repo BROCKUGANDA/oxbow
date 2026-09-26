@@ -215,9 +215,7 @@ def record_decision(
     snapshot = CaseSnapshot.from_row(case)
     _require_version(snapshot, write.expected_version, session, write.principal)
     score = read_model.score_row(snapshot.run_id, snapshot.account_key)
-    economic_row = _economics_row(
-        session, run_id=snapshot.run_id, account_key=snapshot.account_key
-    )
+    economic_row = _economics_row(session, run_id=snapshot.run_id, account_key=snapshot.account_key)
     exposure_minor = int(economic_row.exposure_minor)
     currency = str(economic_row.currency)
     _require_action_matches_reversal(write)
@@ -405,9 +403,7 @@ def confirm_decision(
         session, read_model=read_model, economics=economics, decision=decision, score=score
     )
     session.flush()
-    return _write_result(
-        decision=decision, case=case, outbox_queued=True, audit_seq=pending.seq
-    )
+    return _write_result(decision=decision, case=case, outbox_queued=True, audit_seq=pending.seq)
 
 
 def queue_decision_deliveries(
@@ -608,9 +604,7 @@ def bundle_from_payload(payload: Mapping[str, Any]) -> CaseBundle:
             action=str(decision["action"]),
             reason=str(decision["reason"]),
             actor_id=str(decision["actor_id"]),
-            decided_at=datetime.fromisoformat(
-                str(decision["decided_at"]).replace("Z", "+00:00")
-            ),
+            decided_at=datetime.fromisoformat(str(decision["decided_at"]).replace("Z", "+00:00")),
             four_eyes_confirmed_by=decision.get("four_eyes_confirmed_by"),
             reversal_of_seq=decision.get("reversal_of_seq"),
             decided_on_superseded_run=bool(decision.get("decided_on_superseded_run", False)),
@@ -711,11 +705,15 @@ def _insert_outbox(
 
 
 def _economics_row(session: Session, *, run_id: str, account_key: str) -> Economics:
-    row = session.execute(
-        select(Economics).where(
-            Economics.run_id == run_id, Economics.account_key == account_key
+    row = (
+        session.execute(
+            select(Economics).where(
+                Economics.run_id == run_id, Economics.account_key == account_key
+            )
         )
-    ).scalars().first()
+        .scalars()
+        .first()
+    )
     if row is None:
         raise Unprocessable(
             f"account {account_key} in run {run_id} has no stored economics "
@@ -744,12 +742,16 @@ def _require_version(
 ) -> None:
     """The optimistic-concurrency check that produces the plan's 409 pair."""
     if snapshot.version != expected:
-        current = session.execute(
-            select(DecisionRow)
-            .where(DecisionRow.case_id == snapshot.case_id)
-            .order_by(DecisionRow.decision_seq.desc())
-            .limit(1)
-        ).scalars().first()
+        current = (
+            session.execute(
+                select(DecisionRow)
+                .where(DecisionRow.case_id == snapshot.case_id)
+                .order_by(DecisionRow.decision_seq.desc())
+                .limit(1)
+            )
+            .scalars()
+            .first()
+        )
         raise VersionConflict(
             f"case {snapshot.case_id} is at version {snapshot.version}; this write expected "
             f"{expected}. {principal.display_name} did not overwrite the other reviewer's "
@@ -791,9 +793,11 @@ def _decision_chain_head(session: Session) -> tuple[int, str]:
 
 
 def _chain_tip(session: Session) -> ChainRow | None:
-    row = session.execute(
-        select(DecisionRow).order_by(DecisionRow.chain_seq.desc()).limit(1)
-    ).scalars().first()
+    row = (
+        session.execute(select(DecisionRow).order_by(DecisionRow.chain_seq.desc()).limit(1))
+        .scalars()
+        .first()
+    )
     if row is None:
         return None
     return ChainRow(
@@ -936,11 +940,15 @@ def decision_rows_for(session: Session, case_id: str) -> list[DecisionRow]:
     appear after the row it reverses; the API does not reorder a chain to flatter a
     page.
     """
-    rows = session.execute(
-        select(DecisionRow)
-        .where(DecisionRow.case_id == case_id)
-        .order_by(DecisionRow.decision_seq.asc())
-    ).scalars().all()
+    rows = (
+        session.execute(
+            select(DecisionRow)
+            .where(DecisionRow.case_id == case_id)
+            .order_by(DecisionRow.decision_seq.asc())
+        )
+        .scalars()
+        .all()
+    )
     return list(rows)
 
 
@@ -963,9 +971,9 @@ def decision_chain_rows(session: Session) -> list[ChainRow]:
     something other than what was signed and report a clean chain as broken — or,
     worse, a broken one as clean.
     """
-    rows = session.execute(
-        select(DecisionRow).order_by(DecisionRow.chain_seq.asc())
-    ).scalars().all()
+    rows = (
+        session.execute(select(DecisionRow).order_by(DecisionRow.chain_seq.asc())).scalars().all()
+    )
     return [
         ChainRow(
             seq=int(row.chain_seq),
@@ -1003,9 +1011,11 @@ def execute_erasure(
     from oxbow.adapters.warehouse.models import ErasureRequest, PseudonymMap
     from oxbow.audit.erasure import build_erasure_audit_row
 
-    existing = session.execute(
-        select(PseudonymMap).where(PseudonymMap.account_key == account_key)
-    ).scalars().all()
+    existing = (
+        session.execute(select(PseudonymMap).where(PseudonymMap.account_key == account_key))
+        .scalars()
+        .all()
+    )
     version = salt_version or (str(existing[0].salt_version) if existing else "unknown")
     tip = audit_sink.tip()
     deleted = 0
@@ -1016,7 +1026,9 @@ def execute_erasure(
 
     pending = build_erasure_audit_row(
         account_key=account_key,
-        tip=None if tip is None else PendingChainRow(
+        tip=None
+        if tip is None
+        else PendingChainRow(
             seq=tip.seq,
             occurred_at=tip.occurred_at,
             actor_id=tip.actor_id,

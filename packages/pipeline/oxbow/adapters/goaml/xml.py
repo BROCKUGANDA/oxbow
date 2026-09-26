@@ -147,7 +147,11 @@ def render_case_bundle(bundle: CaseBundle, transactions: Sequence[Mapping[str, A
         bundle.economics.currency,
     )
     _el(bank, "ReportedTotalMinorUnits", str(bundle.economics.expected_value_minor))
-    _el(root, "MsgNote", f"schema_version={payload['schema_version']} idempotency_key={bundle.idempotency_key}")
+    _el(
+        root,
+        "MsgNote",
+        f"schema_version={payload['schema_version']} idempotency_key={bundle.idempotency_key}",
+    )
     return _to_xml(root)
 
 

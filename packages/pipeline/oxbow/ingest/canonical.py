@@ -166,7 +166,9 @@ def account_key(raw_name: str, identity: RunIdentity) -> str:
     reversed by hashing a list of candidate names, which is the failure 03 D exists
     to prevent.
     """
-    return hmac_sha256_hex(f"{identity.run_salt}|{raw_name}", identity.run_salt)[:ACCOUNT_KEY_PREFIX_LEN]
+    return hmac_sha256_hex(f"{identity.run_salt}|{raw_name}", identity.run_salt)[
+        :ACCOUNT_KEY_PREFIX_LEN
+    ]
 
 
 def display_account_key(key: str) -> str:

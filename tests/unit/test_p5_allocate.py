@@ -425,9 +425,9 @@ def test_baselines_are_dominated_at_the_capacity_where_density_is_optimal(
     assert by_density.total_ev >= by_chance.total_ev
     assert by_size.selected_keys == ("ACC-A", "ACC-D")
     assert "dominated baseline" in by_size.message
-    assert allocate_highest_exposure(rows, 10, cfg).total_ev > allocate_greedy(
-        rows, 10, cfg
-    ).total_ev
+    assert (
+        allocate_highest_exposure(rows, 10, cfg).total_ev > allocate_greedy(rows, 10, cfg).total_ev
+    )
 
 
 def test_random_baseline_is_reproducible_and_draws_only_the_config_seed(cfg: Economics) -> None:
@@ -566,9 +566,7 @@ def test_greedy_latency_within_config_budget() -> None:
     priced_us = _timed_microseconds(lambda: synthetic_rows(SHIPPED, 3_000, SHIPPED.seed))
     queue = CachedQueue.build(rows, SHIPPED)
     runs = sorted(
-        _timed_microseconds(
-            lambda: queue.allocate(SHIPPED.capacity.review_minutes_per_period)
-        )
+        _timed_microseconds(lambda: queue.allocate(SHIPPED.capacity.review_minutes_per_period))
         for _ in range(20)
     )
     fastest, median_us, slowest = runs[0], runs[len(runs) // 2], runs[-1]

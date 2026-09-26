@@ -196,7 +196,9 @@ def test_the_shipped_fold_ladder_builds_expanding_and_is_refused_when_read_as_sl
     assert message != ""
 
 
-def test_embargo_equals_the_longest_declared_window(plan: SplitPlan, registry: FeatureRegistry) -> None:
+def test_embargo_equals_the_longest_declared_window(
+    plan: SplitPlan, registry: FeatureRegistry
+) -> None:
     """The embargo is 30 days because the longest feature window is 30 days.
 
     Asserted as equality in both directions, and sourced from each file rather than from a
@@ -226,13 +228,11 @@ def test_embargo_band_is_withheld_from_training_and_validation(
     """
     for fold in plan.folds:
         stamps = timeline["event_ts_utc"]
-        inside = timeline.filter(
-            (stamps > fold.train_end_ts) & (stamps < fold.test_start_ts)
-        )
+        inside = timeline.filter((stamps > fold.train_end_ts) & (stamps < fold.test_start_ts))
         assert inside.height > 0, f"{fold.fold_id}: empty embargo band, so nothing was withheld"
-        assert timedelta(seconds=(fold.test_start_ts - fold.train_end_ts).total_seconds()) == timedelta(
-            days=plan.embargo_days
-        ), f"{fold.fold_id}: the band is not one embargo wide"
+        assert timedelta(
+            seconds=(fold.test_start_ts - fold.train_end_ts).total_seconds()
+        ) == timedelta(days=plan.embargo_days), f"{fold.fold_id}: the band is not one embargo wide"
         trained = timeline.filter(fold.train_rows_mask()).height
         withheld = inside.height
         assert timeline.filter(fold.validation_mask()).height > 0
@@ -264,9 +264,7 @@ def test_embargo_blocks_leakage(
     truncated = build_feature_table(events, registry, as_of=fold.train_end_ts, cfg=cfg)
 
     keys = ["txn_id", "entity"]
-    columns = [
-        column for column in full.matrix.columns if column not in (*keys, "cutoff_ts")
-    ]
+    columns = [column for column in full.matrix.columns if column not in (*keys, "cutoff_ts")]
     training_rows = truncated.matrix
     assert training_rows["cutoff_ts"].max() <= fold.train_end_ts
     joined = training_rows.join(
@@ -374,12 +372,12 @@ def test_walk_forward_is_expanding_and_temporally_ordered(plan: SplitPlan) -> No
         assert fold.index == index
         assert fold.train_start_ts == plan.timeline_start, f"fold {index} is not expanding"
         assert fold.train_end_ts < fold.test_start_ts <= fold.test_end_ts
-        assert fold.test_start_ts > previous_test_end, (
-            f"fold {index} starts scoring before the fold before it finished scoring"
-        )
-        assert fold.graph_as_of_ts == fold.train_end_ts, (
-            "the fold's graph must end where its training data ends, not at the test start"
-        )
+        assert (
+            fold.test_start_ts > previous_test_end
+        ), f"fold {index} starts scoring before the fold before it finished scoring"
+        assert (
+            fold.graph_as_of_ts == fold.train_end_ts
+        ), "the fold's graph must end where its training data ends, not at the test start"
         assert fold.available_end_ts == fold.test_start_ts
         previous_test_end = fold.test_end_ts
     widths = [(fold.train_end_ts - fold.train_start_ts) for fold in plan.folds]
@@ -433,8 +431,7 @@ def test_validation_slice_is_the_tail_of_training_never_the_test_period(
     """Bins, WOE and calibration fit on the train tail; the test fold stays untouched."""
     for fold in plan.folds:
         validation = (
-            fold.validation_start_ts < fold.train_end_ts
-            and fold.test_start_ts > fold.train_end_ts
+            fold.validation_start_ts < fold.train_end_ts and fold.test_start_ts > fold.train_end_ts
         )
         assert validation, f"{fold.fold_id}: the validation slice is not inside training"
         assert fold.validation_mask() is not None
@@ -506,12 +503,14 @@ def test_pattern_spanning_boundary_detected_once(registry: FeatureRegistry) -> N
     overlap = timedelta(hours=registry.semantics.overlap_hours)
     assert overlap == timedelta(days=7)
     stamps = pl.DataFrame({"event_ts_utc": [BASE, BASE + timedelta(days=13)]})
-    windows = analysis_windows(stamps, window_days=1, overlap_hours=registry.semantics.overlap_hours)
+    windows = analysis_windows(
+        stamps, window_days=1, overlap_hours=registry.semantics.overlap_hours
+    )
     assert windows.height >= 13
     first = windows.row(0, named=True)
-    assert first["read_from_ts"] == first["window_start_ts"] - overlap, (
-        "the window must read back the declared overlap, or a spanning pattern is cut in two"
-    )
+    assert (
+        first["read_from_ts"] == first["window_start_ts"] - overlap
+    ), "the window must read back the declared overlap, or a spanning pattern is cut in two"
 
     spanning = BASE + timedelta(days=12, hours=18)
     hits = pl.DataFrame(
@@ -537,9 +536,9 @@ def test_pattern_spanning_boundary_detected_once(registry: FeatureRegistry) -> N
             "txn_id": ["h1", "h2"],
         }
     )
-    assert dedupe_by_pattern_signature(distinct).height == 2, (
-        "two different patterns collapsed into one alert, which hides evidence"
-    )
+    assert (
+        dedupe_by_pattern_signature(distinct).height == 2
+    ), "two different patterns collapsed into one alert, which hides evidence"
 
 
 # --- the one-module claim -------------------------------------------------
@@ -583,7 +582,9 @@ def _matches(pattern: str) -> set[str]:
     return found
 
 
-def test_the_fold_protocol_is_satisfied_by_the_real_plan(plan: SplitPlan, cfg: PipelineConfig) -> None:
+def test_the_fold_protocol_is_satisfied_by_the_real_plan(
+    plan: SplitPlan, cfg: PipelineConfig
+) -> None:
     """``FoldProvider`` is met by an adapter over this module, with masks and the embargo.
 
     The harness consumes boolean masks and ``embargo_days``; the splits module emits polars
@@ -621,7 +622,13 @@ def test_fold_audit_reports_measured_counts(plan: SplitPlan, timeline: pl.DataFr
     """
     audit = fold_audit(plan, timeline)
     assert audit.height == len(plan.folds)
-    assert set(audit.columns) >= {"fold_id", "train_rows", "validation_rows", "test_rows", "embargo_rows"}
+    assert set(audit.columns) >= {
+        "fold_id",
+        "train_rows",
+        "validation_rows",
+        "test_rows",
+        "embargo_rows",
+    }
     for row in audit.iter_rows(named=True):
         assert row["train_rows"] > 0, f"{row['fold_id']} has no training rows"
         assert row["test_rows"] > 0
@@ -629,7 +636,9 @@ def test_fold_audit_reports_measured_counts(plan: SplitPlan, timeline: pl.DataFr
     assert audit["test_rows"].sum() > 0
 
 
-def test_a_shuffled_split_is_refused(tmp_path: Path, registry: FeatureRegistry, timeline: pl.DataFrame) -> None:
+def test_a_shuffled_split_is_refused(
+    tmp_path: Path, registry: FeatureRegistry, timeline: pl.DataFrame
+) -> None:
     """Shuffling a temporal split is a rejection trigger, not a knob (plan §18)."""
     config_dir = tmp_path / "config"
     config_dir.mkdir()
@@ -643,7 +652,9 @@ def test_a_shuffled_split_is_refused(tmp_path: Path, registry: FeatureRegistry, 
         build_walk_forward(timeline, registry=registry, config_dir=config_dir)
 
 
-def test_a_purged_false_split_is_refused(tmp_path: Path, registry: FeatureRegistry, timeline: pl.DataFrame) -> None:
+def test_a_purged_false_split_is_refused(
+    tmp_path: Path, registry: FeatureRegistry, timeline: pl.DataFrame
+) -> None:
     """§8's split is purged; turning the purge off is not a supported configuration."""
     config_dir = tmp_path / "config"
     config_dir.mkdir()
@@ -670,4 +681,9 @@ def test_the_fold_carries_the_timestamps_every_consumer_must_agree_on(plan: Spli
     assert not fold.inside_embargo(fold.train_end_ts - timedelta(minutes=1))
     assert not fold.inside_embargo(fold.test_start_ts + timedelta(minutes=1))
     assert plan.fold_for(fold.test_start_ts + timedelta(minutes=1)) == fold
-    assert plan.fold_of_row(pl.Series([fold.test_start_ts + timedelta(minutes=1)], dtype=pl.Datetime("us", UTC))).item() == fold.fold_id
+    assert (
+        plan.fold_of_row(
+            pl.Series([fold.test_start_ts + timedelta(minutes=1)], dtype=pl.Datetime("us", UTC))
+        ).item()
+        == fold.fold_id
+    )

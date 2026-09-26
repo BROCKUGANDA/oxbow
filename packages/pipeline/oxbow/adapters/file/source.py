@@ -83,7 +83,9 @@ class CsvSourceAdapter:
     ) -> None:
         self._source_id = source_id
         self._path = Path(path)
-        self._manifest = manifest or manifest_for_file(self._path, source_id=source_id, batch_id=source_id)
+        self._manifest = manifest or manifest_for_file(
+            self._path, source_id=source_id, batch_id=source_id
+        )
         self._run_id = run_id
         self._quarantined: list[QuarantineRecord] = []
         self._quarantine_dir = port_dir(resolve_out_root(root), "sources") / source_id
@@ -104,7 +106,9 @@ class CsvSourceAdapter:
         and a self-consistent truncated file would otherwise pass.
         """
         if not self._path.is_file():
-            raise FileNotFoundError(f"source {self._source_id!r}: batch file is missing: {self._path}")
+            raise FileNotFoundError(
+                f"source {self._source_id!r}: batch file is missing: {self._path}"
+            )
         with self._path.open("r", encoding="utf-8", newline="") as handle:
             reader = csv.DictReader(handle)
             yielded = 0

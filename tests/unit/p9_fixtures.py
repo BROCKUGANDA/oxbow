@@ -296,7 +296,9 @@ def write_runs_ledger(directory: Path, *, head: str = RUN_B, complete_head: bool
         },
     ]
     path = directory / "runs.jsonl"
-    path.write_text("".join(json.dumps(row, sort_keys=True) + "\n" for row in rows), encoding="utf-8")
+    path.write_text(
+        "".join(json.dumps(row, sort_keys=True) + "\n" for row in rows), encoding="utf-8"
+    )
     return path
 
 

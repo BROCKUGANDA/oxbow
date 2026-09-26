@@ -230,7 +230,10 @@ def build_meta_for(container: Container, run_id: str | None) -> Any:
     except RunNotFound:
         return build_meta(container)
     return build_meta(
-        container, run_id=run_id, model_version=str(run["model_version"]), provenance=str(run["provenance"])
+        container,
+        run_id=run_id,
+        model_version=str(run["model_version"]),
+        provenance=str(run["provenance"]),
     )
 
 
@@ -256,7 +259,8 @@ def list_jobs(
     finally:
         session.close()
     return envelope(
-        [JobStatus.model_validate(row) for row in rows], **build_meta_for(container, None).model_dump()
+        [JobStatus.model_validate(row) for row in rows],
+        **build_meta_for(container, None).model_dump(),
     )
 
 

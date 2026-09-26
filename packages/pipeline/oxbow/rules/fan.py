@@ -162,9 +162,7 @@ def new_counterparty_surge(ctx: RuleContext) -> RuleOutcome:
         if share < settings.g:
             continue
         end_us = start_us + window_us
-        txn_ids = tuple(
-            sorted(event.txn_id for event in legs if start_us <= event.ts_us <= end_us)
-        )
+        txn_ids = tuple(sorted(event.txn_id for event in legs if start_us <= event.ts_us <= end_us))
         outcome.hits.append(
             RuleHit(
                 rule_id="R11",

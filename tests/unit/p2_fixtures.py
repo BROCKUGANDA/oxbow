@@ -145,7 +145,9 @@ def as_local_date(moment: datetime) -> date:
 _REAL_SLICE_CACHE: dict[int, pl.DataFrame] = {}
 
 
-def with_sidecar_columns(events: pl.DataFrame, *, ingested_at: datetime, run_id: str) -> pl.DataFrame:
+def with_sidecar_columns(
+    events: pl.DataFrame, *, ingested_at: datetime, run_id: str
+) -> pl.DataFrame:
     """Re-attach the two DEV-012 sidecar columns to a persisted canonical frame.
 
     ``ingest_paysim`` returns the *persisted* nineteen-column shape on purpose — run id and
@@ -179,7 +181,9 @@ def paysim_slice(limit: int) -> pl.DataFrame:
     root = find_repo_root()
     path = root / "data" / "raw" / "paysim" / "PS_20174392719_1491204439457_log.csv"
     if not path.exists():  # pragma: no cover - the gate is measured, not assumed
-        raise AssertionError(f"the PaySim corpus is absent at {path}; plan §8's gate is unmeasurable")
+        raise AssertionError(
+            f"the PaySim corpus is absent at {path}; plan §8's gate is unmeasurable"
+        )
     config = load_pipeline_config(root)
     paysim = config.raw["paysim"]
     assert isinstance(paysim, dict)

@@ -168,7 +168,9 @@ class Fold:
 
     def validation_mask(self, ts_column: str = TS_COLUMN) -> pl.Expr:
         """The last slice of the training period: bins, WOE, calibration, selection."""
-        return (pl.col(ts_column) > self.validation_start_ts) & (pl.col(ts_column) <= self.train_end_ts)
+        return (pl.col(ts_column) > self.validation_start_ts) & (
+            pl.col(ts_column) <= self.train_end_ts
+        )
 
     def test_mask(self, ts_column: str = TS_COLUMN) -> pl.Expr:
         """The scored period: strictly after the training cutoff, up to the fold's end."""
@@ -344,7 +346,9 @@ def is_holdout(entity: str, *, seed: int, holdout_fraction: float) -> bool:
     return _entity_bucket(entity, seed) < _holdout_threshold(holdout_fraction)
 
 
-def holdout_mask(frame: pl.DataFrame, split: EntitySplit, entity_column: str = ENTITY_COLUMN) -> pl.Series:
+def holdout_mask(
+    frame: pl.DataFrame, split: EntitySplit, entity_column: str = ENTITY_COLUMN
+) -> pl.Series:
     """Holdout membership per row, from the same hash :func:`is_holdout` uses."""
     threshold = _holdout_threshold(split.holdout_fraction)
     entities = frame[entity_column].cast(pl.String).to_list()
@@ -355,7 +359,9 @@ def holdout_mask(frame: pl.DataFrame, split: EntitySplit, entity_column: str = E
     )
 
 
-def _require_int(mapping: dict[str, object], key: str, where: str, default: int | None = None) -> int:
+def _require_int(
+    mapping: dict[str, object], key: str, where: str, default: int | None = None
+) -> int:
     value = mapping.get(key, default)
     if not isinstance(value, int) or isinstance(value, bool):
         raise SplitError(f"{where}: {key!r} must be an integer, got {value!r}")
@@ -392,7 +398,9 @@ def load_split_config(config_dir: Path) -> dict[str, object]:
         raise SplitError(f"{path}: the walk_forward block is missing")
     if _require_bool(walk_forward, "shuffle", f"{path}: walk_forward", False):
         # A shuffled temporal split is plan §18's rejection trigger, not a knob.
-        raise SplitError(f"{path}: shuffle must be false — a random split on transactions is leakage")
+        raise SplitError(
+            f"{path}: shuffle must be false — a random split on transactions is leakage"
+        )
     if _require_bool(walk_forward, "purge", f"{path}: walk_forward", True) is False:
         raise SplitError(f"{path}: purge: false is not supported; plan §8's split is purged")
     return raw
@@ -424,9 +432,7 @@ def build_walk_forward(
     # so the shipped five-fold ladder raised on every fold after the first.
     scheme = _require_str(walk_forward, "scheme", "walk_forward")
     if scheme not in {EXPANDING, SLIDING}:
-        raise SplitError(
-            f"walk_forward.scheme is {scheme!r}; supported: {EXPANDING}, {SLIDING}"
-        )
+        raise SplitError(f"walk_forward.scheme is {scheme!r}; supported: {EXPANDING}, {SLIDING}")
     expanding = scheme == EXPANDING
     purge_days = _require_int(walk_forward, "purge_days", "walk_forward", 0)
     # The outcome window the purge reads. config/splits.yaml declares no
@@ -681,9 +687,8 @@ def dedupe_by_pattern_signature(
     partition = [column for column in (ACCOUNT_COLUMN, "rule_id") if column in hits.columns]
     if not partition:
         raise SplitError("the hit frame must carry at least one of 'account' or 'rule_id'")
-    return (
-        hits.sort([*partition, signature_column, *order])
-        .unique(subset=[*partition, signature_column], keep="first", maintain_order=True)
+    return hits.sort([*partition, signature_column, *order]).unique(
+        subset=[*partition, signature_column], keep="first", maintain_order=True
     )
 
 
@@ -704,7 +709,9 @@ def fold_audit(plan: SplitPlan, frame: pl.DataFrame, *, ts_column: str = TS_COLU
     rows: list[tuple[str, int, int, int, int, int, int]] = []
     for fold in plan.folds:
         stamps = frame[ts_column]
-        embargo_rows = frame.filter((stamps > fold.train_end_ts) & (stamps < fold.test_start_ts)).height
+        embargo_rows = frame.filter(
+            (stamps > fold.train_end_ts) & (stamps < fold.test_start_ts)
+        ).height
         available = frame.filter(fold.train_mask(ts_column)).height
         rows.append(
             (

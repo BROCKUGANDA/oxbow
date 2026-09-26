@@ -107,9 +107,17 @@ def load_rows() -> list[dict[str, object]]:
     through a float, so the minor units stay exact.
     """
     names = [
-        "ts", "from_bank", "from_account", "to_bank", "to_account",
-        "amount_received", "receiving_ccy", "amount_paid", "payment_ccy",
-        "payment_format", "is_laundering",
+        "ts",
+        "from_bank",
+        "from_account",
+        "to_bank",
+        "to_account",
+        "amount_received",
+        "receiving_ccy",
+        "amount_paid",
+        "payment_ccy",
+        "payment_format",
+        "is_laundering",
     ]
     quoted = ", ".join(f"'{n}'" for n in names)
     types = ", ".join(["'VARCHAR'"] * len(names))
@@ -192,14 +200,10 @@ def build_events(
             if str(r["from_account"]) in whitelist and str(r["to_account"]) in whitelist
         ]
     else:
-        accounts = {str(r["from_account"]) for r in in_ccy} | {
-            str(r["to_account"]) for r in in_ccy
-        }
+        accounts = {str(r["from_account"]) for r in in_ccy} | {str(r["to_account"]) for r in in_ccy}
         keep = {a for a in accounts if selected(a, identity)}
         sampled = [
-            r
-            for r in in_ccy
-            if str(r["from_account"]) in keep and str(r["to_account"]) in keep
+            r for r in in_ccy if str(r["from_account"]) in keep and str(r["to_account"]) in keep
         ]
     # Stable, bounded, and time-ordered first: the cap must not depend on file order.
     sampled.sort(key=lambda r: (str(r["ts"]), str(r["from_account"]), str(r["to_account"])))
@@ -280,9 +284,17 @@ def planted_cycle_accounts(identity: RunIdentity) -> tuple[set[str], set[str], d
         return set(), set(), {"error": "no CYCLE rows in the typology artifact"}
 
     names = [
-        "ts", "from_bank", "from_account", "to_bank", "to_account",
-        "amount_received", "receiving_ccy", "amount_paid", "payment_ccy",
-        "payment_format", "is_laundering",
+        "ts",
+        "from_bank",
+        "from_account",
+        "to_bank",
+        "to_account",
+        "amount_received",
+        "receiving_ccy",
+        "amount_paid",
+        "payment_ccy",
+        "payment_format",
+        "is_laundering",
     ]
     quoted = ", ".join(f"'{n}'" for n in names)
     types = ", ".join(["'VARCHAR'"] * len(names))
@@ -310,13 +322,17 @@ def planted_cycle_accounts(identity: RunIdentity) -> tuple[set[str], set[str], d
     flagged = sum(1 for r in rows if str(r[2]) == "1")
     raw = {str(r[0]) for r in rows} | {str(r[1]) for r in rows}
     accounts = {account_key(name, identity) for name in raw}
-    return accounts, raw, {
-        "matched_rows": len(rows),
-        "rows_with_laundering_flag": flagged,
-        "alignment_share": round(flagged / len(rows), 4),
-        "alignment_plausible": flagged / len(rows) > 0.95,
-        "distinct_planted_accounts": len(raw),
-    }
+    return (
+        accounts,
+        raw,
+        {
+            "matched_rows": len(rows),
+            "rows_with_laundering_flag": flagged,
+            "alignment_share": round(flagged / len(rows), 4),
+            "alignment_plausible": flagged / len(rows) > 0.95,
+            "distinct_planted_accounts": len(raw),
+        },
+    )
 
 
 def labelled_cycle_anatomy() -> dict[str, object]:
@@ -415,9 +431,7 @@ def main() -> int:
     per_currency: dict[str, dict[str, object]] = {}
     for arm, whitelist in arms.items():
         for currency in largest[:3]:
-            events, self_loops, capped = build_events(
-                rows, currency, identity, whitelist=whitelist
-            )
+            events, self_loops, capped = build_events(rows, currency, identity, whitelist=whitelist)
             key = f"{arm}/{currency}"
             if events.is_empty():
                 per_currency[key] = {"error": "no events after sampling"}

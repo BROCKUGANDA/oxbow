@@ -201,9 +201,11 @@ def _active_policy(container: Container, run_id: str) -> dict[str, Any] | None:
 
     session = container.new_session()
     try:
-        row = session.execute(
-            select(Policy).where(Policy.active.is_(True)).limit(1)
-        ).scalars().first()
+        row = (
+            session.execute(select(Policy).where(Policy.active.is_(True)).limit(1))
+            .scalars()
+            .first()
+        )
         from api.policy_engine import _policy_dict
 
         return None if row is None else _policy_dict(row)
@@ -257,7 +259,9 @@ def _allocate(rows: Any, capacity: int, container: Container) -> Any:
     return allocate(rows, capacity, container.economics, allocator=AllocatorId.GREEDY)
 
 
-def _stored_allocations(read_model: ReadModel, run_id: str, policy_id: str) -> dict[str, dict[str, Any]]:
+def _stored_allocations(
+    read_model: ReadModel, run_id: str, policy_id: str
+) -> dict[str, dict[str, Any]]:
     rows, _ = read_model.source.select(
         "policy_allocation", where={"run_id": run_id, "policy_id": policy_id}, allow_missing=True
     )

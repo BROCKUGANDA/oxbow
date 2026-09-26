@@ -203,7 +203,9 @@ def _merge_inverted_bands(
     # unreachable: the loop returns when no inversion remains
 
 
-def fit_bands(scores: np.ndarray, labels: np.ndarray, cfg: BandsConfig) -> tuple[BandTable, np.ndarray]:
+def fit_bands(
+    scores: np.ndarray, labels: np.ndarray, cfg: BandsConfig
+) -> tuple[BandTable, np.ndarray]:
     """Fit the band boundaries on validation and assign every validation row.
 
     Raises :class:`BandFitError` when the validation slice has no positives: there is
@@ -327,7 +329,9 @@ def fit_bands(scores: np.ndarray, labels: np.ndarray, cfg: BandsConfig) -> tuple
             )
         )
 
-    if not all(row.min_points is None or row.max_points is None for row in rows if row.population == 0):
+    if not all(
+        row.min_points is None or row.max_points is None for row in rows if row.population == 0
+    ):
         raise BandFitError("an absent band carries a boundary; the table would misreport range")
     table = BandTable(
         rows=tuple(rows),

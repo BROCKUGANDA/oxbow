@@ -55,7 +55,9 @@ def logit(probability: np.ndarray) -> np.ndarray:
     is common in boosting and an infinite logit would poison every downstream fit with
     no diagnostic. The clip magnitude is in ``PROBABILITY_CLIP``, one place, stated.
     """
-    clipped = np.clip(np.asarray(probability, dtype=np.float64), PROBABILITY_CLIP, 1.0 - PROBABILITY_CLIP)
+    clipped = np.clip(
+        np.asarray(probability, dtype=np.float64), PROBABILITY_CLIP, 1.0 - PROBABILITY_CLIP
+    )
     return np.log(clipped / (1.0 - clipped))
 
 
@@ -106,7 +108,9 @@ def correct_prior(
     (a number measured on the corpus and written into the dataset card) or measured on
     the validation slice, which oversampling never touches.
     """
-    threshold = cfg.oversampling_tolerance_multiple * max(population_positive_share, PROBABILITY_CLIP)
+    threshold = cfg.oversampling_tolerance_multiple * max(
+        population_positive_share, PROBABILITY_CLIP
+    )
     oversampled = train_positive_share > threshold
     decision_rule = (
         f"applied when train share > {cfg.oversampling_tolerance_multiple} x population share"
@@ -180,8 +184,7 @@ class ConfidenceBin:
     @property
     def label_text(self) -> str:
         return (
-            f"observed rate in this band: {self.observed_rate * 100:.2f}%, "
-            f"n={self.sample_size}"
+            f"observed rate in this band: {self.observed_rate * 100:.2f}%, " f"n={self.sample_size}"
         )
 
     def to_dict(self) -> dict[str, object]:
@@ -248,9 +251,7 @@ class CalibrationOutcome:
             raise ModelLayerError(
                 "calibration reports method='isotonic' but carries no fitted step function"
             )
-        regressor = IsotonicRegression(
-            y_min=0.0, y_max=1.0, increasing=True, out_of_bounds="clip"
-        )
+        regressor = IsotonicRegression(y_min=0.0, y_max=1.0, increasing=True, out_of_bounds="clip")
         regressor.fit(np.asarray(self.isotonic_x), np.asarray(self.isotonic_y))
         return np.asarray(regressor.predict(shifted), dtype=np.float64)
 
@@ -317,7 +318,10 @@ class CalibrationOutcome:
             "platt": (
                 None
                 if self.platt_weight is None
-                else {"weight": round(self.platt_weight, 8), "intercept": round(self.platt_intercept or 0.0, 8)}
+                else {
+                    "weight": round(self.platt_weight, 8),
+                    "intercept": round(self.platt_intercept or 0.0, 8),
+                }
             ),
             "isotonic_boundaries": {
                 "x": [round(value, 8) for value in self.isotonic_x],
@@ -392,7 +396,9 @@ def reliability_curve(
             ConfidenceBin(
                 bin_index=index,
                 probability_lower=float(block_prob[0]),
-                probability_upper=float(block_prob[-1]) if upper - lower > 1 else float(block_prob[-1]),
+                probability_upper=float(block_prob[-1])
+                if upper - lower > 1
+                else float(block_prob[-1]),
                 sample_size=int(upper - lower),
                 observed_rate=float(np.mean(block_label)),
                 mean_predicted=float(np.mean(block_prob)),
@@ -543,22 +549,28 @@ def calibration_from_dict(payload: dict[str, object]) -> CalibrationOutcome:
         knots_x = tuple(float(value) for value in bounds.get("x", []))
         knots_y = tuple(float(value) for value in bounds.get("y", []))
     curve_raw = payload.get("reliability_curve", [])
-    curve = tuple(
-        ConfidenceBin(
-            bin_index=int(entry["bin_index"]),
-            probability_lower=float(entry["probability_lower"]),
-            probability_upper=float(entry["probability_upper"]),
-            sample_size=int(entry["sample_size"]),
-            observed_rate=float(entry["observed_rate"]),
-            mean_predicted=float(entry["mean_predicted"]),
+    curve = (
+        tuple(
+            ConfidenceBin(
+                bin_index=int(entry["bin_index"]),
+                probability_lower=float(entry["probability_lower"]),
+                probability_upper=float(entry["probability_upper"]),
+                sample_size=int(entry["sample_size"]),
+                observed_rate=float(entry["observed_rate"]),
+                mean_predicted=float(entry["mean_predicted"]),
+            )
+            for entry in curve_raw
+            if isinstance(entry, dict)
         )
-        for entry in curve_raw
-        if isinstance(entry, dict)
-    ) if isinstance(curve_raw, list) else ()
+        if isinstance(curve_raw, list)
+        else ()
+    )
     return CalibrationOutcome(
         method=str(payload["method"]),
         refused=bool(payload["refused"]),
-        refusal_reason=(None if payload.get("refusal_reason") is None else str(payload["refusal_reason"])),
+        refusal_reason=(
+            None if payload.get("refusal_reason") is None else str(payload["refusal_reason"])
+        ),
         validation_positives=int(payload["validation_positives"]),
         validation_rows=int(payload["validation_rows"]),
         floor=int(payload["floor"]),

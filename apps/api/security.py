@@ -72,7 +72,9 @@ def _jwk_to_rsa(jwk: Mapping[str, Any]) -> tuple[int, int]:
     exponent = jwk.get("e")
     if not isinstance(modulus, str) or not isinstance(exponent, str):
         raise TokenError("RSA JWK is missing n or e")
-    return int.from_bytes(b64url_decode(modulus), "big"), int.from_bytes(b64url_decode(exponent), "big")
+    return int.from_bytes(b64url_decode(modulus), "big"), int.from_bytes(
+        b64url_decode(exponent), "big"
+    )
 
 
 def verify_rs256(signed: bytes, signature: bytes, modulus: int, exponent: int) -> bool:
@@ -214,9 +216,7 @@ def decode_token(
         expected_issuer = LOCAL_ISSUER
     else:
         if alg != _RS256:
-            raise TokenError(
-                f"tokens for issuer {claimed_issuer!r} must be {_RS256}, got {alg!r}"
-            )
+            raise TokenError(f"tokens for issuer {claimed_issuer!r} must be {_RS256}, got {alg!r}")
         if jwks_cache is None or not oidc_issuer:
             raise TokenError(
                 "an RS256 token arrived but no OIDC issuer is configured, so nobody can verify it"
@@ -331,7 +331,13 @@ def principal_from_claims(claims: Mapping[str, Any], *, source: str) -> Principa
 
 
 def mint_local_token(
-    *, subject: str, roles: Sequence[str], secret: str, display_name: str = "", ttl_seconds: int = 3600, now: float | None = None
+    *,
+    subject: str,
+    roles: Sequence[str],
+    secret: str,
+    display_name: str = "",
+    ttl_seconds: int = 3600,
+    now: float | None = None,
 ) -> str:
     """Mint the offline-demo HS256 token. Refuses a role it does not know."""
     unknown = [role for role in roles if role not in ROLES]

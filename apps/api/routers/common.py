@@ -55,9 +55,7 @@ class Pagination:
             raise BadRequest(f"order must be asc or desc, got {self.order!r}")
 
 
-def page_params(
-    default_sort: str, allowed: frozenset[str]
-) -> Any:
+def page_params(default_sort: str, allowed: frozenset[str]) -> Any:
     """Build the four query dependencies every list route shares."""
 
     def dependency(

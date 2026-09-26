@@ -47,7 +47,9 @@ class SplitsFoldProvider:
                 HarnessFold(
                     index=fold.index,
                     train_mask=self._evaluate(corpus, fold.train_rows_mask(self._as_of_column)),
-                    validation_mask=self._evaluate(corpus, fold.validation_mask(self._as_of_column)),
+                    validation_mask=self._evaluate(
+                        corpus, fold.validation_mask(self._as_of_column)
+                    ),
                     test_mask=self._evaluate(corpus, fold.test_mask(self._as_of_column)),
                     embargo_days=self._plan.embargo_days,
                 )

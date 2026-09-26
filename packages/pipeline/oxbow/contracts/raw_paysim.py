@@ -102,9 +102,7 @@ def _amount_format(data: object) -> pl.LazyFrame:
     """
     f = _frame(data)
     return _bool_col(
-        f["amount"].str.strip_chars().str.contains(
-            r"^\d+(\.\d{1,2})?$|^\d+(\.\d+)?[Ee]\+?\d+$"
-        )
+        f["amount"].str.strip_chars().str.contains(r"^\d+(\.\d{1,2})?$|^\d+(\.\d+)?[Ee]\+?\d+$")
     )
 
 

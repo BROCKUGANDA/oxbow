@@ -299,7 +299,9 @@ def assert_fold_discipline(
     fit_rows = [i for i in range(height) if fold.train_mask[i] or fold.validation_mask[i]]
     test_rows = [i for i in range(height) if fold.test_mask[i]]
     if not test_rows:
-        raise FoldError(f"fold {fold.index}: empty test window; a fold with nothing to score is a config fault")
+        raise FoldError(
+            f"fold {fold.index}: empty test window; a fold with nothing to score is a config fault"
+        )
     stamps = corpus.get_column(as_of_column).to_list()
     fit_max = max((stamps[i] for i in fit_rows), default=None)
     test_min = min(stamps[i] for i in test_rows)
@@ -321,7 +323,9 @@ def assert_fold_discipline(
 _SLACK_DAYS: Final = 1e-6
 
 
-def corpus_feasibility(corpus: pl.DataFrame, config: BacktestConfig, fold_count: int) -> dict[str, Any]:
+def corpus_feasibility(
+    corpus: pl.DataFrame, config: BacktestConfig, fold_count: int
+) -> dict[str, Any]:
     """Report whether the corpus can *honestly* support the configured embargo + folds.
 
     THE HONEST CAVEAT (plan §12 / DEV-013): the IBM-AML window is 18 days of a
@@ -451,9 +455,7 @@ def _fold_result(
         precision: float | None = None
     else:
         precision = economics.true_positives / economics.accounts_reviewed
-    recall = (
-        economics.true_positives / n_test_positive if n_test_positive > 0 else None
-    )
+    recall = economics.true_positives / n_test_positive if n_test_positive > 0 else None
     try:
         pr_auc = metrics.pr_auc(probabilities, labels, keys)
     except ValueError:
@@ -542,7 +544,9 @@ def _aggregate_policy(
 
     optimality_gap: int | None = None
     if policy == POLICY_EV_CPSAT and greedy_ev_total is not None:
-        optimality_gap = sum(r.economics.expected_value_minor for r in fold_results) - greedy_ev_total
+        optimality_gap = (
+            sum(r.economics.expected_value_minor for r in fold_results) - greedy_ev_total
+        )
 
     return PolicyAggregate(
         policy=policy,
@@ -635,14 +639,18 @@ def run_variant(
     }
     greedy_ev_total = None
     if POLICY_EV_GREEDY in policies and POLICY_EV_CPSAT in policies:
-        greedy_fold = _run_policies([POLICY_EV_GREEDY], folds, fold_accounts, fold_severity, config, base_seed, allocator)
+        greedy_fold = _run_policies(
+            [POLICY_EV_GREEDY], folds, fold_accounts, fold_severity, config, base_seed, allocator
+        )
         greedy_ev_total = sum(
             r.economics.expected_value_minor for r in greedy_fold[POLICY_EV_GREEDY]
         )
 
     aggregated: dict[str, PolicyAggregate] = {}
     for policy in policies:
-        results = _run_policies([policy], folds, fold_accounts, fold_severity, config, base_seed, allocator)
+        results = _run_policies(
+            [policy], folds, fold_accounts, fold_severity, config, base_seed, allocator
+        )
         fold_results = results[policy]
         pooled = _pooled_rows(fold_accounts, folds)
         aggregated[policy] = _aggregate_policy(
@@ -655,16 +663,16 @@ def run_variant(
             greedy_ev_total=greedy_ev_total,
         )
 
-    primary = aggregated.get(POLICY_EV_GREEDY) or aggregated.get(POLICY_THRESHOLD) or next(
-        iter(aggregated.values())
+    primary = (
+        aggregated.get(POLICY_EV_GREEDY)
+        or aggregated.get(POLICY_THRESHOLD)
+        or next(iter(aggregated.values()))
     )
     all_accounts = [a for fold in folds for a in fold_accounts[fold.index]]
     reviewed_pool = {key for r in primary.folds for key in r.economics.reviewed}
     fairness_payload = fairness_to_dict(fairness_report(all_accounts, reviewed_pool))
     perturbations = _perturbations(all_accounts, reviewed_pool, primary, config, base_seed)
-    stability = _seed_stability(
-        corpus, folds, primary.policy, config, spec_hash, scorer, rule_hits
-    )
+    stability = _seed_stability(corpus, folds, primary.policy, config, spec_hash, scorer, rule_hits)
 
     return VariantResult(
         label=label,
@@ -713,9 +721,7 @@ def _run_policies(
                 friction_cost_minor=config.friction_cost_minor,
                 currency=config.currency,
             )
-            out[policy].append(
-                _fold_result(fold, accounts, outcome, config=config, seed=seed)
-            )
+            out[policy].append(_fold_result(fold, accounts, outcome, config=config, seed=seed))
     return out
 
 
@@ -761,9 +767,7 @@ def _perturbations(
         cutoff_rank=cutoff_rank,
         currency=config.currency,
     )
-    edges = edge_drop_typology_recall_stability(
-        accounts, reviewed, drop_ratio=0.10, seed=seed
-    )
+    edges = edge_drop_typology_recall_stability(accounts, reviewed, drop_ratio=0.10, seed=seed)
     return {
         "amount_shift_plus10": {
             "shift_ratio": plus.shift_ratio,
@@ -1041,7 +1045,11 @@ def _log_to_mlflow(
         "configs_evaluated": len(variants),
     }
     if uri is None:
-        return {**base, "logged": False, "reason": "no tracking URI supplied (degraded, not failed)"}
+        return {
+            **base,
+            "logged": False,
+            "reason": "no tracking URI supplied (degraded, not failed)",
+        }
     try:
         import mlflow  # imported lazily so an absent/unconfigured server never breaks import
 
@@ -1059,7 +1067,11 @@ def _log_to_mlflow(
                     mlflow.log_metric(f"{variant.label}.pr_auc", primary.pr_auc)
         return {**base, "logged": True, "tracking_uri": uri}
     except Exception as exc:  # degrade with a named reason, never fail the backtest run
-        return {**base, "logged": False, "reason": f"mlflow unavailable: {type(exc).__name__}: {exc}"}
+        return {
+            **base,
+            "logged": False,
+            "reason": f"mlflow unavailable: {type(exc).__name__}: {exc}",
+        }
 
 
 __all__ = [

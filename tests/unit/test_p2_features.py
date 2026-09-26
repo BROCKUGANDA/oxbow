@@ -93,9 +93,7 @@ def events() -> pl.DataFrame:
 
 
 @pytest.fixture(scope="module")
-def table(
-    events: pl.DataFrame, registry: FeatureRegistry, cfg: PipelineConfig
-) -> FeatureTable:
+def table(events: pl.DataFrame, registry: FeatureRegistry, cfg: PipelineConfig) -> FeatureTable:
     return build_feature_table(events, registry, cfg=cfg)
 
 
@@ -105,9 +103,7 @@ def wide_events(cfg: PipelineConfig) -> pl.DataFrame:
 
 
 @pytest.fixture(scope="module")
-def wide(
-    wide_events: pl.DataFrame, registry: FeatureRegistry, cfg: PipelineConfig
-) -> FeatureTable:
+def wide(wide_events: pl.DataFrame, registry: FeatureRegistry, cfg: PipelineConfig) -> FeatureTable:
     return build_feature_table(wide_events, registry, cfg=cfg)
 
 
@@ -238,9 +234,7 @@ def test_cross_currency_sum_raises(cfg: PipelineConfig, registry: FeatureRegistr
     blended = dataclasses.replace(registry["amount_in_30d_minor"], group_by=("entity",))
     narrowed = dataclasses.replace(
         registry,
-        entries=tuple(
-            blended if entry.id == blended.id else entry for entry in registry.entries
-        ),
+        entries=tuple(blended if entry.id == blended.id else entry for entry in registry.entries),
     )
     assert narrowed["amount_in_30d_minor"].group_by == ("entity",)
     with pytest.raises(CrossCurrencyAggregationError, match="blend currencies"):
@@ -279,9 +273,9 @@ def test_zero_amount_excluded_from_value_features(
     built_with = build_feature_table(with_probe, registry, cfg=cfg)
     built_without = build_feature_table(without_probe, registry, cfg=cfg)
 
-    assert built_with.matrix.filter(pl.col("txn_id") == "t_probe").height == 2, (
-        "the zero-amount row vanished from the matrix"
-    )
+    assert (
+        built_with.matrix.filter(pl.col("txn_id") == "t_probe").height == 2
+    ), "the zero-amount row vanished from the matrix"
     # `t_rev` is the anchor because its own cutoff is after the probe. The window is
     # (cutoff - 30d, cutoff], so `t_pay` at minute 0 cannot see a probe at minute 120 —
     # checking that row instead would be asserting a forward read.
@@ -334,9 +328,7 @@ def test_late_row_does_not_mutate_sealed_window(
     assert sealed.report.late_arrival_count == 2, "one late transaction renders two scored sides"
     assert historical.report.late_arrival_count == 0
 
-    compared = [
-        column for column in sealed.matrix.columns if column not in (*KEYS, "cutoff_ts")
-    ]
+    compared = [column for column in sealed.matrix.columns if column not in (*KEYS, "cutoff_ts")]
     joined = sealed.matrix.join(
         historical.matrix.select([*KEYS, *compared]),
         on=KEYS,
@@ -344,9 +336,9 @@ def test_late_row_does_not_mutate_sealed_window(
         suffix="__historical",
     )
     covered = joined.filter(pl.col("cutoff_ts") <= seal)
-    assert covered.height == historical.matrix.height - 2, (
-        "the seal should cover every pre-existing row except the ones after it"
-    )
+    assert (
+        covered.height == historical.matrix.height - 2
+    ), "the seal should cover every pre-existing row except the ones after it"
     offenders: list[str] = []
     for column in compared:
         first, second = covered[column], covered[f"{column}__historical"]
@@ -359,9 +351,10 @@ def test_late_row_does_not_mutate_sealed_window(
     # seal, the same row's window genuinely does contain the arrival once the seal lifts.
     unsealed = build_feature_table(corpus, registry, cfg=cfg, sealed_before_ts=None)
     anchor = (pl.col("txn_id") == "t_last") & (pl.col("entity") == "acct_a")
-    assert int(unsealed.matrix.filter(anchor)["txn_count_in_30d"].item()) == int(
-        sealed.matrix.filter(anchor)["txn_count_in_30d"].item()
-    ) + 1, "the late row must be out of the sealed count and inside the unsealed one"
+    assert (
+        int(unsealed.matrix.filter(anchor)["txn_count_in_30d"].item())
+        == int(sealed.matrix.filter(anchor)["txn_count_in_30d"].item()) + 1
+    ), "the late row must be out of the sealed count and inside the unsealed one"
     assert int(unsealed.matrix.filter(anchor)["amount_in_30d_minor"].item()) > int(
         sealed.matrix.filter(anchor)["amount_in_30d_minor"].item()
     ), "and out of its money sum"
@@ -406,9 +399,7 @@ def test_winsorise_features_not_reports(
     ), "a column with values present must produce a bound"
 
     reported = money_totals(wide_events)
-    assert sum(total.moved_minor for total in reported) == int(
-        wide_events["amount_minor"].sum()
-    )
+    assert sum(total.moved_minor for total in reported) == int(wide_events["amount_minor"].sum())
     assert sum(total.events for total in reported) == wide_events.height
     assert "reported money is raw and unclipped" in bounds.statement()
     # The clip must not be fitted on the whole corpus either: bounds fitted on all rows
@@ -421,9 +412,7 @@ def test_winsorise_features_not_reports(
 # --- §8 totals ------------------------------------------------------------
 
 
-def test_totals_match_rendered_rows(
-    wide_events: pl.DataFrame, wide: FeatureTable
-) -> None:
+def test_totals_match_rendered_rows(wide_events: pl.DataFrame, wide: FeatureTable) -> None:
     """Reported money reconciles against the rows the artifact renders, per currency.
 
     Three identities, each failing alone: every event renders exactly two scored sides; the
@@ -445,7 +434,9 @@ def test_totals_match_rendered_rows(
         assert_totals_match_rendered_rows(wide_events, dataclasses.replace(wide, keys=inflated))
 
 
-def test_a_dropped_transaction_breaks_the_reconciliation(wide_events: pl.DataFrame, wide: FeatureTable) -> None:
+def test_a_dropped_transaction_breaks_the_reconciliation(
+    wide_events: pl.DataFrame, wide: FeatureTable
+) -> None:
     """Drop one rendered transaction and the totals stop matching.
 
     The counterpart to the previous test: a reconciliation that never fails on a missing row
@@ -483,12 +474,12 @@ def test_reversal_not_a_cycle(cfg: PipelineConfig, registry: FeatureRegistry) ->
     assert eligible.height == 2
     assert not bool(eligible["is_reversal"].any())
 
-    assert _has_directed_cycle(edges.select("src", "dst")), (
-        "the unfiltered edge set does form a cycle, so the exclusion is doing the work"
-    )
-    assert not _has_directed_cycle(eligible.select("src", "dst")), (
-        "a refund manufactured a laundering cycle"
-    )
+    assert _has_directed_cycle(
+        edges.select("src", "dst")
+    ), "the unfiltered edge set does form a cycle, so the exclusion is doing the work"
+    assert not _has_directed_cycle(
+        eligible.select("src", "dst")
+    ), "a refund manufactured a laundering cycle"
 
 
 def _has_directed_cycle(edges: pl.DataFrame) -> bool:
@@ -562,9 +553,7 @@ def test_balance_delta_feature_present(
     # A balance the corpus never observed is null, not zero: 03 A rule 2. `t_late` carries
     # no balance on either side, which is the state the rule is about — `t_meet` does
     # observe acct_e's balance and is therefore a delta of exactly zero, a different fact.
-    unobserved = computed.filter(
-        (pl.col("txn_id") == "t_late") & (pl.col("entity") == "acct_f")
-    )
+    unobserved = computed.filter((pl.col("txn_id") == "t_late") & (pl.col("entity") == "acct_f"))
     assert unobserved["balance_delta_abs_minor"].item() is None
     assert not bool(unobserved["is_balance_delta_mismatch"].item())
     assert int(unobserved["balance_mismatch_count_30d"].item()) == 0
@@ -864,7 +853,7 @@ def test_every_entry_declares_an_as_of_and_a_window(registry: FeatureRegistry) -
         rolling += 1
     assert rolling > 0
     assert registry.max_lookback_days == 30
-    assert MATRIX_FLOOR <= len(registry.matrix_ids)
+    assert len(registry.matrix_ids) >= MATRIX_FLOOR
 
 
 MATRIX_FLOOR: Final = 60

@@ -363,7 +363,9 @@ def _structural_failure(frame: pl.DataFrame, *, row_offset: int) -> QuarantineRe
         )
     nulls = frame.select([pl.col(name).null_count().alias(name) for name in PAYSIM_RAW_COLUMNS])
     offending = {
-        name: int(nulls.get_column(name)[0]) for name in nulls.columns if int(nulls.get_column(name)[0])
+        name: int(nulls.get_column(name)[0])
+        for name in nulls.columns
+        if int(nulls.get_column(name)[0])
     }
     if offending:
         return QuarantineRecord(
@@ -582,12 +584,12 @@ def canonicalize_batch(
 
     # --- 3: duplicates ------------------------------------------------------
     frame = frame.with_columns(
-        pl.concat_str([pl.col(name).cast(pl.String) for name in ROW_IDENTITY_COLUMNS], separator="|").alias(
-            "_row_key"
-        ),
-        pl.concat_str([pl.col(name).cast(pl.String) for name in ROW_PAYLOAD_COLUMNS], separator="|").alias(
-            "_payload_key"
-        ),
+        pl.concat_str(
+            [pl.col(name).cast(pl.String) for name in ROW_IDENTITY_COLUMNS], separator="|"
+        ).alias("_row_key"),
+        pl.concat_str(
+            [pl.col(name).cast(pl.String) for name in ROW_PAYLOAD_COLUMNS], separator="|"
+        ).alias("_payload_key"),
     )
     grouped = frame.group_by("_row_key", maintain_order=True).agg(
         pl.len().alias("_occurrences"),
@@ -595,7 +597,9 @@ def canonicalize_batch(
     )
     conflicting = grouped.filter(pl.col("_variants") > 1).get_column("_row_key").to_list()
     identical = grouped.filter((pl.col("_occurrences") > 1) & (pl.col("_variants") == 1))
-    duplicates_dropped = int(identical["_occurrences"].sum() - identical.height) if identical.height else 0
+    duplicates_dropped = (
+        int(identical["_occurrences"].sum() - identical.height) if identical.height else 0
+    )
 
     if conflicting:
         conflict_rows = frame.filter(pl.col("_row_key").is_in(conflicting))
@@ -629,9 +633,7 @@ def canonicalize_batch(
         )
 
     # --- 4: money, identities, timestamps -----------------------------------
-    amount_text, amount_expanded, amount_rounded = normalise_money_texts(
-        frame.get_column("amount")
-    )
+    amount_text, amount_expanded, amount_rounded = normalise_money_texts(frame.get_column("amount"))
     balance_plain: dict[str, pl.Series] = {}
     balance_expanded = 0
     balance_rounded = 0
@@ -653,7 +655,9 @@ def canonicalize_batch(
         modulus_us=offset_modulus_us,
         pool=pool,
     )
-    key_lookup = pl.DataFrame({"_row_key": distinct_keys, "txn_id": txn_ids, "_offset_us": offsets_us})
+    key_lookup = pl.DataFrame(
+        {"_row_key": distinct_keys, "txn_id": txn_ids, "_offset_us": offsets_us}
+    )
     name_lookup = pl.DataFrame({"name": distinct_names, "key": name_keys})
 
     batch_id = batch_id_for_rows(PAYSIM_SOURCE_NAME, batch_ordinal, frame.get_column("_row_key"))
@@ -752,7 +756,9 @@ def canonicalize_batch(
                 batch_id=batch_id,
                 row_count=rows_read,
                 canonical_count=events.height,
-                quarantine_count=sum(1 for record in quarantined if record.reason != "schema_mismatch"),
+                quarantine_count=sum(
+                    1 for record in quarantined if record.reason != "schema_mismatch"
+                ),
                 window_start=window_start,
                 window_end=window_end,
             )

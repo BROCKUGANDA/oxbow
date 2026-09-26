@@ -183,7 +183,9 @@ def _future_tolerance(cfg: PipelineConfig) -> timedelta:
     """
     ingest = cfg.raw.get("ingest")
     if not isinstance(ingest, dict):
-        raise BuildConfigError("config/pipeline.yaml has no ingest block to read the tolerance from")
+        raise BuildConfigError(
+            "config/pipeline.yaml has no ingest block to read the tolerance from"
+        )
     hours = ingest.get("future_timestamp_tolerance_hours")
     if not isinstance(hours, int) or isinstance(hours, bool) or hours < 0:
         raise BuildConfigError(
@@ -267,9 +269,7 @@ def registry_with_entry_order_reversed(registry: FeatureRegistry) -> FeatureRegi
     return _variant_registry(registry, list(reversed(registry.entries)))
 
 
-def registry_with_extra_entry(
-    registry: FeatureRegistry, extra: FeatureSpec
-) -> FeatureRegistry:
+def registry_with_extra_entry(registry: FeatureRegistry, extra: FeatureSpec) -> FeatureRegistry:
     """The live entries plus one more, hash recomputed.
 
     The sanctioned route for a deliberately leaking column: it goes through the same
@@ -339,9 +339,7 @@ def money_totals(events: pl.DataFrame) -> tuple[MoneyTotal, ...]:
         pl.col(AMOUNT_MINOR).sum().alias("moved_minor"),
     )
     expanded = entity_event_frame(events)
-    signed = expanded.with_columns(
-        (pl.col(DIRECTION_SIGN) * pl.col(AMOUNT_MINOR)).alias("_signed")
-    )
+    signed = expanded.with_columns((pl.col(DIRECTION_SIGN) * pl.col(AMOUNT_MINOR)).alias("_signed"))
     rendered = signed.group_by(CURRENCY).agg(
         pl.len().alias("rendered_rows"),
         (-pl.col("_signed").filter(pl.col(DIRECTION_SIGN) < 0)).sum().alias("debit_minor"),

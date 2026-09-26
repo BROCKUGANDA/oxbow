@@ -187,7 +187,9 @@ def attach_rule_hits(frame: pl.DataFrame, provider: RuleHitProvider) -> pl.DataF
     )
     if RULE_COLUMN_SEVERITY_SUM not in joined.columns:
         severity_columns = [
-            name for name in joined.columns if name.startswith("rule_r") and name.endswith("severity")
+            name
+            for name in joined.columns
+            if name.startswith("rule_r") and name.endswith("severity")
         ]
         if not severity_columns:
             raise FrameContractViolationError(
@@ -196,8 +198,9 @@ def attach_rule_hits(frame: pl.DataFrame, provider: RuleHitProvider) -> pl.DataF
                 "baselines.rules_only.score = sum_of_rule_severity) has nothing to sum"
             )
         joined = joined.with_columns(
-            pl.sum_horizontal([pl.col(name).cast(pl.Float64).fill_null(0.0) for name in severity_columns])
-            .alias(RULE_COLUMN_SEVERITY_SUM)
+            pl.sum_horizontal(
+                [pl.col(name).cast(pl.Float64).fill_null(0.0) for name in severity_columns]
+            ).alias(RULE_COLUMN_SEVERITY_SUM)
         )
     # Only the columns this join *added* are checked for unmatched rows: the frame's own
     # rule features can legitimately be null (the feature layer misses values by policy,
@@ -242,7 +245,9 @@ def feature_matrix(
     columns: list[np.ndarray] = []
     for name in feature_names:
         if name not in frame.columns:
-            raise FrameContractViolationError(f"feature {name!r} is absent from the frame handed to the model")
+            raise FrameContractViolationError(
+                f"feature {name!r} is absent from the frame handed to the model"
+            )
         column = frame.get_column(name)
         if name in categorical:
             columns.append(_stable_category_codes(column).astype(np.float64))

@@ -235,7 +235,9 @@ class HonestSignalScorer(_BaseScorer):
             signal = float(row.get("signal", _unit_hash(key, "signal")))
             noisy = min(
                 0.95,
-                max(0.05, self._quality * signal + (1.0 - self._quality) * _unit_hash(key, "noise")),
+                max(
+                    0.05, self._quality * signal + (1.0 - self._quality) * _unit_hash(key, "noise")
+                ),
             )
             scores[key] = AccountScore(
                 account_key=key,
@@ -243,7 +245,9 @@ class HonestSignalScorer(_BaseScorer):
                 band_observed_rate=round(noisy, 2),
                 band_n=200,
             )
-        return ScoreResult(scores=scores, model_version=self._model_version, feature_spec_hash=self._spec_hash)
+        return ScoreResult(
+            scores=scores, model_version=self._model_version, feature_spec_hash=self._spec_hash
+        )
 
 
 class LeakingLabelScorer(_BaseScorer):
@@ -266,7 +270,9 @@ class LeakingLabelScorer(_BaseScorer):
     ) -> ScoreResult:
         del train, validation, seed
         if feature_spec_hash != self._spec_hash:
-            raise FeatureHashMismatchError("fake leaking scorer refuses a feature-hash mismatch too")
+            raise FeatureHashMismatchError(
+                "fake leaking scorer refuses a feature-hash mismatch too"
+            )
         scores: dict[str, AccountScore] = {}
         for row in scored.to_dicts():
             key = str(row[COL_ACCOUNT_KEY])
@@ -278,7 +284,9 @@ class LeakingLabelScorer(_BaseScorer):
                 band_observed_rate=leaked,
                 band_n=200,
             )
-        return ScoreResult(scores=scores, model_version="fake-control-lookahead", feature_spec_hash=self._spec_hash)
+        return ScoreResult(
+            scores=scores, model_version="fake-control-lookahead", feature_spec_hash=self._spec_hash
+        )
 
 
 class RulesOnlyScorer(_BaseScorer):
@@ -306,7 +314,9 @@ class RulesOnlyScorer(_BaseScorer):
                 band_observed_rate=round(min(0.9, severity), 2),
                 band_n=150,
             )
-        return ScoreResult(scores=scores, model_version="fake-rules-only", feature_spec_hash=self._spec_hash)
+        return ScoreResult(
+            scores=scores, model_version="fake-rules-only", feature_spec_hash=self._spec_hash
+        )
 
 
 class FeatureHashMismatchError(Exception):

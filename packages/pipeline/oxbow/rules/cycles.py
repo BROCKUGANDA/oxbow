@@ -205,9 +205,7 @@ def adjacency(
     return ordered, nodes, dropped
 
 
-def build_loop(
-    nodes: Sequence[str], legs: Sequence[Leg], *, reasons: Sequence[str] = ()
-) -> Loop:
+def build_loop(nodes: Sequence[str], legs: Sequence[Leg], *, reasons: Sequence[str] = ()) -> Loop:
     """Measure one explicit ring, without deciding anything about it.
 
     Public because the corpus's own labelled cycles are rings the *walk* cannot find
@@ -232,9 +230,7 @@ def build_loop(
         non_increasing_breaches=sum(
             1 for previous, following in pairwise(amounts) if following > previous
         ),
-        timestamps_increasing=all(
-            later > earlier for earlier, later in pairwise(stamps)
-        ),
+        timestamps_increasing=all(later > earlier for earlier, later in pairwise(stamps)),
     )
 
 
@@ -551,9 +547,7 @@ def rails_only(ctx: RuleContext) -> tuple[frozenset[str], dict[str, int]]:
     return frozenset(skip), {"rails": rails, "singletons": 0}
 
 
-def policy_near_misses(
-    ctx: RuleContext, search: LoopSearch
-) -> tuple[list[Loop], list[NearMiss]]:
+def policy_near_misses(ctx: RuleContext, search: LoopSearch) -> tuple[list[Loop], list[NearMiss]]:
     """Apply R4's configured policy, returning hits and the refused loops with reasons."""
     from oxbow.rules.settings import CycleMemberSettings
 

@@ -161,9 +161,7 @@ def plan(events: pl.DataFrame, registry: FeatureRegistry) -> SplitPlan:
 
 
 @pytest.fixture(scope="module")
-def bridged(
-    events: pl.DataFrame, registry: FeatureRegistry, plan: SplitPlan
-) -> AccountGrainFrame:
+def bridged(events: pl.DataFrame, registry: FeatureRegistry, plan: SplitPlan) -> AccountGrainFrame:
     """The frame the score stage would hand the scoring layer: built once for the module."""
     cfg = load_pipeline_config(REPO_ROOT)
     graph, rules = fold_providers(events, registry, cfg)
@@ -213,12 +211,12 @@ def test_a_fold_graph_carries_every_declared_field_and_not_only_nulls(
         "provider bug rather than DEV-011's star-shaped finding"
     )
     assert int(rows.filter(pl.col("in_degree") > 0).height) > 0, "no inbound edge in the fold"
-    assert isinstance(rows["downstream_outflow_24h_minor"].dtype, pl.Int64), (
-        "money crossed a provider as a non-Int64 column (DEV-005)"
-    )
-    assert int(rows["local_density_bps"].drop_nulls().max() or 0) <= 10_000, (
-        "a basis-point share above 10 000 is not a share"
-    )
+    assert isinstance(
+        rows["downstream_outflow_24h_minor"].dtype, pl.Int64
+    ), "money crossed a provider as a non-Int64 column (DEV-005)"
+    assert (
+        int(rows["local_density_bps"].drop_nulls().max() or 0) <= 10_000
+    ), "a basis-point share above 10 000 is not a share"
 
 
 def test_two_folds_do_not_share_one_graph(
@@ -334,9 +332,9 @@ def test_the_frame_is_account_grain_and_unique_per_instant(bridged: AccountGrain
         .filter(pl.col("rows") > 1)
     )
     assert duplicates.height == 0, f"duplicated account-instant rows: {duplicates.head(3).rows()}"
-    assert sorted(frame[FOLD].unique().to_list()) == list(range(N_FOLDS)), (
-        "the ladder has five folds and every one of them must be present in the frame"
-    )
+    assert sorted(frame[FOLD].unique().to_list()) == list(
+        range(N_FOLDS)
+    ), "the ladder has five folds and every one of them must be present in the frame"
     assert frame.schema[AS_OF_TS] == pl.Datetime("us", UTC)
     assert frame.schema[ACCOUNT_KEY] == pl.String
     assert frame[FOLD].null_count() == 0
@@ -387,9 +385,10 @@ def test_money_columns_arrive_as_integer_minor_units(
     """DEV-005 across a grain change: the bridge adds no arithmetic, so it adds no float."""
     for entry in registry.matrix_entries:
         if entry.id.endswith("_minor") or entry.id.endswith("_bps"):
-            assert str(bridged.frame[entry.id].dtype) in {"Int64", "Int32"}, (
-                f"{entry.id} crossed the bridge as {bridged.frame[entry.id].dtype}"
-            )
+            assert str(bridged.frame[entry.id].dtype) in {
+                "Int64",
+                "Int32",
+            }, f"{entry.id} crossed the bridge as {bridged.frame[entry.id].dtype}"
 
 
 def test_an_account_row_never_reads_past_its_own_instant(
@@ -413,9 +412,9 @@ def test_an_account_row_never_reads_past_its_own_instant(
         shared = truncated.frame.filter(pl.col(AS_OF_TS) <= cutoff)
         base = full.frame.filter(pl.col(AS_OF_TS) <= cutoff)
         joined = shared.join(base, on=[ACCOUNT_KEY, AS_OF_TS], how="inner", suffix="__full")
-        assert joined.height == shared.height == base.height, (
-            "an account row appeared or vanished when the future was deleted"
-        )
+        assert (
+            joined.height == shared.height == base.height
+        ), "an account row appeared or vanished when the future was deleted"
         for entry in registry.matrix_entries:
             differs = (joined[entry.id] != joined[f"{entry.id}__full"]) & ~(
                 joined[entry.id].is_null() & joined[f"{entry.id}__full"].is_null()

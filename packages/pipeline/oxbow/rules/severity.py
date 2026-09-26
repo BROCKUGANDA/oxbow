@@ -114,7 +114,9 @@ def combine(*parts: float, weights: tuple[float, ...] | None = None) -> float:
     total = sum(weights)
     if total <= _EPSILON:
         raise ValueError("combine() weights sum to zero, which makes the blend undefined")
-    return clamp_unit(sum(part * weight for part, weight in zip(parts, weights, strict=True)) / total)
+    return clamp_unit(
+        sum(part * weight for part, weight in zip(parts, weights, strict=True)) / total
+    )
 
 
 __all__ = [

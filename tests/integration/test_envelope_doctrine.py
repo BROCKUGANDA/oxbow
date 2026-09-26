@@ -87,7 +87,10 @@ def test_envelope_types_carry_exactly_data_and_meta() -> None:
         envelope = getattr(module, name, None)
         assert envelope is not None, f"{name} disappeared from schemas/common.py"
         fields = set(envelope.model_fields)
-        assert fields == {"data", "meta"}, f"{name} grew extra keys: {sorted(fields - {'data', 'meta'})}"
+        assert fields == {
+            "data",
+            "meta",
+        }, f"{name} grew extra keys: {sorted(fields - {'data', 'meta'})}"
         assert "success" not in fields and "error" not in fields
 
 

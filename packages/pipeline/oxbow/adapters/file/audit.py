@@ -87,7 +87,9 @@ class FileAuditSink:
             )
         expected_seq = 1 if current is None else current.seq + 1
         if row.seq != expected_seq:
-            raise AuditAppendError(f"audit: row has seq {row.seq} but the next sequence is {expected_seq}")
+            raise AuditAppendError(
+                f"audit: row has seq {row.seq} but the next sequence is {expected_seq}"
+            )
         if compute_row_hash(row) != row.row_hash:
             raise AuditAppendError(
                 "audit: row_hash does not match its own contents; refusing to write a row that "
@@ -107,7 +109,9 @@ class FileAuditSink:
         return _to_row(record)
 
     def load(self, *, from_seq: int = 1) -> Sequence[ChainRow]:
-        return [_to_row(record) for record in read_jsonl(self.path) if int(record["seq"]) >= from_seq]
+        return [
+            _to_row(record) for record in read_jsonl(self.path) if int(record["seq"]) >= from_seq
+        ]
 
     def verify(self) -> ChainVerification:
         return verify_chain(self.load())

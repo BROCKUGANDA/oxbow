@@ -122,9 +122,7 @@ def validation(
         run_id=rid,
         corpora=sorted({str(row["corpus"]) for row in folds}),
         folds=[FoldRow.model_validate(_fold_dict(row)) for row in folds],
-        ablation=[
-            AblationRowView.model_validate(_ablation_dict(row)) for row in ablation
-        ],
+        ablation=[AblationRowView.model_validate(_ablation_dict(row)) for row in ablation],
         curves=curves,
         confusion=None
         if confusion_total == 0
@@ -256,9 +254,7 @@ def scorecard_studio(
         bands=list(bands),
         drift=[DriftRowView.model_validate(row) for row in drift],
         migration=[MigrationCellView.model_validate(row) for row in migration],
-        disagreements=[
-            DisagreementRowView.model_validate(row) for row in disagreements
-        ],
+        disagreements=[DisagreementRowView.model_validate(row) for row in disagreements],
         disagreement_note=None
         if disagreement_total
         else (
@@ -266,12 +262,15 @@ def scorecard_studio(
             "band in this run. That is a finding, not an empty tab — the threshold that would "
             "surface near-misses is in disagreement_threshold"
         ),
-        disagreement_threshold=float(spec.get("scale_factor") or 0.0) * DISAGREEMENT_NEAR_MISS_FACTOR,
+        disagreement_threshold=float(spec.get("scale_factor") or 0.0)
+        * DISAGREEMENT_NEAR_MISS_FACTOR,
     )
     return envelope(
         body,
         **build_meta(
-            container, run_id=rid, model_version=str(spec["model_version"]),
+            container,
+            run_id=rid,
+            model_version=str(spec["model_version"]),
             provenance=str(run["provenance"]),
         ).model_dump(),
     )
@@ -394,12 +393,7 @@ def _overfitting(metrics: list[dict[str, Any]]) -> dict[str, Any]:
         "test_fold_touched_once": "the test fold was touched exactly once",
         "selection_on_validation": "selection happened on the validation folds",
     }
-    out = {
-        key: float(row["value"])
-        for row in metrics
-        for key in wanted
-        if str(row["name"]) == key
-    }
+    out = {key: float(row["value"]) for row in metrics for key in wanted if str(row["name"]) == key}
     out["caveat"] = (
         "with N configurations tried, the best validation result is optimistically biased by "
         "multiple testing; the headline comes from the untouched fold for that reason"
@@ -414,7 +408,11 @@ def _label_quality(read_model: ReadModel, metrics: list[dict[str, Any]]) -> dict
         "flagged_fraud_rows": "rows carrying the crude isFlaggedFraud threshold",
     }
     out = {
-        str(row["name"]): {"value": float(row["value"]), "meaning": meaning, "corpus": str(row["corpus"])}
+        str(row["name"]): {
+            "value": float(row["value"]),
+            "meaning": meaning,
+            "corpus": str(row["corpus"]),
+        }
         for row in metrics
         for name, meaning in named.items()
         if str(row["name"]) == name

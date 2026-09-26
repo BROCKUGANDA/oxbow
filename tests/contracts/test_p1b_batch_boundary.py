@@ -17,8 +17,8 @@ from __future__ import annotations
 import hashlib
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from zoneinfo import ZoneInfo
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import polars as pl
 import pytest
@@ -123,7 +123,10 @@ def test_manifest_mismatch_rejects_batch(tmp_path: Path) -> None:
     """
     path = tmp_path / "drop.csv"
     start = datetime(2026, 3, 1, 9, 0, 0, tzinfo=UTC)
-    rows = [drop_row(index, amount_minor=10_000 + index, ts_utc=start + timedelta(minutes=index)) for index in range(3)]
+    rows = [
+        drop_row(index, amount_minor=10_000 + index, ts_utc=start + timedelta(minutes=index))
+        for index in range(3)
+    ]
     path.write_text("\n".join([DROP_HEADER, *rows]) + "\n", encoding="utf-8")
 
     agreed = CsvSourceAdapter(
@@ -156,7 +159,12 @@ def test_manifest_mismatch_rejects_batch(tmp_path: Path) -> None:
     # hand-typed one goes wrong.
     with pytest.raises(ValueError, match="row_count"):
         BatchManifest(
-            batch_id="b", row_count=-1, sha256="0" * 64, window_start=start, window_end=start, source_system="s"
+            batch_id="b",
+            row_count=-1,
+            sha256="0" * 64,
+            window_start=start,
+            window_end=start,
+            source_system="s",
         ).validate()
     with pytest.raises(ValueError, match="window_end precedes"):
         BatchManifest(
@@ -169,7 +177,12 @@ def test_manifest_mismatch_rejects_batch(tmp_path: Path) -> None:
         ).validate()
     with pytest.raises(ValueError, match="sha256"):
         BatchManifest(
-            batch_id="b", row_count=1, sha256="not-a-digest", window_start=start, window_end=start, source_system="s"
+            batch_id="b",
+            row_count=1,
+            sha256="not-a-digest",
+            window_start=start,
+            window_end=start,
+            source_system="s",
         ).validate()
 
     # A derived manifest measures the file instead of wishing about it, and the derived
@@ -247,9 +260,13 @@ def test_persisted_parquet_carries_no_run_scoped_columns(tmp_path: Path) -> None
         assert column not in landed.columns
     assert set(PERSISTED_CANONICAL_COLUMNS) | set(SIDECAR_COLUMNS) == set(CANONICAL_COLUMNS)
     assert artifact["rows"] == 1
-    assert artifact["sha256"] == hashlib.sha256(Path(str(artifact["path"])).read_bytes()).hexdigest()
+    assert (
+        artifact["sha256"] == hashlib.sha256(Path(str(artifact["path"])).read_bytes()).hexdigest()
+    )
 
-    manifest_path = Path(sink.write_run_manifest(PAYSIM_NAMESPACE, {"run_id": "X", "ingested_at": "Y"}))
+    manifest_path = Path(
+        sink.write_run_manifest(PAYSIM_NAMESPACE, {"run_id": "X", "ingested_at": "Y"})
+    )
     assert manifest_path.name == "run_manifest.json"
     # The manifest's name is the marker verify_determinism.py excludes by substring, and
     # that exclusion is the reason the sidecar can live there at all.
@@ -292,7 +309,15 @@ def test_duckdb_views_read_back_the_landed_parquet(tmp_path: Path) -> None:
     quarantine = sink.write_quarantine(
         PAYSIM_NAMESPACE,
         result.batch_id,
-        [QuarantineRecord(reason="test_only", source_dataset=PAYSIM_NAMESPACE, row_index=7, payload={"a": 1}, detail="d")],
+        [
+            QuarantineRecord(
+                reason="test_only",
+                source_dataset=PAYSIM_NAMESPACE,
+                row_index=7,
+                payload={"a": 1},
+                detail="d",
+            )
+        ],
     )
     views = sink.register_views(
         canonical_files={PAYSIM_NAMESPACE: [str(artifact["path"])]},
@@ -304,7 +329,9 @@ def test_duckdb_views_read_back_the_landed_parquet(tmp_path: Path) -> None:
 
     with duckdb.connect(str(sink.duckdb_path)) as connection:
         assert connection.execute(f"SELECT count(*) FROM {CANONICAL_VIEW}").fetchone()[0] == 3
-        money = connection.execute(f"SELECT typeof(amount_minor) FROM {CANONICAL_VIEW} LIMIT 1").fetchone()[0]
+        money = connection.execute(
+            f"SELECT typeof(amount_minor) FROM {CANONICAL_VIEW} LIMIT 1"
+        ).fetchone()[0]
         assert money.upper() == "BIGINT", f"money reached the query layer as {money}"
         landed = connection.execute(
             f"SELECT count(*) FROM {QUARANTINE_VIEW} WHERE reason = 'test_only'"
@@ -354,7 +381,9 @@ def test_graph_imports_the_canonical_column_list() -> None:
     from oxbow.graph.events import OPTIONAL_EVENT_COLUMNS, REQUIRED_EVENT_COLUMNS
 
     for column in (*REQUIRED_EVENT_COLUMNS, *OPTIONAL_EVENT_COLUMNS):
-        assert column in CANONICAL_COLUMNS, f"graph reads {column}, which the contract does not declare"
+        assert (
+            column in CANONICAL_COLUMNS
+        ), f"graph reads {column}, which the contract does not declare"
 
     # The real artifact the graph will be handed round-trips through the persisted shape
     # with the lineage columns intact.

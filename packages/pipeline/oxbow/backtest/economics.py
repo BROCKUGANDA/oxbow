@@ -63,11 +63,15 @@ class FoldAccount:
         ):
             value = getattr(self, name)
             if isinstance(value, bool) or not isinstance(value, int):
-                raise ValueError(f"{name}={value!r} for {self.account_key} is not an integer (DEV-005)")
+                raise ValueError(
+                    f"{name}={value!r} for {self.account_key} is not an integer (DEV-005)"
+                )
         for name in ("account_age_days", "activity_volume", "community_size"):
             value = getattr(self, name)
             if value is not None and (isinstance(value, bool) or not isinstance(value, int)):
-                raise ValueError(f"{name}={value!r} for {self.account_key} must be an integer or None")
+                raise ValueError(
+                    f"{name}={value!r} for {self.account_key} must be an integer or None"
+                )
         if self.label not in (0, 1):
             raise ValueError(f"label={self.label} for {self.account_key} must be 0 or 1")
         if not 0.0 <= self.p_calibrated <= 1.0:
@@ -151,7 +155,9 @@ def realized_fold_economics(
 
     reviewed_set = {account.account_key for account in reviewed_accounts}
     residual = [account for account in accounts if account.account_key not in reviewed_set]
-    residual_loss = [money_scaled(account.exposure_minor, recovery_rate, currency) for account in residual]
+    residual_loss = [
+        money_scaled(account.exposure_minor, recovery_rate, currency) for account in residual
+    ]
     residual_prob = [account.p_calibrated for account in residual]
     tail = monte_carlo_tail_risk(
         residual_loss,
@@ -162,11 +168,7 @@ def realized_fold_economics(
         seed=mc_seed,
     )
 
-    per_hour = (
-        benefit_per_analyst_hour_minor(net_benefit, minutes_used)
-        if minutes_used > 0
-        else 0
-    )
+    per_hour = benefit_per_analyst_hour_minor(net_benefit, minutes_used) if minutes_used > 0 else 0
     return FoldEconomics(
         reviewed=tuple(account.account_key for account in reviewed_accounts),
         accounts_reviewed=len(reviewed_accounts),

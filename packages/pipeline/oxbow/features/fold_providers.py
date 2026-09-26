@@ -682,7 +682,9 @@ def _downstream_outflow(fold: Fold, graph: AccountGraph) -> Mapping[str, int]:
     }
     totals: dict[str, int] = {}
     for account in sorted(graph.node_types):
-        targets = sorted({leg.dst for leg in graph.out_edges.get(account, ()) if leg.dst != account})
+        targets = sorted(
+            {leg.dst for leg in graph.out_edges.get(account, ()) if leg.dst != account}
+        )
         if not targets:
             continue
         totals[account] = int(outflow.get(account, 0)) + sum(

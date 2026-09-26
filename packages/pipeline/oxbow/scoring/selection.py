@@ -75,7 +75,8 @@ class SelectionOutcome:
         return tuple(
             d
             for d in self.decisions
-            if d.decision in (DECISION_REFUSED_SUSPECTED_LEAKAGE, DECISION_REFUSED_JUSTIFIED_LEAKAGE)
+            if d.decision
+            in (DECISION_REFUSED_SUSPECTED_LEAKAGE, DECISION_REFUSED_JUSTIFIED_LEAKAGE)
         )
 
     @property
@@ -146,7 +147,10 @@ def select_features(
                 f"{max_abs_correlation_with_label}: |corr|={correlation:.4f} with the label"
             )
         elif iv > cfg.iv_max:
-            if justification is not None and len(justification.strip()) >= MIN_JUSTIFICATION_CHARACTERS:
+            if (
+                justification is not None
+                and len(justification.strip()) >= MIN_JUSTIFICATION_CHARACTERS
+            ):
                 decision = DECISION_REFUSED_JUSTIFIED_LEAKAGE
                 rule = (
                     f"iv={iv:.4f} > iv_bounds.max={cfg.iv_max} and the ceiling action is "

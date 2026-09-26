@@ -2100,7 +2100,7 @@ def render_readme(payload: Mapping[str, Any]) -> str:
         f"({_src(integrity['packet_contract'])}). Reversals are new rows, never edits. "
         f"Audit rows on this host right now: {_value_with_source(integrity['chain_rows'])}.",
         "",
-        f"## What this cannot do",
+        "## What this cannot do",
         "",
         f"{len(limitations)} named weaknesses, each with the measurement that shows it, in "
         "[LIMITATIONS.md](LIMITATIONS.md) — label quality, simulator bias, captured value as an "
@@ -2111,14 +2111,14 @@ def render_readme(payload: Mapping[str, Any]) -> str:
         "",
         "## Model and economics",
         "",
-        f"- [MODEL_CARD.md](MODEL_CARD.md) — headline PR-AUC, the ablation table, calibration, "
+        "- [MODEL_CARD.md](MODEL_CARD.md) — headline PR-AUC, the ablation table, calibration, "
         "per-typology recall, fairness proxies, and what was *not* measured.",
-        f"- [ECONOMICS_CARD.md](ECONOMICS_CARD.md) — the assumptions verbatim, the EV formula, "
+        "- [ECONOMICS_CARD.md](ECONOMICS_CARD.md) — the assumptions verbatim, the EV formula, "
         "threshold vs EV policy in money, and the frontier section that is waiting for its "
         "artifact.",
-        f"- [ARCHITECTURE.md](ARCHITECTURE.md) — stages, seams, and where measured reality beat "
+        "- [ARCHITECTURE.md](ARCHITECTURE.md) — stages, seams, and where measured reality beat "
         "the spec.",
-        f"- [data/DATASET_CARD.md](data/DATASET_CARD.md) — sources, licences, hashes, retrieval "
+        "- [data/DATASET_CARD.md](data/DATASET_CARD.md) — sources, licences, hashes, retrieval "
         "and measurement dates, typology ground truth, sampling policy.",
         "",
     ]
@@ -2185,7 +2185,7 @@ def render_architecture(payload: Mapping[str, Any]) -> str:
         f"- append-only: {_v(integrity['append_only'])} ({_src(integrity['append_only'])})",
         f"- empty decision reasons are refused by the database constraint *and* defensively by "
         f"the packet renderer ({_src(integrity['packet_contract'])})",
-        f"- deciding on a superseded run is permitted and stamps `decided_on_superseded_run` "
+        "- deciding on a superseded run is permitted and stamps `decided_on_superseded_run` "
         "into the digest-covered payload and onto the packet cover",
         f"- erasure: {_v(integrity['erasure'])} — the chain survives, the subject does not",
         "",

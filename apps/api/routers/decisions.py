@@ -229,8 +229,11 @@ def outbox_pending(
     finally:
         session.close()
     return envelope(
-        {**depth, "note": "at-least-once delivery with idempotent consumers; the "
-                           "idempotency key is sha256(run_id|case_id|decision_seq)"},
+        {
+            **depth,
+            "note": "at-least-once delivery with idempotent consumers; the "
+            "idempotency key is sha256(run_id|case_id|decision_seq)",
+        },
         **build_meta(container).model_dump(),
     )
 

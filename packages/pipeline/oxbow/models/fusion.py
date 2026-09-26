@@ -85,9 +85,7 @@ class FusionModel:
 
     def one_line(self) -> str:
         """The fused score in one line, exactly as the plan asks it to be printable."""
-        terms = " + ".join(
-            f"{entry.weight:.4f}*{entry.input_name}" for entry in self.coefficients
-        )
+        terms = " + ".join(f"{entry.weight:.4f}*{entry.input_name}" for entry in self.coefficients)
         return f"p_fused = sigmoid({self.intercept:.4f} + {terms})"
 
     def to_dict(self) -> dict[str, object]:
@@ -122,7 +120,11 @@ def _negative_log_likelihood(
     intercept = float(parameters[0])
     weights = parameters[1:]
     values = intercept + matrix @ weights
-    probabilities = np.clip(1.0 / (1.0 + np.exp(-np.clip(values, -50.0, 50.0))), PROBABILITY_FLOOR, 1.0 - PROBABILITY_FLOOR)
+    probabilities = np.clip(
+        1.0 / (1.0 + np.exp(-np.clip(values, -50.0, 50.0))),
+        PROBABILITY_FLOOR,
+        1.0 - PROBABILITY_FLOOR,
+    )
     nll = -np.mean(labels * np.log(probabilities) + (1.0 - labels) * np.log(1.0 - probabilities))
     # L2 on the weights only: the intercept is the population prior's home and shrinking
     # it would fight the King-Zeng correction that already lives there.
@@ -165,7 +167,9 @@ def fit_fusion(
         )
 
     bounds: list[tuple[float | None, float | None]] = [(None, None)]
-    bounds += [(0.0, None)] * matrix.shape[1] if cfg.non_negative else [(None, None)] * matrix.shape[1]
+    bounds += (
+        [(0.0, None)] * matrix.shape[1] if cfg.non_negative else [(None, None)] * matrix.shape[1]
+    )
     start = np.zeros(1 + matrix.shape[1], dtype=np.float64)
     result = minimize(
         _negative_log_likelihood,
@@ -186,7 +190,11 @@ def fit_fusion(
             "the solver returned a negative channel weight despite the bounds; the "
             "non-negativity constraint that makes the fused score explicable did not apply"
         )
-    fused = np.clip(1.0 / (1.0 + np.exp(-np.clip(intercept + matrix @ weights, -50.0, 50.0))), PROBABILITY_FLOOR, 1.0 - PROBABILITY_FLOOR)
+    fused = np.clip(
+        1.0 / (1.0 + np.exp(-np.clip(intercept + matrix @ weights, -50.0, 50.0))),
+        PROBABILITY_FLOOR,
+        1.0 - PROBABILITY_FLOOR,
+    )
     means = matrix.mean(axis=0)
     spreads = matrix.std(axis=0, ddof=1) if matrix.shape[0] > 1 else np.zeros(matrix.shape[1])
     coefficients = tuple(

@@ -323,10 +323,7 @@ def _fold_batch(state: SourceRun, result: IngestResult, writer: BatchWriter | No
     if events.height:
         projection = events.select(list(PERSISTED_CANONICAL_COLUMNS))
         sums = projection.select(
-            *[
-                pl.col(column).sum().cast(pl.Int64).alias(column)
-                for column in LABEL_RATE_COLUMNS
-            ],
+            *[pl.col(column).sum().cast(pl.Int64).alias(column) for column in LABEL_RATE_COLUMNS],
             pl.col("label_typology").null_count().cast(pl.Int64).alias("typology_nulls"),
         ).row(0, named=True)
         for column in LABEL_RATE_COLUMNS:
@@ -607,7 +604,9 @@ def run_ingest(
     if not scope:
         return report
     ingest_block = _section(config, "ingest")
-    rows_per_batch = batch_rows if batch_rows is not None else int(ingest_block.get("batch_rows", 100_000))
+    rows_per_batch = (
+        batch_rows if batch_rows is not None else int(ingest_block.get("batch_rows", 100_000))
+    )
     if rows_per_batch <= 0:
         raise SourceDeclarationError("ingest.batch_rows must be positive")
     if bool(ingest_block.get("allow_silent_coercion", False)):

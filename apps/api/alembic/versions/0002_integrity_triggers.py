@@ -331,15 +331,15 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     for statement in (
-        'DROP TRIGGER IF EXISTS trg_pseudonym_delete ON pseudonym_map',
-        'DROP TRIGGER IF EXISTS trg_audit_append_only ON audit_event',
-        'DROP TRIGGER IF EXISTS trg_decision_append_only ON decision',
-        'DROP TRIGGER IF EXISTS trg_run_no_delete ON run',
-        'DROP TRIGGER IF EXISTS trg_run_immutable ON run',
+        "DROP TRIGGER IF EXISTS trg_pseudonym_delete ON pseudonym_map",
+        "DROP TRIGGER IF EXISTS trg_audit_append_only ON audit_event",
+        "DROP TRIGGER IF EXISTS trg_decision_append_only ON decision",
+        "DROP TRIGGER IF EXISTS trg_run_no_delete ON run",
+        "DROP TRIGGER IF EXISTS trg_run_immutable ON run",
     ):
         op.execute(statement)
     for table in RUN_SCOPED_TABLES:
-        op.execute(f'DROP TRIGGER IF EXISTS trg_{table}_run_mutable ON {table}')
+        op.execute(f"DROP TRIGGER IF EXISTS trg_{table}_run_mutable ON {table}")
     for function in (
         "guard_pseudonym_delete",
         "guard_audit_append_only",

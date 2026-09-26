@@ -144,9 +144,7 @@ def test_scheduling_a_losing_review_is_what_would_break_the_invariant(cfg: Econo
     assert all(point.captured_value.minor >= 0 for point in frontier.points)
     scheduled = {key for point in frontier.points for key in point.allocation.selected_keys}
     assert "ACC-S" not in scheduled
-    assert all(
-        row.ev.is_positive for point in frontier.points for row in point.allocation.selected
-    )
+    assert all(row.ev.is_positive for point in frontier.points for row in point.allocation.selected)
 
 
 # --- the curve, the marker, and the dominated policy ----------------------
@@ -191,18 +189,12 @@ def test_a_dominated_policy_is_drawn_on_the_same_axes(cfg: Economics) -> None:
         point.capacity_minutes for point in frontier.points
     ]
     assert frontier.dominates(AllocatorId.BASELINE_HIGHEST_EXPOSURE)
-    at_five = {
-        point.capacity_minutes: point.captured_value.minor for point in frontier.points
-    }[5]
-    rival_five = {
-        point.capacity_minutes: point.captured_value.minor for point in size_curve
-    }[5]
+    at_five = {point.capacity_minutes: point.captured_value.minor for point in frontier.points}[5]
+    rival_five = {point.capacity_minutes: point.captured_value.minor for point in size_curve}[5]
     assert (at_five, rival_five) == (800, 570)
     # At the operating capacity both curves reach the same set, so the loss there is
     # zero and the table says so rather than implying a difference that is not there.
-    assert frontier.loss_at(AllocatorId.BASELINE_HIGHEST_EXPOSURE) == Money(
-        0, cfg.currency
-    )
+    assert frontier.loss_at(AllocatorId.BASELINE_HIGHEST_EXPOSURE) == Money(0, cfg.currency)
     with pytest.raises(FrontierError, match="was not swept"):
         frontier.curve(AllocatorId.CP_SAT)
 

@@ -279,7 +279,9 @@ class PostgresSource(WarehouseSource):
             statement = statement.offset(offset)
         session = self._session_provider()
         try:
-            rows = [_row_to_dict(dict(mapping)) for mapping in session.execute(statement).mappings()]
+            rows = [
+                _row_to_dict(dict(mapping)) for mapping in session.execute(statement).mappings()
+            ]
             total = int(session.execute(count_statement).scalar_one())
         except Exception as exc:  # a connection or a missing relation is a dependency failure
             raise DependencyUnavailable(f"warehouse read of {table} failed: {exc}") from exc
@@ -341,8 +343,7 @@ class PostgresSource(WarehouseSource):
         """
         if sort not in SORTABLE_ALERT_COLUMNS:
             raise DependencyUnavailable(
-                f"sort={sort!r} is not sortable; choose one of "
-                f"{sorted(SORTABLE_ALERT_COLUMNS)}"
+                f"sort={sort!r} is not sortable; choose one of " f"{sorted(SORTABLE_ALERT_COLUMNS)}"
             )
         if allocations is not None:
             return self._alert_rows_from_allocations(
@@ -463,9 +464,7 @@ class PostgresSource(WarehouseSource):
             account.c.txn_count,
         ]
         statement = select(*projection).select_from(join).where(*clauses)
-        count_statement = (
-            select(func.count()).select_from(join).where(*clauses)
-        )
+        count_statement = select(func.count()).select_from(join).where(*clauses)
         statement = statement.order_by(
             order_column.desc() if order == "desc" else order_column.asc()
         )
@@ -694,7 +693,9 @@ class FileWarehouseSource(WarehouseSource):
                         {k: _jsonable(v) for k, v in dict(row).items()}
                         for row in pq.read_table(parquet).to_pylist()
                     ]
-        rows = [{key: _jsonable(value) for key, value in dict(record).items()} for record in records]
+        rows = [
+            {key: _jsonable(value) for key, value in dict(record).items()} for record in records
+        ]
         self._cache[(table, run_id or "*")] = rows
         return rows
 
@@ -745,7 +746,9 @@ class FileWarehouseSource(WarehouseSource):
         if allocations is None:
             rows, total = self.select(
                 "policy_allocation",
-                where={"run_id": run_id} if policy_id is None else {"run_id": run_id, "policy_id": policy_id},
+                where={"run_id": run_id}
+                if policy_id is None
+                else {"run_id": run_id, "policy_id": policy_id},
                 allow_missing=True,
             )
             if total:

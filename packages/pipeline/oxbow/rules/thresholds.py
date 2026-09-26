@@ -125,7 +125,9 @@ def fit_structuring_threshold(
     best_value = 0
     best_support = 0
     for candidate in sorted(set(amounts)):
-        support = sum(1 for amount in amounts if band_low * candidate <= amount <= band_high * candidate)
+        support = sum(
+            1 for amount in amounts if band_low * candidate <= amount <= band_high * candidate
+        )
         if support > best_support:
             best_value, best_support = candidate, support
     if best_support < _MIN_HISTOGRAM_MODE_SUPPORT or best_value <= 0:

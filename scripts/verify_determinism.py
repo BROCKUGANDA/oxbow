@@ -59,7 +59,9 @@ def _run_scoped_key(root: Path, path: Path) -> str:
     """
     from oxbow.identity import is_ulid
 
-    parts = [segment if not is_ulid(segment) else "<run_id>" for segment in path.relative_to(root).parts]
+    parts = [
+        segment if not is_ulid(segment) else "<run_id>" for segment in path.relative_to(root).parts
+    ]
     return "/".join(parts)
 
 

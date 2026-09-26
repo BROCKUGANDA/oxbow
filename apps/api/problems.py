@@ -389,7 +389,7 @@ __all__ = [
     "Unprocessable",
     "UpstreamFailure",
     "VersionConflict",
-    "problem_responses",
     "install_problem_media_type",
+    "problem_responses",
     "register_problem_handlers",
 ]

@@ -122,8 +122,9 @@ class RunSummary(BaseModel):
     scored_count: int = 0
     alert_count: int = 0
     quarantine_count: int = Field(
-        default=0, description="Rows dropped at ingest. Never zero by default in a response: "
-        "a silent drop is the blind spot 02 §D names."
+        default=0,
+        description="Rows dropped at ingest. Never zero by default in a response: "
+        "a silent drop is the blind spot 02 §D names.",
     )
 
 

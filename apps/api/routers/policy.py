@@ -98,9 +98,9 @@ def active_policy(
     body = ActivePolicyResponse(
         run_id=rid,
         policy=PolicyView.model_validate(_policy_for_response(active, decimals)),
-        summary=None if not summaries else PolicySummaryView.model_validate(
-            _summary_for_response(summaries[0], decimals)
-        ),
+        summary=None
+        if not summaries
+        else PolicySummaryView.model_validate(_summary_for_response(summaries[0], decimals)),
         allocation=[
             AllocationRow.model_validate(_allocation_for_response(row, decimals))
             for row in allocation_rows

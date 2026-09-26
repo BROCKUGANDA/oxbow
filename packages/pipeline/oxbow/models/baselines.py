@@ -83,9 +83,13 @@ def rules_only_severity_sum(frame: pl.DataFrame, cfg: BaselinesConfig) -> np.nda
             "plan defines the baseline as the severity sum"
         )
     if RULE_COLUMN_SEVERITY_SUM in frame.columns:
-        return frame.get_column(RULE_COLUMN_SEVERITY_SUM).cast(pl.Float64).fill_null(0.0).to_numpy(
-            zero_copy_only=False
-        ).astype(np.float64)
+        return (
+            frame.get_column(RULE_COLUMN_SEVERITY_SUM)
+            .cast(pl.Float64)
+            .fill_null(0.0)
+            .to_numpy(zero_copy_only=False)
+            .astype(np.float64)
+        )
     severity_columns = [
         name for name in frame.columns if name.startswith("rule_r") and name.endswith("severity")
     ]
@@ -96,9 +100,11 @@ def rules_only_severity_sum(frame: pl.DataFrame, cfg: BaselinesConfig) -> np.nda
         )
     matrix = np.column_stack(
         [
-            frame.get_column(name).cast(pl.Float64).fill_null(0.0).to_numpy(zero_copy_only=False).astype(
-                np.float64
-            )
+            frame.get_column(name)
+            .cast(pl.Float64)
+            .fill_null(0.0)
+            .to_numpy(zero_copy_only=False)
+            .astype(np.float64)
             for name in sorted(severity_columns)
         ]
     )

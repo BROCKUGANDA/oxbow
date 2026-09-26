@@ -122,11 +122,18 @@ EXPECTED_CHANNELS: tuple[str, ...] = (
 )
 
 # The three keys, digested independently in conftest and asserted against here.
-KEYS: tuple[str, ...] = tuple(row_key(int(r["step"]), str(r["type"]), str(r["amount"]), str(r["nameOrig"]), str(r["nameDest"])) for r in ROWS)
+KEYS: tuple[str, ...] = tuple(
+    row_key(
+        int(r["step"]), str(r["type"]), str(r["amount"]), str(r["nameOrig"]), str(r["nameDest"])
+    )
+    for r in ROWS
+)
 TXN_IDS: tuple[str, ...] = tuple(oracle_txn_id(key) for key in KEYS)
 
 
-def _batch(rows: list[dict[str, Any]], identity: RunIdentity, kwargs: dict[str, Any], **extra: Any) -> Any:
+def _batch(
+    rows: list[dict[str, Any]], identity: RunIdentity, kwargs: dict[str, Any], **extra: Any
+) -> Any:
     return canonicalize_batch(raw_frame(rows), identity, **kwargs, **extra)
 
 
@@ -183,7 +190,9 @@ def test_dup_txn_conflicting_quarantined(
 # --- structural failures: fail closed, name the column ---------------------
 
 
-def test_unknown_column_fails_closed(identity: RunIdentity, canonical_kwargs: dict[str, Any]) -> None:
+def test_unknown_column_fails_closed(
+    identity: RunIdentity, canonical_kwargs: dict[str, Any]
+) -> None:
     """An undeclared column is schema drift and rejects the batch whole.
 
     ``oldBalanceDest`` with a capital B is the misspelling this repo actually shipped in
@@ -208,8 +217,18 @@ def test_unknown_column_fails_closed(identity: RunIdentity, canonical_kwargs: di
 
 def test_missing_required_column(identity: RunIdentity, canonical_kwargs: dict[str, Any]) -> None:
     """A dropped column fails the same way, and says which one is gone."""
-    columns = ("step", "type", "amount", "nameOrig", "oldbalanceOrg", "newbalanceOrig",
-               "nameDest", "oldbalanceDest", "newbalanceDest", "isFraud")
+    columns = (
+        "step",
+        "type",
+        "amount",
+        "nameOrig",
+        "oldbalanceOrg",
+        "newbalanceOrig",
+        "nameDest",
+        "oldbalanceDest",
+        "newbalanceDest",
+        "isFraud",
+    )
     frame = raw_frame([dict(r) for r in ROWS]).select(list(columns))
 
     result = canonicalize_batch(frame, identity, **canonical_kwargs)
@@ -241,7 +260,9 @@ def test_zero_silent_coercions(identity: RunIdentity, canonical_kwargs: dict[str
         assert schema[column] == pl.Int64(), f"{column} is {schema[column]}, not Int64"
 
     assert events.get_column("amount_minor").to_list() == list(EXPECTED_AMOUNT_MINOR)
-    for index, expected in enumerate((EXPECTED_R0_BALANCES, EXPECTED_R1_BALANCES, EXPECTED_R2_BALANCES)):
+    for index, expected in enumerate(
+        (EXPECTED_R0_BALANCES, EXPECTED_R1_BALANCES, EXPECTED_R2_BALANCES)
+    ):
         row = events.slice(index, 1).to_dicts()[0]
         got = (
             row["src_balance_before_minor"],
@@ -337,9 +358,7 @@ def test_ingest_deterministic(
     assert one.read_bytes() == two.read_bytes(), "two runs of one file produced different bytes"
 
     by_one = run(batch_rows=1)
-    content_columns = [
-        column for column in PERSISTED_CANONICAL_COLUMNS if column != "batch_id"
-    ]
+    content_columns = [column for column in PERSISTED_CANONICAL_COLUMNS if column != "batch_id"]
     assert serial.events.select(content_columns).equals(
         by_one.events.select(content_columns)
     ), "repartitioning changed a row's identity, instant or money"
@@ -614,8 +633,12 @@ def test_step_expansion_stable(expansion: dict[str, Any]) -> None:
     # Two independent computations of the same instant, from the id and from the salted
     # digest, must agree -- otherwise the adapter's vectorised path is a second source
     # of truth about time.
-    first = oracle_instant(1, KEYS[0], epoch=epoch, step_hours=24, offset_salt=salt, modulus_us=modulus)
-    second = oracle_instant(1, KEYS[0], epoch=epoch, step_hours=24, offset_salt=salt, modulus_us=modulus)
+    first = oracle_instant(
+        1, KEYS[0], epoch=epoch, step_hours=24, offset_salt=salt, modulus_us=modulus
+    )
+    second = oracle_instant(
+        1, KEYS[0], epoch=epoch, step_hours=24, offset_salt=salt, modulus_us=modulus
+    )
     assert first == second
     assert first.year == 2014
 
@@ -674,7 +697,9 @@ def test_future_timestamp_quarantined(
 # --- identity --------------------------------------------------------------
 
 
-def test_account_key_unique_per_run(identity: RunIdentity, canonical_kwargs: dict[str, Any]) -> None:
+def test_account_key_unique_per_run(
+    identity: RunIdentity, canonical_kwargs: dict[str, Any]
+) -> None:
     """48-bit salted keys carry no collisions over a 200-name run, and never leak the salt.
 
     Truncation is a judgement, not a guarantee: 2^48 sits far above the 9,073,900 distinct
@@ -683,7 +708,9 @@ def test_account_key_unique_per_run(identity: RunIdentity, canonical_kwargs: dic
     unsalted digest still joins and still groups -- it just silently re-identifies the
     account it was meant to hide.
     """
-    names = [f"C{1000 + index}" for index in range(200)] + [f"M{1000 + index}" for index in range(20)]
+    names = [f"C{1000 + index}" for index in range(200)] + [
+        f"M{1000 + index}" for index in range(20)
+    ]
     keys = [account_key(name, identity) for name in names]
 
     assert len(set(keys)) == len(names), "a 48-bit key collided inside one run"
@@ -694,7 +721,9 @@ def test_account_key_unique_per_run(identity: RunIdentity, canonical_kwargs: dic
     assert keys[0] == oracle_account_key("C1000")
     assert account_key("C1000", identity) == keys[0]
 
-    other = RunIdentity(run_salt="a-completely-different-salt", batch_id=TEST_BATCH_ID, run_id=RUN_ID)
+    other = RunIdentity(
+        run_salt="a-completely-different-salt", batch_id=TEST_BATCH_ID, run_id=RUN_ID
+    )
     assert account_key("C1000", other) != keys[0], "the salt does not change the key"
 
     # The frame the adapter emits carries only keys, never the raw name, and the shape
@@ -712,7 +741,9 @@ def test_account_key_unique_per_run(identity: RunIdentity, canonical_kwargs: dic
         assert_canonical_frame(leaked, persisted=True)
 
 
-def test_no_cross_source_node_merge(identity: RunIdentity, canonical_kwargs: dict[str, Any]) -> None:
+def test_no_cross_source_node_merge(
+    identity: RunIdentity, canonical_kwargs: dict[str, Any]
+) -> None:
     """Two corpora holding the same account name must never become one node.
 
     This is DEV-011's hazard stated at the only boundary that can prevent it. One shared
@@ -791,12 +822,18 @@ def test_counterparty_reuse_reported() -> None:
     card = (root / "data" / "DATASET_CARD.md").read_text(encoding="utf-8")
     decisions = (root / "DECISIONS.md").read_text(encoding="utf-8")
     notebook = (root / "notebooks" / "01_eda.ipynb").read_text(encoding="utf-8")
-    for document, name in ((card, "data/DATASET_CARD.md"), (decisions, "DECISIONS.md"), (notebook, "notebooks/01_eda.ipynb")):
+    for document, name in (
+        (card, "data/DATASET_CARD.md"),
+        (decisions, "DECISIONS.md"),
+        (notebook, "notebooks/01_eda.ipynb"),
+    ):
         assert "0.001464" in document, f"{name} does not state the reuse figure"
         assert "6362620" in document.replace(",", ""), f"{name} omits the row count"
 
 
-def test_money_parsing_is_exact_across_both_forms(identity: RunIdentity, canonical_kwargs: dict[str, Any]) -> None:
+def test_money_parsing_is_exact_across_both_forms(
+    identity: RunIdentity, canonical_kwargs: dict[str, Any]
+) -> None:
     """Both spellings of the same money produce the same integer.
 
     A parse that agreed with itself on one form and drifted on the other is the cent-level
@@ -864,9 +901,21 @@ def test_reader_produces_deterministic_batches(tmp_path: Path) -> None:
     measured at 34,545 / 34,044 / 31,451 rows for a request of three equal batches --
     and a boundary that moves between runs moves every batch id derived from it.
     """
-    rows = [dict(base_row(step=1 + index // 2, nameOrig=f"C{2000 + index}", nameDest=f"M{2000 + index}",
-                         amount=f"{index + 1}.00", oldbalanceOrg=float(index), newbalanceOrig=0.0,
-                         oldbalanceDest=0.0, newbalanceDest=float(index))) for index in range(7)]
+    rows = [
+        dict(
+            base_row(
+                step=1 + index // 2,
+                nameOrig=f"C{2000 + index}",
+                nameDest=f"M{2000 + index}",
+                amount=f"{index + 1}.00",
+                oldbalanceOrg=float(index),
+                newbalanceOrig=0.0,
+                oldbalanceDest=0.0,
+                newbalanceDest=float(index),
+            )
+        )
+        for index in range(7)
+    ]
     path = paysim_csv(tmp_path / "ps.csv", rows)
 
     batches = read_raw_batches(path, batch_rows=3)
@@ -899,7 +948,9 @@ def test_channel_and_type_are_derived_by_rule(
     assert result.events.get_column("currency").unique().to_list() == ["EUR"]
 
 
-def test_total_order_is_the_sort_key(identity: RunIdentity, canonical_kwargs: dict[str, Any]) -> None:
+def test_total_order_is_the_sort_key(
+    identity: RunIdentity, canonical_kwargs: dict[str, Any]
+) -> None:
     """Rows land in ``(event_ts_utc, txn_id)`` order, which is what makes the sort total.
 
     Every lookback rule and every edge id downstream inherits this order; two rows that tie
@@ -908,7 +959,13 @@ def test_total_order_is_the_sort_key(identity: RunIdentity, canonical_kwargs: di
     """
     result = _batch([dict(r) for r in reversed(ROWS)], identity, canonical_kwargs)
     events = result.events
-    keys = list(zip(events.get_column("event_ts_utc").to_list(), events.get_column("txn_id").to_list(), strict=True))
+    keys = list(
+        zip(
+            events.get_column("event_ts_utc").to_list(),
+            events.get_column("txn_id").to_list(),
+            strict=True,
+        )
+    )
     assert keys == sorted(keys)
     assert len(set(keys)) == len(keys)
 

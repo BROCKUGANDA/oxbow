@@ -243,7 +243,9 @@ class TrackedRun:
         self.log_metrics(
             {
                 **{
-                    f"reliability/bin{entry['bin_index']}_observed_rate": float(entry["observed_rate"])
+                    f"reliability/bin{entry['bin_index']}_observed_rate": float(
+                        entry["observed_rate"]
+                    )
                     for entry in bins
                 },
                 **{

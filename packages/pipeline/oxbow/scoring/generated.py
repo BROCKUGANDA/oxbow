@@ -260,7 +260,9 @@ def generate_training_frame(
 
     z_first = rng.normal(0.0, 1.0, rows)
     z_second = rng.normal(0.0, 1.0, rows)
-    interaction = frame_spec.interaction_share * np.maximum(z_first, 0.0) * np.maximum(z_second, 0.0)
+    interaction = (
+        frame_spec.interaction_share * np.maximum(z_first, 0.0) * np.maximum(z_second, 0.0)
+    )
 
     linear_part = np.zeros(rows, dtype=np.float64)
     for name in registry.names:
@@ -279,7 +281,9 @@ def generate_training_frame(
         frame_spec.epoch_utc
         + timedelta(days=int(frame_spec.fold_stride_days) * int(fold_value))
         + timedelta(microseconds=int(86_400_000_000 * (float(offset_value) % 1.0)))
-        for offset_value, fold_value in zip(np.tile(account_offsets, n_folds), fold_col, strict=True)
+        for offset_value, fold_value in zip(
+            np.tile(account_offsets, n_folds), fold_col, strict=True
+        )
     ]
 
     columns: dict[str, pl.Series] = {
@@ -321,13 +325,13 @@ def generate_training_frame(
         elif family == "count":
             values = np.maximum(np.round(3.0 + 4.0 * driven), 0.0).astype(np.int64)
         elif family == "amount_minor":
-            values = np.maximum(np.round(np.exp(np.clip(9.0 + 0.85 * driven, 0.0, 20.0))), 0).astype(
-                np.int64
-            )
+            values = np.maximum(
+                np.round(np.exp(np.clip(9.0 + 0.85 * driven, 0.0, 20.0))), 0
+            ).astype(np.int64)
         elif family == "basis_points":
-            values = np.clip(np.round(np.exp(np.clip(6.0 + 0.9 * driven, 0.0, 14.0))), 0, 10_000).astype(
-                np.int64
-            )
+            values = np.clip(
+                np.round(np.exp(np.clip(6.0 + 0.9 * driven, 0.0, 14.0))), 0, 10_000
+            ).astype(np.int64)
         elif family == "score":
             values = np.clip(np.exp(np.clip(0.85 * driven - 2.2, -12.0, 2.0)), 0.0, 1.0)
         else:
@@ -362,12 +366,24 @@ def generate_training_frame(
         [canonical_spec_hash(registry)] * rows,
         dtype=pl.String,
     )
-    ordered = [COL_ACCOUNT_KEY, COL_AS_OF_TS, COL_FOLD, COL_LABEL, COL_LABEL_TYPOLOGY, *registry.names, COL_SPEC_HASH]
+    ordered = [
+        COL_ACCOUNT_KEY,
+        COL_AS_OF_TS,
+        COL_FOLD,
+        COL_LABEL,
+        COL_LABEL_TYPOLOGY,
+        *registry.names,
+        COL_SPEC_HASH,
+    ]
     return pl.DataFrame({name: columns[name] for name in ordered})
 
 
 def _categorical_series(
-    name: str, declaration: FeatureDeclaration, driven: np.ndarray, rng: np.random.Generator, rows: int
+    name: str,
+    declaration: FeatureDeclaration,
+    driven: np.ndarray,
+    rng: np.random.Generator,
+    rows: int,
 ) -> pl.Series:
     """Sample a declared category, skewed by the latent so the category has evidence.
 

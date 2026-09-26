@@ -32,9 +32,9 @@ import importlib.util
 import json
 import sys
 import time
-from datetime import UTC, datetime
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Final
 

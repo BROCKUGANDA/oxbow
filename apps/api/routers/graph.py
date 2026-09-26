@@ -103,7 +103,9 @@ def subgraph(
     score_by_key = {str(row["account_key"]): row for row in scores}
     economics, _ = read_model.source.select("economics", where={"run_id": rid}, allow_missing=True)
     money_by_key = {str(row["account_key"]): row for row in economics}
-    communities, _ = read_model.source.select("community", where={"run_id": rid}, allow_missing=True)
+    communities, _ = read_model.source.select(
+        "community", where={"run_id": rid}, allow_missing=True
+    )
     community_by_index = {int(row["canonical_index"]): row for row in communities}
 
     # Node overlays are derived from stored columns only: ``graph_edge.is_rail`` and
@@ -116,7 +118,9 @@ def subgraph(
     for edge in edges:
         for side in ("src_account_key", "dst_account_key"):
             key = str(edge[side])
-            flags_by_key.setdefault(key, set()).update(str(flag) for flag in (edge.get("flags") or []))
+            flags_by_key.setdefault(key, set()).update(
+                str(flag) for flag in (edge.get("flags") or [])
+            )
             if bool(edge.get("is_rail")):
                 rail_keys.add(key)
     dense_communities = {
@@ -172,7 +176,8 @@ def subgraph(
             source=str(edge["src_account_key"]),
             target=str(edge["dst_account_key"]),
             total=money(
-                int(edge["total_minor"]), str(edge["currency"]),
+                int(edge["total_minor"]),
+                str(edge["currency"]),
                 decimals=container.economics.minor_units_per_major,
             ),
             txn_count=int(edge["txn_count"]),
@@ -187,11 +192,7 @@ def subgraph(
     if not edges:
         counterparty_note = (
             f"{account_key} has no stored edge at {depth} hop(s)"
-            + (
-                " in this window"
-                if window_start is not None or window_end is not None
-                else ""
-            )
+            + (" in this window" if window_start is not None or window_end is not None else "")
             + ". The graph is empty because of the window and the radius, not because the "
             "account is isolated: widen either and ask again."
         )
@@ -313,7 +314,8 @@ def _collapse(
                 total=None
                 if total_minor is None
                 else money(
-                    int(total_minor), str(row.get("currency") or "UGX"),
+                    int(total_minor),
+                    str(row.get("currency") or "UGX"),
                     decimals=2,
                 ),
                 representative_account_key=members[0],
