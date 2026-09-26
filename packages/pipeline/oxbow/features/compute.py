@@ -36,6 +36,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
+from math import floor
 from pathlib import Path
 from typing import Final
 
@@ -455,7 +456,7 @@ def assert_registry_groups_money_by_currency(registry: FeatureRegistry) -> tuple
 
 
 def induced_subcorpus(events: pl.DataFrame, *, target_rows: int) -> pl.DataFrame:
-    """A deterministic, connected-ish slice: keep the busiest accounts' mutual traffic.
+    """A deterministic slice of the busiest accounts' mutual traffic, spread over the timeline.
 
     ``config/pipeline.yaml`` fixes the sampling strategy at ``connected_subcorpus`` and
     says why — "random rows would not" preserve network structure. A random head of file
@@ -463,7 +464,9 @@ def induced_subcorpus(events: pl.DataFrame, *, target_rows: int) -> pl.DataFrame
     which a graph feature is null for a boring reason. So: rank accounts by participation
     count (ties broken by account key, both sorted, so the ranking is a pure function of
     the data), grow the account set until the edges *between* admitted accounts reach
-    ``target_rows``, then cut at the total order ``(event_ts_utc, txn_id)``.
+    ``target_rows``, then take ``target_rows`` of them strided across the
+    ``(event_ts_utc, txn_id)`` total order — see :func:`_time_stratified` for why the head
+    of that order is not the same slice as the whole of it.
 
     No seed reaches the selection: it is deterministic by construction, and a seed nobody
     needed would only invite the question of what it perturbs.
@@ -498,7 +501,34 @@ def induced_subcorpus(events: pl.DataFrame, *, target_rows: int) -> pl.DataFrame
             "deliberately rather than accepting a shorter slice as if it were the configured "
             "one."
         )
-    return mutual.sort([EVENT_TS, TXN_ID]).head(target_rows)
+    ordered = mutual.sort([EVENT_TS, TXN_ID])
+    return _time_stratified(ordered, target_rows)
+
+
+def _time_stratified(ordered: pl.DataFrame, target_rows: int) -> pl.DataFrame:
+    """Take ``target_rows`` of an ordered frame so that the first and last row are both kept.
+
+    This replaced a `.head(target_rows)`, and the difference is the difference between a
+    backtest and a decorative one. The induced account set carries the whole corpus
+    timeline; cutting the head of it kept the earliest ``target_rows`` events and threw the
+    rest away, so the slice's span was whatever the busiest accounts happened to do in the
+    first days — measured at 18 days on one ingest and 162 on another, for the same command
+    at the same seed. A 30-day embargo across five expanding folds cannot fit inside 18
+    days, which meant `oxbow score`'s fold plan depended on the accident of which batch ids
+    the last ingest had minted.
+
+    Striding over the ordered rows keeps the selection a pure function of the data, keeps
+    the ``(event_ts_utc, txn_id)`` total order, and guarantees the endpoints: index ``i`` of
+    the slice is ``floor(i * (n-1) / (k-1))``, strictly increasing because ``n >= k``, and
+    exactly ``0`` and ``n-1`` at the ends.
+    """
+    n = ordered.height
+    if n <= target_rows:
+        return ordered
+    if target_rows <= 1:
+        return ordered[[0, n - 1]][:target_rows]
+    indices = [floor(i * (n - 1) / (target_rows - 1)) for i in range(target_rows)]
+    return ordered[indices]
 
 
 def _grow_to_cover(events: pl.DataFrame, ranked: Sequence[str], target_rows: int) -> set[str]:

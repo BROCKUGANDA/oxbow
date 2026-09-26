@@ -42,6 +42,7 @@ from oxbow.features.build import (
     label_correlations,
 )
 from oxbow.features.compute import (
+    _time_stratified,
     assert_registry_groups_money_by_currency,
     assert_totals_match_rendered_rows,
     build_feature_table,
@@ -61,6 +62,7 @@ from oxbow.features.fakes import (
     star_fixture,
     wide_fixture,
 )
+from oxbow.features.kinds import EVENT_TS, TXN_ID
 from oxbow.features.leakage import (
     FutureReadError,
     audit_no_future_reads,
@@ -857,6 +859,50 @@ def test_every_entry_declares_an_as_of_and_a_window(registry: FeatureRegistry) -
 
 
 MATRIX_FLOOR: Final = 60
+
+
+def test_the_slice_covers_the_timeline_it_will_be_split_on(cfg: PipelineConfig) -> None:
+    """A slice that will be cut into embargoed folds has to contain the whole race.
+
+    The sampler used to sort the induced mutual set by ``(event_ts_utc, txn_id)`` and take
+    ``.head(target_rows)`` -- the earliest ``target_rows`` events. Connectivity survived
+    that; the timeline did not: measured on the real corpus, 40,000 events from the head
+    spanned 18 days on one ingest and 162 on another, and `oxbow score`'s fold plan -- a
+    30-day embargo across five expanding folds needs roughly 100 days -- therefore refused
+    or accepted depending on which batch ids the last ingest had minted. A gate whose
+    verdict depends on an accident of file naming is not a gate.
+
+    Asserted: the slice reaches the end of the range it was drawn from, it is not the head,
+    and repeating the call changes nothing.
+    """
+    corpus = wide_fixture(2_000, accounts=60, seed=1337)
+    small = induced_subcorpus(corpus, target_rows=400)
+    times = corpus.get_column("event_ts_utc")
+    span_us = (times.max() - times.min()) // 1_000
+    slice_times = small.get_column("event_ts_utc")
+    slice_span_us = (slice_times.max() - slice_times.min()) // 1_000
+
+    assert small.height == 400
+    assert slice_span_us >= span_us * 0.9, (
+        f"the slice covers {slice_span_us / span_us:.1%} of the corpus timeline; a fold "
+        "plan is being asked to cut a window out of the first few days of it"
+    )
+    # The endpoints are the sampler's promise, asserted where they can be seen: over the
+    # frame it is actually handed. An event whose accounts are not both admitted can never
+    # be in the slice, and pretending otherwise would make this test fail for a reason that
+    # has nothing to do with temporal coverage.
+    ordered = corpus.sort([EVENT_TS, TXN_ID])
+    strided = _time_stratified(ordered, 400)
+    assert strided.height == 400
+    assert strided.get_column(EVENT_TS).min() == ordered.get_column(EVENT_TS).min()
+    assert strided.get_column(EVENT_TS).max() == ordered.get_column(EVENT_TS).max()
+    assert strided.get_column(EVENT_TS).is_sorted()
+    assert _time_stratified(ordered, 400).equals(strided)
+    head = corpus.sort([EVENT_TS, TXN_ID]).head(400)
+    assert (
+        slice_times.max() > head.get_column(EVENT_TS).max()
+    ), "stratified selection has collapsed back to a head of the timeline"
+    assert induced_subcorpus(corpus, target_rows=400).equals(small)
 
 
 def test_the_dev_slice_is_connected_and_deterministic(cfg: PipelineConfig) -> None:
