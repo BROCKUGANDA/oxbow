@@ -485,8 +485,33 @@ being written), `make ingest` end to end, P2's leakage gate, P3b's rule-vs-fixtu
 gate, P4b, P6's ablation, P7's API gates, P8's browser gates, P9's packet/demo. The
 IBM adapter's schema is known-wrong (item 1) and its correction is unscheduled work.
 
-## Where this stands, and the next five moves
-### Two things about this host that the plan's wording hides
+## Where this stands
+
+Eight phases are claimed on gates run in this session: **P0, P1a, P1b, P2, P3a, P3b,
+P5, P7**. `make verify` therefore asserts seven of them plus P7's three gates; the eighth
+(P8) has a gate that runs (vitest, 51 tests) and a `pending_reason` that states what is
+still red rather than a claim.
+
+Three phases remain open and they are open for one reason, in one order:
+
+1. **P4 needs one scored run.** The blockers were found by running, not by reading: the
+   OSQP native fault (DEV-021), the monotonic binning that never ran behind a swallowed
+   `TypeError` (DEV-020), the ledger that inferred its own schema, the all-structural-zero
+   feature that killed five folds, and the sum-of-squares that overflowed `i64`. Each is
+   fixed and mutation-proven. What is left is arithmetic against wall clock: the 40k
+   connected slice over the full 6,362,620-row corpus spends most of its time in
+   `build_graph` and the per-fold graph rebuilds, and `--max-events 40000` has not yet
+   completed here.
+2. **P6 runs `oxbow backtest --corpus <the frame P4 lands>`.** The harness, the eight-row
+   ablation including the deliberately leaking control arm, the economics and the fairness
+   checks are all built and unit-tested (19 metric tests); no fold has produced a real
+   number, which is why MODEL_CARD and ECONOMICS_CARD still carry placeholders.
+3. **P9 is downstream of both**: the packet needs a case bundle, and a case needs scored
+   alerts; the demo seeder needs a warehouse holding folds, scores and one landed decision;
+   the generated docs read eval output. The hosted demo is separately blocked on the
+   share-alike licensing decision (00 §I.4) and will not be published unilaterally.
+
+Two things about this host that the plan's wording hides
 
 1. **`make` does not exist here.** `make`, `mingw32-make` and `gmake` are all absent
    from PATH, so every gate §16 phrases as `make lint` / `make test` / `make verify`
@@ -517,56 +542,24 @@ IBM adapter's schema is known-wrong (item 1) and its correction is unscheduled w
 
 
 
-Measured on a quiet tree at commit `0e8a5b8`: **789 passed, 8 failed, 1 skipped**
-(`uv run pytest -q tests`, 7m15s). `make verify` claims P0, P1a, P1b, P3a, P5.
-`make lint`'s format leg passes for the first time; `ruff check` has 46 errors left
-(15 unused test-fixture arguments, 7 docstring style, 6 `isinstance` tuple form) and
-`mypy` has 304 in 64 files, led by `scoring/model.py` (87).
+The last whole-suite number on a quiet tree was **789 passed / 8 failed / 1 skipped**
+at `0e8a5b8`. That number is superseded at the edges: P7's eight failures were the
+Docker engine being down and are now green (77 integration tests, `verify.py --phase
+P7` 3/3), and the tree has since gained the P4 guard tests, the P8 suites and the
+worker. A fresh full-suite number is owed and belongs to the next quiet tree, not to
+this one -- several agents were editing concurrently for most of the session, and
+p.12 of the punch list records exactly why a mid-flight suite number is not a verdict.
 
-The eight failures are all `tests/integration/test_p7_api.py` needing PostgreSQL
-through the Docker engine, which went down mid-session (item 15). None is a code
-defect on the evidence available.
-
-In order, each unblocking the next:
-
-1. **Start Docker Desktop**, then `docker compose up -d postgres redis` and
-   `uv run pytest -q tests/integration`. That converts eight unknowns into a verdict
-   on P7 and is the only thing standing between P7 and being claimable.
-2. **Wire the grain bridge into `run_score_stage`** (`cli.py` still carries the
-   refusal string at the score body; `oxbow.features.bridge.build_account_frame` and
-   the two fold-scoped providers exist with 17 passing tests). Then
-   `uv run oxbow pipeline --limit 20000` reaches backtest for the first time, which is
-   the precondition for P6's numbers, MODEL_CARD/ECONOMICS_CARD being generated from
-   measured results rather than placeholders, and a landed case bundle.
-2a. **The seam is smaller than the refusal says — three verified findings.** Every input
-   the composition needs exists and is named: `load_split_config` and
-   `build_walk_forward` (`backtest/splits.py:392` and `:409`, the latter already
-   refusing `shuffle: true` and `purge: false`), `fold_providers`
-   (`features/fold_providers.py:438`, returning the graph and rule providers as a pair
-   so each fold's graph is built once), and `build_account_frame`
-   (`features/bridge.py:271`). Second, `02 §B seam 3` is **already satisfied** on this
-   path — `test_p2_grain_bridge.py::test_the_bridge_output_satisfies_the_scoring_contract`
-   asserts `training.feature_spec_hash == registry.spec_hash == bridged.spec_hash`, so
-   the stale-spec guard passes and that clause of the refusal text is out of date.
-   Third, and the reason to do this as two commits: **nothing under `tests/` is named
-   for P4** — no file matches p4, scorecard, model, calibration or SHAP — so those two
-   P2 tests are the only contact the scoring layer has ever had, and the model fitting
-   has never been executed from a test or from the CLI. Read `oxbow.models.run` before
-   assuming it has one entrypoint. Task 14 carries the chain with line numbers.
-
-3. **Reconcile DEV-015's four cycle-test disagreements** (item 13) and the
-   `amount_increases_along_loop` aggregate, now that self-edges are settled.
-4. **`make demo`**: `scripts/demo_seed.py` does not exist (item 11). It needs a landed
-   case from step 2, then a pinned snapshot under `data/snapshots/`.
-5. **`make packet`** is blocked twice and only one block is ours: no case bundle
-   (step 2), and no Pango/GObject on this host. The packet's HTML and SVG are proven
-   byte-identical; the PDF test skips with the reason printed rather than pretending.
+The three things left, in order, each unblocking the next, are written at the top of
+this file under "Where this stands": one scored run (P4), one backtest over it (P6),
+then the packet, the generated docs, the demo snapshot and the notebook figures that
+all read from those numbers (P9).
 
 Blocked on a human, not on work: the hosted read-only demo publishes CC BY-SA /
 CDLA share-alike derived data and needs a licensing decision (BACKLOG.md, 00 §I.4).
-Unresolved data question worth a decision: PaySim's `step` runs 1-743 against a config
-modelling 30 synthetic days (item 14), which touches the split rationale and one
-published limitation.
+The PaySim `step` question that used to sit here is resolved -- see item 14: the
+declared clock is `step_hours: 24`, the landed corpus spans 743 days, and the fold
+plan accepts a 40k slice of it.
 
 ## Reviewed and sound (read, not merely reported)
 
