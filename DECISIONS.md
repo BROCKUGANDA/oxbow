@@ -446,3 +446,74 @@ if the bundle is ever re-acquired under a different revision, the hashes break b
 design. That is the intended behaviour, not a regression — a silent mismatch between
 declared and actual bytes is the failure this entry exists to prevent.
 
+---
+
+## DEV-017 — canonical event v1 made balance columns non-null, and one corpus has no ledger
+
+**Authority:** 00 §I (no invented data) over the P0 schema declaration.
+
+### The collision
+
+`assert_canonical_frame` required all four balance columns non-null, because
+`NULLABLE_COLUMNS` named only `label_typology`. IBM-AML's real header — DEV-013 read
+it off the bytes, `Timestamp,From Bank,Account,To Bank,Account,Amount Received,
+Receiving Currency,Amount Paid,Payment Currency,Payment Format,Is Laundering` — has no
+balance column of any kind. So the only ways to make 5,078,345 real rows validate were
+to write `0` (an invented ledger: every account in Module B would appear to hold
+nothing, and the balance-delta features the plan explicitly wants would compute from
+it) or to drop the corpus.
+
+### The resolution
+
+The four columns became nullable, and the meaning of a null was pinned by
+`assert_balance_provenance`: a source either carries a ledger on **every** row or on
+**none**. All-absent is a documented property of the corpus; a mixture is a column that
+failed to parse, and it is a hard failure because of what the alternative reading is —
+downstream, a null balance is indistinguishable from "this account held nothing" unless
+something at the boundary said which one it was.
+
+`label_typology` was already nullable for the mirror-image reason, and the same
+discipline now applies to it: DEV-014 measured 3,209 annotated rows inside a
+5,078,345-row stream, so a per-row null is normal, while zero joined rows means the
+annotation join died. The first version of that guard refused any null, which read as
+strict and made the corpus uningestable; the replacement refuses the actual failure.
+
+### What this changes downstream
+
+Balance-proxy features are PaySim-only. The plan's money rules say balance
+inconsistency is a feature and not an error — that statement was written about PaySim,
+whose balances are known to disagree with `amount`, and it does not transfer to a
+corpus with no balances at all.
+
+## DEV-018 — the contract refused self-transfers; the plan asked for them kept and excluded
+
+**Authority:** 01 P3 (quoted below) over the P0 check. This is the fourth time measured
+reality contradicted a spec assumption in this build.
+
+### The collision
+
+`_no_self_edge` rejected any canonical row whose originator and destination account
+keys were equal, with a docstring citing 01 P3's authority. But 01 P3 says self
+transfers are "**excluded from cycle and fan detection while keeping them as a
+feature**" — kept. The check read the second half of the sentence and enforced the
+first half at the wrong layer, which silently discarded the "keep" part.
+
+DEV-013 measured 591,212 self-edges in IBM's HI-Small bundle: 11.6% of the corpus,
+mostly `Payment Format = Reinvestment`. PaySim has none, so no test had ever
+distinguished "the rule holds" from "no corpus has ever hit the rule". Ingesting IBM
+therefore failed on the first batch that contained one, and the ingest ran to
+completion only after the check was deleted.
+
+### The resolution
+
+Self-edges are legitimate events and canonical rows. The exclusion belongs to
+`oxbow.graph`, which is where "what counts as a counterparty" is decided, and which
+already counts what it sets aside (singletons are reported, not hidden). Deleting a
+contract check without moving the guarantee would have been the worse error: a graph
+with self-loops admitted silently would inflate degree and could report A→A as a loop
+laundering pattern, which is precisely the false positive DEV-015 is about. So the
+contract relaxation and the graph-layer exclusion land together, and the graph layer
+now has to state how many self-edges it ignored.
+
+The rule mirrors what the plan already does for reversals: kept visible, excluded from
+cycle detection, and declared.

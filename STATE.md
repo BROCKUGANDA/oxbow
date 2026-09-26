@@ -8,18 +8,18 @@ the position.
 
 | Phase | Scope | State | Proof |
 | --- | --- | --- | --- |
-| **P0** | toolchain, tree, config, CLI verbs, design tokens, 12 glyphs, CI | **DONE** | `9582638`, `tests/unit/test_p0_*.py` |
-| **P1a** | acquire PaySim, measure the graph thesis, log DEV-011 | **DONE** | `7a04bc0`, `afdb7a8`, `data/graph_measurement.json` |
-| **P1b** | canonical v1, PaySim + IBM-AML adapters, quarantine, Parquet/DuckDB writers, 14 named tests, dataset card | in progress | — |
-| **P3a** | time-stamped directed multigraph, rails, Leiden, cycles, subgraph cap | in progress | — |
-| **P2** | 60–75 features, feature-spec hash, leakage gate proven to bite, purged splits | in progress | — |
-| **P3b** | golden fixture, rules R1–R12 | in progress (fixture) | — |
-| **P4** | WOE scorecard, LightGBM, Isolation Forest, calibration, fusion, SHAP | not started | — |
-| **P5** | EV allocation, greedy vs CP-SAT, Monte Carlo exposure, economics | not started | — |
-| **P6** | walk-forward backtest, ablation table, fairness, perturbation | not started | — |
-| **P7** | FastAPI, SSE, RQ, ports/adapters, outbox, audit chain, OIDC | in progress | — |
-| **P8** | seven screens, state craft, `/dev/states`, zero-CLS | not started | — |
-| **P9** | packet, generated docs, demo snapshot, limitations | not started | — |
+| **P0** | toolchain, tree, config, CLI verbs, design tokens, 12 glyphs, CI | **DONE** | `verify.py --phase P0` 2/2 · `9582638` |
+| **P1a** | acquire PaySim, measure the graph thesis, log DEV-011 | **DONE** | `verify.py --phase P1a` 2/2 · PaySim + all three IBM members match their recorded SHA-256 against bytes on disk |
+| **P1b** | canonical v1, PaySim + IBM-AML adapters, quarantine, Parquet/DuckDB writers, dataset card | in progress — 1 of 2 gates failing | `verify.py --phase P1b`: the ingest gate passes (200,000 canonical events, 0 quarantined, 0 silently coerced; the same holds for an explicit `--source ibmaml` run), and 26 of 27 contract tests pass — the failure is `test_counterparty_reuse_reported`, i.e. punch-list item 2a, not the ingest layer |
+| **P3a** | time-stamped directed multigraph, rails, Leiden, cycles, subgraph cap | **DONE, one amendment open** | `verify.py --phase P3a` 1/1 (61 tests) · DEV-018 needs the graph to exclude self-edges it can now receive |
+| **P2** | 60–75 features, feature-spec hash, leakage gate proven to bite, purged splits | in progress | 5 of 6 known failures are in `test_p2_splits.py`: expanding window not enforced, purge decorative, entity-disjoint share off target |
+| **P3b** | golden fixture, rules R1–R12 | in progress | 4 failures in `test_p3b_r4_labelled_cycles.py`, all downstream of DEV-018 |
+| **P4** | WOE scorecard, LightGBM, Isolation Forest, calibration, fusion, SHAP | code present, **not verified by the orchestrator** | agent-reported full-stack run at 620 s/fold with an `import mlflow` MemoryError; nothing audited here |
+| **P5** | EV allocation, greedy vs CP-SAT, Monte Carlo exposure, economics | **DONE** | `verify.py --phase P5` 1/1 (89 tests) |
+| **P6** | walk-forward backtest, ablation table, fairness, perturbation | in progress | `data/processed/eval.json` exists; its numbers have not been reproduced from a command here |
+| **P7** | FastAPI, SSE, RQ, ports/adapters, outbox, audit chain, OIDC | code present, **never executed** | ~20 modules in `apps/api/`, one integration test file, no route has been served |
+| **P8** | seven screens, state craft, `/dev/states`, zero-CLS | code present, **never rendered** | `apps/web/src/app/` routes exist; no build/browser evidence, no test config |
+| **P9** | packet, generated docs, demo snapshot, limitations | in progress | `README`/`ARCHITECTURE`/`MODEL_CARD`/`ECONOMICS_CARD`/`LIMITATIONS` written by `make eval`, which also overwrote the authored dataset card (see below) |
 
 Execution order is `P0 → P1a → P1b → P3a → P2 → P3b → …` per DEV-008: the graph
 is built before features, because a degree cannot be computed from a graph that
@@ -86,16 +86,27 @@ the `RANDOM` block is a free negative control.
 
 Ordered by damage if any of it survives into a claimed-complete phase.
 
-1. **The IBM contract is fabricated.** `contracts/raw_ibm_aml.py` declares 14 columns
-   (`stepFrom, stepTo, Type, Category, Amount, nameOrig, balanceOrig, nameDest,
-   balanceDest, isLaundering, isFlood, isDateSpam, isForcedCashout, unlabeled`) that
-   belong to a different IBM artefact. The file on disk has 11 columns, two of them
-   named `Account`, and the only label column is `Is Laundering` (full header in
-   DEV-013). Its 56 tests pass against the invention. Typology must come from
-   `data/processed/ibm_typologies.parquet`, not from label columns.
-2. **CLI not rewired.** All four verbs still print `NOT IMPLEMENTED in P0` and exit 2,
-   so `make ingest|graph|score|backtest` cannot pass their gates even where the
-   packages are built.
+1. ~~**The IBM contract is fabricated.**~~ **CLOSED.** `contracts/raw_ibm_aml.py` declared
+   14 columns (`stepFrom, stepTo, Type, Category, Amount, nameOrig, balanceOrig,
+   nameDest, balanceDest, isLaundering, isFlood, isDateSpam, isForcedCashout,
+   unlabeled`) belonging to a different IBM artefact, and its 56 tests passed against
+   the invention. It now carries the real 11-column header with the two `Account`
+   columns distinguished positionally, `Is Laundering` as the only label column, and
+   typology from `data/processed/ibm_typologies.parquet` (DEV-014). 137 tests pass, and
+   200,000 real IBM rows ingest through it.
+2. ~~**CLI not rewired.**~~ **CLOSED.** All four verbs now dispatch to stage runners;
+   `uv run oxbow --help` lists `ingest|graph|score|backtest|pipeline|eval|packet|
+   verify-audit|verify-determinism`, and `tests/unit/test_anti_rubbish.py` fails the
+   build if a claimed-complete phase's verb stops reaching its runner. The
+   `NOT IMPLEMENTED in P0` banner is gone.
+2a. **`make eval` overwrites authored documents.** The run that produced
+   `README/ARCHITECTURE/MODEL_CARD/ECONOMICS_CARD/LIMITATIONS` also replaced
+   `data/DATASET_CARD.md` with a shorter generated file, dropping measured figures the
+   authored card carried — which is what broke
+   `tests/contracts/test_p1b_canonical_ingest.py::test_counterparty_reuse_reported`.
+   Judgement content (label definition and its limits, known biases, the sampling rule)
+   cannot be regenerated, so eval must verify the card against the artifacts that own
+   its numbers rather than write it.
 3. **Canonical column list duplicated** — `contracts/canonical_v1.py` (21 columns) vs
    `graph/events.py::CANONICAL_EVENT_V1_COLUMNS` (20, no `batch_id`). One must import
    the other.
@@ -181,6 +192,8 @@ not on this list is *not* verified, regardless of what a package's own tests cla
 | Tree syntax after interrupted agents | `py_compile` over every `.py` | clean |
 | `any` / unbuilt-stage gate | `uv run pytest -q tests/unit/test_anti_rubbish.py` | 3 passed |
 | Golden fixture self-check, no rule code | `uv run pytest -q tests/golden` | **27 passed**; two builds byte-identical (`49f6c3bd…`) |
+| Golden fixture covers all 12 rules | `expected.yaml` scenarios parsed by rule × kind | **R1–R12 each have ≥1 positive and ≥1 near-miss**; near-misses are discriminating, not repetitive (`tau, not k`, `window, not count`, `time-reversed loop returns nothing`, `the UTC-trap case` = 03 §C's local_hour trap) |
+| Envelope doctrine vs the live app | `uv run pytest -q tests/integration/test_envelope_doctrine.py` | 4 passed |
 | P0 + P1a gates after the registry landed | `uv run pytest -q tests/unit/test_p0_toolchain.py tests/unit/test_p0_design_system.py tests/unit/test_p1a_sources.py tests/unit/test_anti_rubbish.py` | **121 passed** |
 | Feature registry declares what the plan asks | inspect `config/features.yaml` via the registry | 75 model features + 21 intermediates (target 60–75 met); longest window 30 d == `max_lookback_days` == embargo |
 
