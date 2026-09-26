@@ -581,3 +581,122 @@ way:
 
 Neither of these changes a shipped default. Both are now visible in a test, which is where
 a claim about a corpus belongs.
+
+## DEV-020 — the scorecard's monotonic binning had never once run, and a fallback hid it
+
+**Authority:** 00 §G ("a phase is done when a test would fail if the code regressed")
+and §10's own gate clause ("no bin has zero bads without an explicit merge or smoothing
+rule recorded"). This is a defect the *plan's named tests* would have caught, which is
+why it is recorded next to the fix rather than in a punch list.
+
+### What was found
+
+`scoring/binning._numeric_edges` asks optbinning for `solver="mip"` with
+`monotonic_trend="auto_asc_desc"` when `binning.enforce_monotonic_trend` is true. Two
+independent faults meant that call never produced a boundary table:
+
+1. `time_limit` was passed straight from config, where it is `20.0` **seconds**.
+   optbinning forwards it to `pywraplp.Solver.SetTimeLimit`, whose signature is
+   `int64_t` and whose unit is **milliseconds**, so the constructor raised
+   `TypeError: in method 'Solver_SetTimeLimit', argument 2 of type 'int64_t'`.
+2. `if binner.splits:` asked numpy for the truth value of a multi-element array, which
+   raises `ValueError: The truth value of an array with more than one element is
+   ambiguous` — on exactly the features that found two or more boundaries.
+
+Both landed in the same `except Exception:` arm, which returns deterministic quantile
+boundaries and does not carry the cause. So every numeric feature in every run this
+repository has ever produced was binned by quantiles while the monotonic-trend promise
+went unkept, and nothing anywhere said so. The quantile fallback is a legitimate
+outcome; a fallback that is indistinguishable from success is not.
+
+A third symptom of the same fault: the `ValueError`/`DeprecationWarning` was raised
+*inside* the guarded block and attributed to `oxbow.scoring.binning`, which
+`pyproject.toml`'s `error::DeprecationWarning:oxbow.*` filter promotes to an error —
+so the same data produced eight bins under pytest and one bin outside it. Bin tables
+depended on the warning filters of the calling process.
+
+### The resolution
+
+`_solver_time_limit_ms` converts at the boundary where the unit differs, and returns
+`None` for a non-positive limit. `_splits_to_list` replaces the truth test with an
+explicit `None`/`size` check. `_numeric_edges` now returns its fallback **cause** as a
+third element, and `_fit_numeric` writes it into the feature's notes with the sentence
+"the declared monotonic trend could NOT be enforced on this feature" — the artifact
+says when the promise was not kept. `binning.prebinning_method`, which was loaded and
+validated in `scoring/config.py:409` and then never passed anywhere, is now wired into
+the constructor.
+
+Measured after the change, on a seeded 4,000-row monotone signal:
+`boundary_source='optbinning-mip'`, eight value bins, bad rates
+`0.011 → 0.026 → 0.075 → 0.127 → 0.276 → 0.411 → 0.597 → 0.711`,
+`monotonic_direction='ascending'`, and the same seven-bin table inside and outside the
+pytest warning filter.
+
+### The second fault, same cause
+
+`models/explain._scorecard_outcome` counted fallback rows with
+`Series.filter(pl.col(...) == ...)` — polars `Series.filter` takes a predicate or a
+boolean series, not an expression, so it raised `TypeError: unsupported type 'Expr'` on
+**every** scorecard-explained path, including `bundle is None`, which is the mode the
+PSI drift action selects. The points fallback existed only on the branch where it was
+not needed. Fixed by counting the mask directly; `test_the_scorecard_fallback_completes_on_every_row`
+now asserts the annotated frame, the reason string and the per-row points.
+
+### What this changes for reading earlier results
+
+Anything that quotes a numeric bin table produced before this commit describes quantile
+bins. The §10 gate clause itself still held — no populated zero-bad bin survives without
+a merge or smoothing record — because the merge pass ran either way. What was not real
+was the monotonicity.
+
+
+## DEV-021 — the scorecard segfault is a native load order, and the guard that named it was itself too strong
+
+**Authority:** 01 §D's determinism requirement (a stage that dies with exit 139 and no
+traceback cannot be a reproducible gate), and 03 §A rule 1 (fail loudly at the boundary
+and name the cause).
+
+### The fault
+
+`oxbow score` ended in a segmentation fault inside the scorecard fit: no Python
+traceback, exit 139, deepest frames `osqp/interface.py:33 algebra_available` →
+`:48 default_algebra` → `:59 default_algebra_module`, i.e. the import of
+`osqp.ext_builtin`. Two wheels ship overlapping OpenMP/BLAS runtimes, and the load
+order decides whether the process survives: on this machine
+`import pyarrow; import cvxpy` dies and the reverse exits 0. Nothing in the repository's
+own code was wrong. `tests/conftest.py` had already been carrying this fact for the test
+session — its docstring says the pipeline's composition root does the same thing
+explicitly — but it did not, and that is why the CLI died where pytest did not.
+
+### What was rejected, and why
+
+- **`OSQP_ALGEBRA_BACKEND=<bogus>`.** It survives the crash only by making cvxpy's
+  probe raise `KeyError` and skip OSQP. That is disabling a solver to dodge a defect.
+- **Selecting SCS or CLARABEL in the scorecard.** optbinning 0.19's `solver="mip"` path
+  is ortools (`binning/mip.py` → `pywraplp`), not cvxpy, and cvxpy's OSQP discovery
+  happens during `import cvxpy` — before any binning problem exists. A solver choice
+  cannot reach the fault.
+- Both were tried or reasoned to exhaustion before the ordering was accepted as the
+  cause, and DEV-019's predecessor entry recorded the fault while it was still
+  unexplained; this entry closes it.
+
+### The fix, and the guard that overreached
+
+`oxbow/cli.py` now imports `osqp` above every `from oxbow...` line, so the extension
+resolves at the one moment when it is safe and every later probe is a cache hit. OSQP
+stays installed, stays discoverable by cvxpy, and still solves what it is asked to.
+
+The first version also asserted, at import time, that `osqp` had been loaded *before*
+`pyarrow`. That is not the property the fault depends on, and it broke
+`tests/unit/test_p0_toolchain.py` three ways: `import oxbow.cli` raised in any process
+that had touched pyarrow first, which includes the pytest session — where
+`conftest.py` has already loaded optbinning (and so cvxpy) early and osqp legitimately
+arrives later. That session loads osqp second and does not crash, which is the direct
+refutation of the stricter rule. The check is now only "the pin ran" (`osqp` present in
+`sys.modules`), with the reasoning recorded at the call site: **a guard that fires on a
+healthy process is worse than no guard**, because the next reader reaches for the skip.
+
+Status of the claim itself: the ordering fix is in place and the score stage gets
+further than it ever has, but "the scorecard fit no longer segfaults" is only a claim
+when a run lands scored rows. Until it does, this entry records the diagnosis, not a
+green P4.
