@@ -20,7 +20,10 @@ export const SCENARIO_NOTE =
   'Any East-African framing in this interface is illustrative scenario dressing over permitted public data, not a ' +
   'claim about any real institution, market or regulator.';
 
-export const PIPELINE_COMMAND = 'make pipeline';
+/** Plan §14's fresh-install state names the literal command, verbatim, with a copy
+ *  button — and on this host `make` is not installed, so the CLI verb is the only
+ *  form that actually runs (STATE.md, Environment §1). */
+export const PIPELINE_COMMAND = 'uv run oxbow pipeline';
 
 /** Named so a reviewer can see it is copy, not a measured duration: the estimate the
  *  fresh-install empty state prints, which the API may override per deployment. */

@@ -48,7 +48,7 @@ import { TYPOLOGY_META, glyphFor } from '@/components/typology';
 import { PIPELINE_COMMAND, RUNTIME_ESTIMATE_FALLBACK } from '@/lib/copy';
 import { ROUTES, type AlertRow, type Band, type QueueCapacity, type QueueFacets, type Typology } from '@/lib/api/contract';
 import { useListResource, useRuntime } from '@/lib/api/hooks';
-import { failureDetail, failureRunId, failureTitle } from '@/lib/api/problem';
+import { failureDetail, failureRunId, failureTitle, isRunNotFound } from '@/lib/api/problem';
 import { compactFromMinor, count } from '@/lib/format/money';
 import { ELLIPSIS, GAP_TIGHT, HAIRLINE_BOTTOM, PANEL_SUNKEN, T_LABEL, T_MICRO } from '@/components/ui/sx';
 
@@ -130,9 +130,13 @@ function QueueExplorer(): ReactElement {
      ask for the large page without a component knowing it is being tested. */
   const stress = Number(params.get('total') ?? '0');
   const queue = useListResource('alerts', ROUTES.alerts.path, ROUTES.alerts.data, {
-    band: filters.bands.join(','),
+    // Repeated `band=` parameters, not a comma join: the API's list filter is
+    // `band: list[str]` and refuses an unknown band outright.
+    band: filters.bands,
     typology: filters.typology,
-    q: filters.query,
+    // The server's search key is `account_key`, minimum three characters — the field
+    // the API validates. Anything shorter is not yet a search, so it is not sent.
+    account_key: filters.query.length >= 3 ? filters.query : null,
     limit: PAGE_SIZE,
     offset: filters.offset,
     sort: filters.sort,
@@ -202,23 +206,38 @@ function QueueExplorer(): ReactElement {
   }, [rows, capacity]);
 
   if (queue.failure !== null && queue.data === null) {
+    /* The failure branch reserves the same full-height column the skeleton held —
+       bar slot plus body — because the measured CLS on this route was the footer
+       jumping when a `calc(100vh - 112px)` pending box collapsed into an auto-height
+       error block. A failed queue is still a queue-shaped region. */
+    const failureSurface = isRunNotFound(queue.failure) ? (
+      <EmptyState
+        kind="no-run"
+        command={PIPELINE_COMMAND}
+        expectedRuntime={RUNTIME_ESTIMATE_FALLBACK}
+        corpus={runtime.data?.dataset ?? undefined}
+      />
+    ) : (
+      <ErrorPane
+        paneId="alert-queue"
+        operation="Loading the alert queue"
+        error={{
+          title: failureTitle(queue.failure),
+          detail: failureDetail(queue.failure) ?? undefined,
+          run_id: failureRunId(queue.failure) ?? undefined,
+        }}
+        onRetry={() => void queue.refetch()}
+        attempt={queue.attempts}
+        retrying={queue.isFetching}
+        siblingsIntact={false}
+      >
+        <RunIdChip runId={failureRunId(queue.failure)} />
+      </ErrorPane>
+    );
     return (
-      <div style={{ padding: 'var(--spacing-pane-gap)' }}>
-        <ErrorPane
-          paneId="alert-queue"
-          operation="Loading the alert queue"
-          error={{
-            title: failureTitle(queue.failure),
-            detail: failureDetail(queue.failure) ?? undefined,
-            run_id: failureRunId(queue.failure) ?? undefined,
-          }}
-          onRetry={() => void queue.refetch()}
-          attempt={queue.attempts}
-          retrying={queue.isFetching}
-          siblingsIntact={false}
-        >
-          <RunIdChip runId={failureRunId(queue.failure)} />
-        </ErrorPane>
+      <div style={{ display: 'flex', flexDirection: 'column', height: 'calc(100vh - 112px)' }}>
+        <div aria-hidden="true" style={{ height: 44, padding: '0 var(--spacing-pane-gap)' }} />
+        <div style={{ padding: 'var(--spacing-pane-gap)' }}>{failureSurface}</div>
       </div>
     );
   }
@@ -338,7 +357,11 @@ function FilterBar({
     ...T_MICRO,
     display: 'inline-flex',
     alignItems: 'center',
+    justifyContent: 'center',
     gap: 4,
+    // The facet placeholder (—) is ~53 px wide in the fallback face and 51 px in
+    // IBM Plex; pinning the minimum stops the font swap from nudging the filter row.
+    minWidth: 58,
     padding: '2px 6px',
     cursor: 'pointer',
     color: 'var(--color-ink)',

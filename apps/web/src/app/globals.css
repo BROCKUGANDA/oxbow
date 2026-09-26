@@ -52,6 +52,20 @@
   }
 }
 
+/* ---------------------------------------------------------- swap-stable ----
+   Zero-CLS is a property of the box, not of the glyph: when IBM Plex swaps in
+   over its metric-adjusted fallback, any text block that re-wraps moves
+   everything below it. The footer carries the one long wrapped paragraph in the
+   shell (the disclaimer), so at desktop widths its box is pinned to a height
+   that fits both renders — 123px loaded, 137px fallback — and the swap cannot
+   resize it. This is the same matched-geometry doctrine the skeletons apply to
+   data, applied to the font load. */
+@media (min-width: 1100px) {
+  footer[data-print-block] {
+    min-height: 140px;
+  }
+}
+
 /* ------------------------------------------------------------- motion -----
    The token layer collapses --duration-* to 0ms under the media query, which
    covers everything animated from a token. These two rules cover what the token

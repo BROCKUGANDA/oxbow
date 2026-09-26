@@ -26,13 +26,15 @@ import { Fragment, type CSSProperties, type ReactElement } from 'react';
 import { Icon } from '@/design/icons/Icon';
 import { Pane } from '@/components/Pane';
 import { ErrorPane } from '@/design/primitives/ErrorPane';
+import { EmptyState } from '@/design/primitives/EmptyState';
 import { BarWithLine, LineChart, minimumSeriesNote, ChartFrame } from '@/components/charts/charts';
 import { Assumptions, Hairline, RunIdChip, Timestamp } from '@/components/ui/provenance';
 import { BandBadge } from '@/components/ui/BandBadge';
 import { glyphFor } from '@/components/typology';
 import { ROUTES, type AssumptionLine, type Validation } from '@/lib/api/contract';
 import { useResource, type QueryState } from '@/lib/api/hooks';
-import { failureDetail, failureRunId, failureTitle } from '@/lib/api/problem';
+import { failureDetail, failureRunId, failureTitle, isRunNotFound } from '@/lib/api/problem';
+import { PIPELINE_COMMAND, RUNTIME_ESTIMATE_FALLBACK } from '@/lib/copy';
 import { compactFromMinor, count, percent, ratio } from '@/lib/format/money';
 import { formatDate } from '@/lib/format/time';
 import { GAP_TIGHT, HAIRLINE_BOTTOM, PANEL_SUNKEN, T_LABEL, T_MICRO, T_MONO } from '@/components/ui/sx';
@@ -199,7 +201,15 @@ export default function ModelPage(): ReactElement {
   const timeZone = runtime.data?.deployment_timezone ?? null;
 
   if (validation.data === null)
-    return (
+    return validation.failure !== null && isRunNotFound(validation.failure) ? (
+      /* 2 813 px is the height of the thirteen-reserved-pane skeleton this swap
+         replaces (measured at 1440×900). Swapping a 2 813 px tree for a 230 px
+         panel is a 0.137 CLS event — the footer teleports into the viewport —
+         so the empty state inherits the tree's box instead of collapsing it. */
+      <div data-cls-anchor="model-empty" style={{ ...PAGE, minHeight: 2813 }}>
+        <EmptyState kind="no-run" command={PIPELINE_COMMAND} expectedRuntime={RUNTIME_ESTIMATE_FALLBACK} />
+      </div>
+    ) : (
       <ModelSkeleton
         failure={validation.failure}
         onRetry={() => void validation.refetch()}

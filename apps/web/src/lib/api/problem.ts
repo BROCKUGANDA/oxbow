@@ -218,6 +218,18 @@ export function isDegraded(failure: ApiFailure): boolean {
   return failure.kind === 'problem' && (failure.problem.status === 502 || failure.problem.status === 503);
 }
 
+/**
+ * True when the API's typed refusal is "this install has no completed run yet" —
+ * the fresh-install case, which is an EMPTY state, not an error state. P7 answers
+ * `404 https://oxbow.dev/problems/run-not-found` for every run-scoped route before
+ * the first pipeline completes; plan §14 says a screen in that position must show
+ * the no-run empty state (literal command, copy button, expected runtime), not a
+ * retry invitation, because retrying cannot succeed until the pipeline has run.
+ */
+export function isRunNotFound(failure: ApiFailure): boolean {
+  return failure.kind === 'problem' && failure.problem.status === 404 && failure.problem.type.includes('run-not-found');
+}
+
 /** Thrown by the transport so the failure reaches Query as a typed error. */
 export class ApiError extends Error {
   readonly failure: ApiFailure;

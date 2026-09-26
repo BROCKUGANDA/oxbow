@@ -77,11 +77,23 @@ export function unwrap<T>(body: unknown, dataDecoder: Decoder<T>, path: string):
   }
 }
 
-/** Builds the URL for a route with its query parameters, dropping absent values. */
-export function withQuery(path: string, params: Record<string, string | number | boolean | null | undefined>): string {
+/** Builds the URL for a route with its query parameters, dropping absent values.
+ *  An array value repeats the key (`band=A&band=B`), because the API's list filters
+ *  are repeated query parameters, not comma-joined: a joined `band=A,B` reaches the
+ *  server as one unknown band and answers 400 (apps/api/routers/alerts.py `_parse_bands`). */
+export function withQuery(
+  path: string,
+  params: Record<string, string | number | boolean | readonly string[] | null | undefined>,
+): string {
   const search = new URLSearchParams();
   for (const [key, value] of Object.entries(params)) {
     if (value === null || value === undefined || value === '') continue;
+    if (Array.isArray(value)) {
+      for (const entry of value) {
+        if (entry.length > 0) search.append(key, entry);
+      }
+      continue;
+    }
     search.set(key, String(value));
   }
   const query = search.toString();

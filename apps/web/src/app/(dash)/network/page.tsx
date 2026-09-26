@@ -34,6 +34,8 @@ import { AccountChip, Assumptions } from '@/components/ui/provenance';
 import { TYPOLOGY_META, glyphFor } from '@/components/typology';
 import { ROUTES, type GraphEdge, type GraphNode, type Subgraph } from '@/lib/api/contract';
 import { useListResource, useRuntime } from '@/lib/api/hooks';
+import { isRunNotFound } from '@/lib/api/problem';
+import { PIPELINE_COMMAND, RUNTIME_ESTIMATE_FALLBACK } from '@/lib/copy';
 import { compactFromMinor, count } from '@/lib/format/money';
 import { formatDate } from '@/lib/format/time';
 import { PANEL_SUNKEN, T_LABEL, T_MICRO, T_MONO } from '@/components/ui/sx';
@@ -143,13 +145,25 @@ function NetworkExplorer(): ReactElement {
   const [active, setActive] = useState<Overlay[]>(['cycles', 'flagged']);
   const [frame, setFrame] = useState<number | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
+  const [accountDraft, setAccountDraft] = useState<string>(root);
 
-  const graph = useListResource('subgraph', ROUTES.subgraph.path, ROUTES.subgraph.data, {
-    account: root,
-    hops,
-    min_minor: minAmount,
-    ...(stress > 0 ? { nodes: stress } : {}),
-  });
+  const graph = useListResource(
+    'subgraph',
+    ROUTES.subgraph.path,
+    ROUTES.subgraph.data,
+    {
+      // The server's parameter names, verbatim: `account_key` (3–12 chars) and
+      // `min_amount_minor`. A renamed key is silently ignored by FastAPI, which would
+      // read as an empty graph rather than as a filter that never applied.
+      account_key: root,
+      hops,
+      min_amount_minor: minAmount,
+      ...(stress > 0 ? { nodes: stress } : {}),
+    },
+    // No root account, no request: the route needs one, and asking for a 422 on every
+    // cold visit would paint an error over what is really a "type an account" state.
+    { enabled: root.length >= 3 && root.length <= 12 },
+  );
 
   const data = graph.data;
   const buckets = data?.edges_by_bucket ?? [];
@@ -179,12 +193,58 @@ function NetworkExplorer(): ReactElement {
   );
 
   if (data === null) {
+    if (graph.failure !== null && isRunNotFound(graph.failure)) {
+      return (
+        <div style={{ padding: 'var(--spacing-pane-gap)' }}>
+          <EmptyState kind="no-run" command={PIPELINE_COMMAND} expectedRuntime={RUNTIME_ESTIMATE_FALLBACK} />
+        </div>
+      );
+    }
     return (
       <div style={{ padding: 'var(--spacing-pane-gap)' }}>
-        <Pane id="graph" title="Network" operation="Loading the subgraph" meta={graph.meta} skeleton={{ columns: [{ key: 'canvas', width: '100%' }], rows: 12, rowHeight: 36 }}>
-          <p style={{ ...T_MICRO, color: 'var(--color-ink-faint)' }}>
-            {graph.failure === null ? 'Reading the subgraph the run built for this account.' : 'The explorer pane failed; the rest of the page is unaffected.'}
-          </p>
+        <Pane
+          id="graph"
+          title="Network"
+          operation="Loading the subgraph"
+          meta={graph.meta}
+          failure={root.length >= 3 ? graph.failure : null}
+          onRetry={() => void graph.refetch()}
+          attempt={graph.attempts}
+          retrying={graph.isFetching}
+          skeleton={{ columns: [{ key: 'canvas', width: '100%' }], rows: 12, rowHeight: 36 }}
+        >
+          {root.length < 3 ? (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 10, maxWidth: 520 }}>
+              <p style={{ ...T_LABEL, color: 'var(--color-ink-muted)', margin: 0 }}>
+                The explorer draws the subgraph around one account. Name it here or follow a queue row.
+              </p>
+              <input
+                type="text"
+                aria-label="Account key to explore"
+                placeholder="ACC-…"
+                value={accountDraft}
+                onChange={(event) => setAccountDraft(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key !== 'Enter') return;
+                  const next = accountDraft.trim();
+                  if (next.length === 0) publish({ account: '' });
+                  else publish({ account: next });
+                }}
+                style={{
+                  ...T_MONO,
+                  background: 'var(--color-canvas-sunken)',
+                  border: '1px solid var(--color-hairline)',
+                  borderRadius: 'var(--radius-control)',
+                  padding: '6px 8px',
+                  color: 'var(--color-ink)',
+                }}
+              />
+            </div>
+          ) : (
+            <p style={{ ...T_MICRO, color: 'var(--color-ink-faint)' }}>
+              {graph.failure === null ? 'Reading the subgraph the run built for this account.' : 'The explorer pane failed; the rest of the page is unaffected.'}
+            </p>
+          )}
         </Pane>
       </div>
     );

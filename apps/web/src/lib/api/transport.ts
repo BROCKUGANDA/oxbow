@@ -63,13 +63,63 @@ function resolveMode(): TransportMode {
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL ?? 'http://127.0.0.1:8000';
 
+/* --------------------------------- bearer token (real, minted by P7) ------ */
+
+/**
+ * P7 authenticates every data route behind `analyst_or_higher` (apps/api/deps.py),
+ * and its documented local identity is the HS256 demo token minted by
+ * `POST /api/auth/demo-token` — the same mint `make demo` uses. The token is minted
+ * once per session by this seam, never by a component, so the "one transport" rule
+ * holds and no screen invents its own auth path. When the mint fails (API down, OIDC
+ * authoritative, demo mode disabled) the request proceeds unauthenticated and the
+ * server's own problem+json renders as the typed 401 tier — which names the cause
+ * rather than hiding it behind a client-side guess.
+ */
+const DEMO_TOKEN_PATH = '/api/auth/demo-token';
+
+let mintedToken: Promise<string | null> | null = null;
+
+async function mintDemoToken(): Promise<string | null> {
+  try {
+    const response = await fetch(`${API_BASE}${DEMO_TOKEN_PATH}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        subject: 'web-analyst',
+        roles: ['analyst'],
+        display_name: 'OXBOW web analyst (local demo identity)',
+      }),
+    });
+    if (!response.ok) return null;
+    const body: unknown = await response.json();
+    if (typeof body !== 'object' || body === null) return null;
+    const data = (body as Record<string, unknown>).data;
+    if (typeof data !== 'object' || data === null) return null;
+    const token = (data as Record<string, unknown>).access_token;
+    return typeof token === 'string' && token.length > 0 ? token : null;
+  } catch {
+    return null;
+  }
+}
+
+function bearerToken(): Promise<string | null> {
+  if (mintedToken === null) mintedToken = mintDemoToken();
+  return mintedToken;
+}
+
 async function apiTransport(request: TransportRequest): Promise<TransportResponse> {
+  const headers: Record<string, string> = {};
+  if (request.body !== undefined) headers['content-type'] = 'application/json';
+  if (request.path !== DEMO_TOKEN_PATH) {
+    const token = await bearerToken();
+    if (token !== null) headers.authorization = `Bearer ${token}`;
+  }
   let response: Response;
   try {
     response = await fetch(`${API_BASE}${request.path}`, {
       method: request.method,
       signal: request.signal,
-      headers: request.body === undefined ? {} : { 'content-type': 'application/json' },
+      headers,
       body: request.body === undefined ? undefined : JSON.stringify(request.body),
     });
   } catch (error) {
@@ -82,6 +132,11 @@ async function apiTransport(request: TransportRequest): Promise<TransportRespons
       retry_after_ms: null,
     });
   }
+
+  // A 401 against a live API after a process restart means the per-process secret
+  // changed; drop the cached mint so the next request re-authenticates rather than
+  // replaying a dead token forever. The 401 itself still renders as its own tier.
+  if (response.status === 401) mintedToken = null;
 
   const text = await response.text();
   const contentType = response.headers.get('content-type') ?? '';

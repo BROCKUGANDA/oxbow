@@ -17,7 +17,8 @@
 export type ZonedInstant = {
   /** Wall-clock text in the deployment zone: "14 Sep 2026 09:42". */
   local: string;
-  /** The zone abbreviation `Intl` derives for that instant: "EAT" for Africa/Kampala. */
+  /** The zone name `Intl` derives for that instant: `EAT`, or `East Africa Time` on an
+   * ICU build with no short form for the zone. Never typed here, always asked for. */
   abbrev: string;
   /** Numeric offset from UTC in hours, positive east: 3. */
   offsetHours: number;
@@ -68,7 +69,7 @@ export function zoned(iso: string | null, timeZone: string): ZonedInstant {
 
   const datePart = `${pick('day')} ${pick('month')} ${pick('year')}`;
   const timePart = normaliseHours(pick('hour'), pick('minute'));
-  const zone = pick('timeZoneName');
+  const zone = zoneLabel(date, timeZone, pick('timeZoneName'));
 
   return {
     local: `${datePart} ${timePart}`,
@@ -77,6 +78,29 @@ export function zoned(iso: string | null, timeZone: string): ZonedInstant {
     timeZone,
     missing: false,
   };
+}
+
+/**
+ * The zone's own name, or the closest thing this `Intl` build actually has.
+ *
+ * `timeZoneName: "short"` is the abbreviation §14 asks for, but ICU ships no short
+ * form for some zones and renders `GMT+3` instead -- an offset wearing a name, which
+ * is the hour-hunting bug in its quieter form: nothing tells the reader which zone the
+ * wall clock was taken in. When the short form is only an offset, the long form is
+ * asked for ("East Africa Time"), and the offset is still printed beside it.
+ */
+function zoneLabel(
+  date: Date,
+  timeZone: string,
+  shortName: string,
+): string {
+  if (!/^GMT([+-]|$)/.test(shortName)) return shortName;
+  const parts = formatter(timeZone, {
+    year: 'numeric',
+    timeZoneName: 'long',
+  }).formatToParts(date);
+  const longName = parts.find((part) => part.type === 'timeZoneName')?.value ?? '';
+  return longName === '' ? shortName : longName;
 }
 
 /** `Intl` renders midnight in en-GB as "24" with hour12: false; "00" is what reads. */

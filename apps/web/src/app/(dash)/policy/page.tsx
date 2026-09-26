@@ -22,6 +22,7 @@
 import Link from 'next/link';
 import { useCallback, useEffect, useRef, useState, type CSSProperties, type ReactElement } from 'react';
 
+import { EmptyState } from '@/design/primitives/EmptyState';
 import { Icon } from '@/design/icons/Icon';
 import { ErrorPane } from '@/design/primitives/ErrorPane';
 import { Pane } from '@/components/Pane';
@@ -31,7 +32,8 @@ import { Assumptions } from '@/components/ui/provenance';
 import { MarkArc } from '@/components/ui/MarkArc';
 import { ROUTES, type Allocation } from '@/lib/api/contract';
 import { useListResource, useResource } from '@/lib/api/hooks';
-import { failureDetail, failureRunId, failureTitle } from '@/lib/api/problem';
+import { failureDetail, failureRunId, failureTitle, isRunNotFound } from '@/lib/api/problem';
+import { PIPELINE_COMMAND, RUNTIME_ESTIMATE_FALLBACK } from '@/lib/copy';
 import { compactFromMinor, count, percent } from '@/lib/format/money';
 import { PANEL_SUNKEN, T_LABEL, T_MICRO, T_MONO } from '@/components/ui/sx';
 
@@ -89,9 +91,26 @@ export default function PolicyPage(): ReactElement {
   }, [allocation.isFetching]);
 
   if (defaults.data === null || draft === null) {
+    if (defaults.failure !== null && isRunNotFound(defaults.failure)) {
+      return (
+        <div style={{ padding: 'var(--spacing-pane-gap)' }}>
+          <EmptyState kind="no-run" command={PIPELINE_COMMAND} expectedRuntime={RUNTIME_ESTIMATE_FALLBACK} />
+        </div>
+      );
+    }
     return (
       <div style={{ padding: 'var(--spacing-pane-gap)' }}>
-        <Pane id="simulator" title="Policy simulator" operation="Loading the active policy" meta={defaults.meta} skeleton={{ columns: [{ key: 'slider', width: '100%' }], rows: 4 }}>
+        <Pane
+          id="simulator"
+          title="Policy simulator"
+          operation="Loading the active policy"
+          meta={defaults.meta}
+          failure={defaults.failure}
+          onRetry={() => void defaults.refetch()}
+          attempt={defaults.attempts}
+          retrying={defaults.isFetching}
+          skeleton={{ columns: [{ key: 'slider', width: '100%' }], rows: 4 }}
+        >
           <span />
         </Pane>
       </div>

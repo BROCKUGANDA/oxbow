@@ -82,18 +82,28 @@ export function StaleRow(): ReactElement {
 
   useEffect(() => {
     let discarded = 0;
+    let accepted: string | null = null;
     const key = 'gallery-stale-demo';
     const first = begin(key);
     const second = begin(key);
+    // Every responder repaints the line, so a discard that lands AFTER the winner
+    // still shows its count. The earlier shape stored `result` once, on the winner,
+    // and the superseded response that arrived later incremented a counter nobody
+    // ever read — the demo claimed a discard it never displayed.
+    const paint = (): void => {
+      if (accepted !== null) setResult({ accepted, discarded });
+    };
     // The second request resolves first; the first resolves after it and must lose.
     const timers = [
       setTimeout(() => {
         if (isStale(key, second)) discarded += 1;
-        else setResult({ accepted: 'second', discarded });
+        else accepted = 'second';
+        paint();
       }, 20),
       setTimeout(() => {
         if (isStale(key, first)) discarded += 1;
-        else setResult({ accepted: 'first', discarded });
+        else accepted = 'first';
+        paint();
       }, 200),
     ];
     return () => timers.forEach((timer) => clearTimeout(timer));

@@ -76,7 +76,11 @@ export function useResource<T>(
   });
 
   const failure = toFailure(query.error);
-  const attempts = query.failureCount + 1;
+  /* TanStack counts *failures*: after the first attempt throws, failureCount is 1.
+     The label is the number of requests made, so one failed attempt reads
+     "attempt 1" — not "attempt 2", which is what a bare `failureCount + 1` showed
+     for every single-shot 4xx. */
+  const attempts = Math.max(query.failureCount, 1);
 
   return {
     data: query.data?.data ?? null,
@@ -104,7 +108,7 @@ export function useListResource<T>(
   route: string,
   path: string,
   decoder: Decoder<T>,
-  params: Record<string, string | number | boolean | null | undefined>,
+  params: Record<string, string | number | boolean | readonly string[] | null | undefined>,
   options: { enabled?: boolean; keepPreviousData?: boolean } = {},
 ): QueryState<T> {
   return useResource(route, withQuery(path, params), decoder, options);

@@ -57,6 +57,18 @@ export type PaneProps = {
   /** The narrowest width at which this pane keeps its column layout. */
   minChildWidth?: number;
   padded?: boolean;
+  /**
+   * The pane's own typed failure. A failing primary payload is an error surface, not
+   * an eternal skeleton: when this is set and nothing resolved, the pane renders the
+   * ErrorPane in its reserved geometry with the run id and a retry, exactly like the
+   * react-error-boundary path for a raised render.
+   */
+  failure?: ApiFailure | null;
+  /** Retry scoped to this pane's query. The button is disabled while one is in flight. */
+  onRetry?: (() => void) | null;
+  /** Attempt count carried to the error surface so a repeat failure reads as one. */
+  attempt?: number;
+  retrying?: boolean;
 };
 
 export function Pane({
@@ -69,6 +81,10 @@ export function Pane({
   skeleton,
   reserveHeight,
   padded = true,
+  failure = null,
+  onRetry = null,
+  attempt = 1,
+  retrying = false,
 }: PaneProps): ReactElement {
   return (
     <section
@@ -107,7 +123,17 @@ export function Pane({
           {meta?.degraded === true ? (
             <DegradedBanner dependency={title} fallback={meta.degraded_reason ?? 'the deterministic path'} meta={meta} />
           ) : null}
-          <MaybeSuspense skeleton={skeleton} label={title} meta={meta}>
+          <MaybeSuspense
+            skeleton={skeleton}
+            label={title}
+            meta={meta}
+            failure={failure}
+            onRetry={onRetry}
+            attempt={attempt}
+            retrying={retrying}
+            paneId={id}
+            operation={operation}
+          >
             {children}
           </MaybeSuspense>
         </ErrorBoundary>
@@ -116,18 +142,44 @@ export function Pane({
   );
 }
 
-/** Renders the matched-geometry skeleton while the pane's own query is pending. */
+/** Renders the matched-geometry skeleton while the pane's own query is pending, and
+ *  the pane's ErrorPane when the query failed — the reserved geometry is identical
+ *  either way, which is what keeps resolution (and failure) at zero layout shift. */
 function MaybeSuspense({
   skeleton,
   label,
   meta,
+  failure,
+  onRetry,
+  attempt,
+  retrying,
+  paneId,
+  operation,
   children,
 }: {
   skeleton: PaneProps['skeleton'];
   label: string;
   meta: ListMeta | null;
+  failure: ApiFailure | null;
+  onRetry: (() => void) | null;
+  attempt: number;
+  retrying: boolean;
+  paneId: string;
+  operation: string;
   children: ReactNode;
 }): ReactElement {
+  if (failure !== null && meta === null) {
+    return (
+      <QueryFailure
+        id={paneId}
+        operation={operation}
+        failure={failure}
+        onRetry={onRetry ?? (() => undefined)}
+        attempt={attempt}
+        retrying={retrying}
+      />
+    );
+  }
   if (skeleton === undefined || skeleton.columns.length === 0 || meta !== null) return <>{children}</>;
   return (
     <Skeleton
@@ -136,6 +188,39 @@ function MaybeSuspense({
       rowHeight={skeleton.rowHeight}
       label={`${label} is loading`}
     />
+  );
+}
+
+/** The pane-level surface for a failed query (as opposed to a raised render). */
+function QueryFailure({
+  id,
+  operation,
+  failure,
+  onRetry,
+  attempt,
+  retrying,
+}: {
+  id: string;
+  operation: string;
+  failure: ApiFailure;
+  onRetry: () => void;
+  attempt: number;
+  retrying: boolean;
+}): ReactElement {
+  return (
+    <ErrorPane
+      paneId={id}
+      operation={operation}
+      error={failureToProblem(failure)}
+      onRetry={onRetry}
+      attempt={attempt}
+      retrying={retrying}
+      siblingsIntact
+    >
+      <p style={{ ...T_MICRO, color: 'var(--color-ink-faint)', margin: 0 }}>
+        This pane failed on its own. Every other pane on the page resolved and is still interactive.
+      </p>
+    </ErrorPane>
   );
 }
 

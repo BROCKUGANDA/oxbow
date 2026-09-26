@@ -31,6 +31,8 @@ import { BandBadge } from '@/components/ui/BandBadge';
 import { MoneyFigure } from '@/components/ui/MoneyFigure';
 import { ROUTES, type Drift, type ScorecardAttribute } from '@/lib/api/contract';
 import { useListResource, useResource } from '@/lib/api/hooks';
+import { isRunNotFound } from '@/lib/api/problem';
+import { PIPELINE_COMMAND, RUNTIME_ESTIMATE_FALLBACK } from '@/lib/copy';
 import { count, percent } from '@/lib/format/money';
 import { ELLIPSIS, HAIRLINE_BOTTOM, PANEL_SUNKEN, T_LABEL, T_MICRO, T_MONO } from '@/components/ui/sx';
 
@@ -71,9 +73,26 @@ function ScorecardExplorer(): ReactElement {
   });
 
   if (scorecard.data === null) {
+    if (scorecard.failure !== null && isRunNotFound(scorecard.failure)) {
+      return (
+        <div style={{ padding: 'var(--spacing-pane-gap)' }}>
+          <EmptyState kind="no-run" command={PIPELINE_COMMAND} expectedRuntime={RUNTIME_ESTIMATE_FALLBACK} />
+        </div>
+      );
+    }
     return (
       <div style={{ padding: 'var(--spacing-pane-gap)' }}>
-        <Pane id="attributes" title="Attributes" operation="Loading the scorecard" meta={scorecard.meta} skeleton={{ columns: [{ key: 'a', width: '55%' }, { key: 'iv', width: '45%' }], rows: 8 }}>
+        <Pane
+          id="attributes"
+          title="Attributes"
+          operation="Loading the scorecard"
+          meta={scorecard.meta}
+          failure={scorecard.failure}
+          onRetry={() => void scorecard.refetch()}
+          attempt={scorecard.attempts}
+          retrying={scorecard.isFetching}
+          skeleton={{ columns: [{ key: 'a', width: '55%' }, { key: 'iv', width: '45%' }], rows: 8 }}
+        >
           <span />
         </Pane>
       </div>

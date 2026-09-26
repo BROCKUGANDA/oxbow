@@ -34,7 +34,7 @@ import { BandBadge } from '@/components/ui/BandBadge';
 import { PIPELINE_COMMAND, RUNTIME_ESTIMATE_FALLBACK } from '@/lib/copy';
 import { ROUTES } from '@/lib/api/contract';
 import { useResource } from '@/lib/api/hooks';
-import { failureDetail, failureRunId, failureTitle } from '@/lib/api/problem';
+import { failureDetail, failureRunId, failureTitle, isRunNotFound } from '@/lib/api/problem';
 import { compactFromMinor, count, moneyAxisFormatter } from '@/lib/format/money';
 import { GAP_TIGHT, PANEL_SUNKEN, T_LABEL, T_MICRO } from '@/components/ui/sx';
 
@@ -107,6 +107,26 @@ export default function DashboardPage(): ReactElement {
   /* The pending tree is the resolved tree with its data cells replaced by matched-geometry
    * shimmers: same wrapper, same gaps, same pane specs, so nothing below moves on resolve. */
   if (dashboard.data === null) {
+    /* A fresh install is an EMPTY state, not an eternal skeleton and not a retry
+       invitation: P7 answers run-not-found 404 until the first pipeline completes, and
+       plan §14 requires the no-run screen — the literal command, copy button, expected
+       runtime — over the reserved geometry. */
+    if (dashboard.failure !== null && isRunNotFound(dashboard.failure)) {
+      return (
+        /* The reserved box below is the height of the pending tree this state
+           replaces (strip + chips + two panes + feed + gaps, measured 957 px at
+           1440×900). Emptying a smaller box is exactly the layout shift the
+           zero-CLS clause is about: the swap must not resize the page. */
+        <div data-cls-anchor="dashboard-empty" style={{ ...PAGE, minHeight: 957 }}>
+          <EmptyState
+            kind="no-run"
+            command={PIPELINE_COMMAND}
+            expectedRuntime={RUNTIME_ESTIMATE_FALLBACK}
+            corpus={runtime.data?.dataset ?? undefined}
+          />
+        </div>
+      );
+    }
     return (
       <div style={PAGE}>
         {/* A failed primary payload is an error, not an eternal skeleton: the strip says

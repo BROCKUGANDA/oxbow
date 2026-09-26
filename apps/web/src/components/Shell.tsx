@@ -27,13 +27,17 @@ import { DISCLAIMER, SCENARIO_NOTE } from '../lib/copy';
 import { GAP, T_LABEL, T_MICRO } from './ui/sx';
 import { useShell } from './AppProviders';
 
-const NAV: readonly { href: string; label: string; hint: string }[] = [
-  { href: '/dashboard', label: 'Command', hint: 'currency strip and the shape of the period' },
-  { href: '/alerts', label: 'Queue', hint: 'ranked under the active policy, with the capacity line' },
-  { href: '/network', label: 'Network', hint: 'two hops, overlays, time scrubber' },
-  { href: '/scorecard', label: 'Scorecard', hint: 'points, bands, drift, disagreement' },
-  { href: '/policy', label: 'Policy', hint: 're-allocation under capacity and recovery rate' },
-  { href: '/model', label: 'Validation', hint: 'walk-forward, ablation, limitations' },
+const NAV: readonly { href: string; label: string; hint: string; w: number }[] = [
+  // `w` is the label's width in the loaded IBM Plex Sans at the desktop breakpoint.
+  // Nav links carry it as a minimum so the font swap cannot re-pack the strip: a
+  // fallback-rendered label is up to 3 px narrower across the six items, and that
+  // ±3px is the layout shift the zero-CLS gate counts.
+  { href: '/dashboard', label: 'Command', hint: 'currency strip and the shape of the period', w: 65 },
+  { href: '/alerts', label: 'Queue', hint: 'ranked under the active policy, with the capacity line', w: 47 },
+  { href: '/network', label: 'Network', hint: 'two hops, overlays, time scrubber', w: 57 },
+  { href: '/scorecard', label: 'Scorecard', hint: 'points, bands, drift, disagreement', w: 65 },
+  { href: '/policy', label: 'Policy', hint: 're-allocation under capacity and recovery rate', w: 45 },
+  { href: '/model', label: 'Validation', hint: 'walk-forward, ablation, limitations', w: 64 },
 ];
 
 export function Shell({ children }: { children: ReactNode }): ReactElement {
@@ -110,6 +114,10 @@ export function Shell({ children }: { children: ReactNode }): ReactElement {
                     ...T_LABEL,
                     padding: '4px 8px',
                     borderRadius: 'var(--radius-control)',
+                    minWidth: item.w,
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
                     color: active ? 'var(--color-ink)' : 'var(--color-ink-muted)',
                     background: active ? 'var(--color-elev-2)' : 'transparent',
                     borderBottom: active ? '2px solid var(--color-evidence)' : '2px solid transparent',

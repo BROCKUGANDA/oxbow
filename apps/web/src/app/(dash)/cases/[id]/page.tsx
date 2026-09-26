@@ -285,13 +285,19 @@ function CaseSkeleton({ resource, accountKey }: { resource: ReturnType<typeof us
         alignItems: 'start',
       }}
     >
-      <Pane id="score" title="Score" operation="Loading the score header" skeleton={{ columns: [{ key: 'score', width: '100%' }], rows: 5 }}>
+      <Pane
+        id="score"
+        title="Score"
+        operation="Loading the score header"
+        failure={resource.failure}
+        onRetry={() => void resource.refetch()}
+        attempt={resource.attempts}
+        retrying={resource.isFetching}
+        skeleton={{ columns: [{ key: 'score', width: '100%' }], rows: 5 }}
+      >
         <p style={{ ...T_MICRO, color: 'var(--color-ink-faint)' }}>
-          {loading ? `Reading ${accountKey} from the recorded run.` : resource.failure === null ? 'Nothing returned.' : failureTitle(resource.failure)}
+          {loading ? `Reading ${accountKey} from the recorded run.` : 'Nothing returned.'}
         </p>
-        {resource.failure !== null ? (
-          <p style={{ ...T_MICRO, color: 'var(--color-ink-muted)', marginTop: 6 }}>{failureDetail(resource.failure)}</p>
-        ) : null}
       </Pane>
       <Pane id="evidence" title="Evidence" operation="Loading the evidence pane" skeleton={{ columns: [{ key: 'row', width: '100%' }], rows: 9, rowHeight: 36 }}>
         <span />
