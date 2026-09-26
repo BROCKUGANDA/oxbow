@@ -57,7 +57,11 @@ app = FastAPI(
     version="0.1.0",
 )
 
-SIGNING_SECRET: str = os.environ.get("SIGNING_SECRET", "oxbow_local_secret")
+# No default. The sender in oxbow.adapters.webhook already refuses to dispatch when
+# WEBHOOK_SIGNING_SECRET is unset, so a receiver that fell back to a published literal
+# would be the weaker half of the same handshake: anyone reading this repository could
+# forge a delivery that verifies. An unset secret is now a 503 that names itself.
+SIGNING_SECRET: str = os.environ.get("SIGNING_SECRET", "")
 RECORD_PATH: Path = Path(os.environ.get("RECORD_PATH", "/data/deliveries.jsonl"))
 
 
@@ -99,6 +103,18 @@ async def webhook(
     what a verified delivery looked like.
     """
     raw_body = await request.body()
+
+    if not SIGNING_SECRET:
+        # Before the header check: a request that arrives here would otherwise be
+        # refused for the wrong reason, and an operator would chase the client.
+        return _json_response(
+            {
+                "detail": "SIGNING_SECRET is unset, so no signature can be verified. "
+                "Set it to the same value the outbox signs with; deliveries are refused "
+                "rather than accepted against a default."
+            },
+            503,
+        )
 
     if x_oxbow_signature is None:
         return _json_response({"detail": f"missing {SIGNATURE_HEADER}"}, 401)

@@ -124,6 +124,34 @@ def test_run_salt_must_come_from_the_environment(monkeypatch: pytest.MonkeyPatch
     assert require_run_salt() == "a" * 64
 
 
+def test_the_makefile_does_not_invent_a_run_salt() -> None:
+    """The Makefile must not stand in for the environment when the salt is absent.
+
+    ``require_run_salt`` above fails loud when RUN_SALT is missing, which is the
+    designed behaviour: an empty environment is an error to be named, not a licence
+    to invent one (03 A rule 1). The Makefile used to defeat that by minting a fresh
+    salt per invocation with ``export RUN_SALT ?= $(shell ... secrets.token_hex(32))``.
+    Because the salt is an *identity* rather than a nonce, a per-invocation salt
+    re-keys every account in the corpus, makes the two runs of ``verify-determinism``
+    incomparable, and shows up nowhere in any output -- so the gate that exists to
+    catch exactly this class of drift was the thing introducing it.
+
+    Asserted against the text rather than by running make: a test that shelled out to
+    ``make`` would need a salt-free environment to be meaningful, and would then be
+    testing the harness.
+    """
+    makefile = (REPO_ROOT / "Makefile").read_text(encoding="utf-8")
+    body = "\n".join(
+        line for line in makefile.splitlines() if not line.lstrip().startswith("#")
+    )
+    assert "RUN_SALT" not in body, (
+        "the Makefile assigns RUN_SALT; the salt is an identity that must come from the "
+        "environment or .env, never from a recipe (01 A rule 8)"
+    )
+    for generator in ("secrets", "token_hex", "uuid4"):
+        assert generator not in body, f"the Makefile generates a value with {generator}"
+
+
 # --- config values the spec pins -----------------------------------------
 
 

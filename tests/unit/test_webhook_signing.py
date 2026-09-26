@@ -250,3 +250,38 @@ def test_echo_rejects_a_missing_signature_header_with_401(echo_client: TestClien
     response = echo_client.post("/webhook", content=BODY)
     assert response.status_code == 401
     assert _recorded(echo_client) == []
+
+
+def test_an_unset_secret_refuses_delivery_rather_than_using_a_published_default(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The receiver must be no weaker than the sender.
+
+    `oxbow.adapters.webhook` refuses to dispatch when WEBHOOK_SIGNING_SECRET is unset.
+    echo.py used to fall back to the literal "oxbow_local_secret", which is in this
+    repository, so an integrator who never set the variable still got a 200 -- for a
+    signature anyone could have forged after reading the source. Dropping the fallback
+    would be half the fix on its own: the refusal has to be a distinct status that names
+    the variable, because a 401 here would send the operator to debug their client.
+    """
+    monkeypatch.setattr(echo, "RECORD_PATH", tmp_path / "deliveries.jsonl")
+    monkeypatch.setattr(echo, "SIGNING_SECRET", "")
+    client = TestClient(echo.app)
+
+    forged = _sign(BODY, "oxbow_local_secret")
+    honest = _sign(BODY, SECRET)
+
+    response = client.post(
+        "/webhook", content=BODY, headers={SIGNATURE_HEADER: forged, "Idempotency-Key": "k-f"}
+    )
+    assert response.status_code == 503, response.text
+    assert "SIGNING_SECRET" in response.json()["detail"]
+
+    # Even a properly signed delivery is refused: the receiver cannot vouch for
+    # anything while it holds no key, and "accepted, but I did not really check" is
+    # the failure mode this guards.
+    response = client.post(
+        "/webhook", content=BODY, headers={SIGNATURE_HEADER: honest, "Idempotency-Key": "k-h"}
+    )
+    assert response.status_code == 503
+    assert client.get("/deliveries").json()["deliveries"] == []
