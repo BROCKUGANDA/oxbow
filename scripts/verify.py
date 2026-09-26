@@ -222,8 +222,8 @@ PHASES: tuple[Phase, ...] = (
     ),
     Phase(
         name="P7",
-        done=False,
-        pending_reason="apps/api is served by tests/integration/test_p7_api.py; 8 of its tests need PostgreSQL through the Docker engine that went down mid-session",
+        done=True,
+        pending_reason="",
         gates=(
             Gate(
                 "port conformance across every adapter",
@@ -232,6 +232,25 @@ PHASES: tuple[Phase, ...] = (
             Gate(
                 "architecture contracts: no adapter import outside adapters/",
                 ("uv", "run", "lint-imports"),
+            ),
+            # The write path is the phase. Before this line existed, nothing had ever
+            # imported apps/api at all: the routers 500'd on their own response
+            # validation, and jobs.py enqueued a dotted name whose module was missing,
+            # so no queued job had ever run. These four files are the only contact the
+            # API, the outbox drain, the audit chain and the worker have with a real
+            # Postgres, which is the only place any of it can be observed.
+            Gate(
+                "the served API, the append race, the outbox and the RQ worker",
+                (
+                    "uv",
+                    "run",
+                    "pytest",
+                    "-q",
+                    "tests/integration/test_p7_api.py",
+                    "tests/integration/test_p7_worker.py",
+                    "tests/integration/test_p7_session_hygiene.py",
+                    "tests/integration/test_envelope_doctrine.py",
+                ),
             ),
         ),
     ),
