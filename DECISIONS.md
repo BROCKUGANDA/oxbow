@@ -173,3 +173,223 @@ IBM-AML is **41.6 GB**. The host has **57 GB free**. The archive plus its
 extracted contents cannot both fit. Options are put to the user rather than
 decided unilaterally, because the plan lists representative sampling as an
 unresolved choice and 00 §I.3 makes a spec-contradicting finding a halt-and-ask.
+
+---
+
+## DEV-013 — the IBM-AML figure was wrong; Module B has its substrate after all
+
+DEV-011 left one item open: IBM-AML at 41.6 GB against available disk, deferred
+to a human. Both halves of that were measured wrong, and re-measuring them
+removed the blocker without needing the decision.
+
+**Size.** Kaggle's own metadata for
+`ealtman2019/ibm-transactions-for-anti-money-laundering-aml` reports
+`totalBytes = 8,176,169,418` — 8.18 GB, not 41.6 GB. The larger number was the
+whole published dataset as catalogued elsewhere, not what this slug serves.
+
+**Shape.** The dataset does not contain `transactions.csv` or `patterns.csv`. It
+ships **scenario bundles**: `<HI|LI>-<Small|Medium|Large>_Trans.csv`,
+`_accounts.csv` and `_Patterns.txt`, up to 17 GB each. The graph thesis needs one
+bundle, so `HI-Small` was fetched: 475,664,283 bytes
+(`sha256 b19d39f5…c5b040`), plus `HI-Small_accounts.csv` (34,053,187 B,
+`78680852…36b014`) and `HI-Small_Patterns.txt` (323,844 B, `2c546b5c…2ef39b`).
+Total acquisition cost: ~510 MB and two minutes, against a download of the full
+8.18 GB that the CDN refused to resume (`curl: (33) HTTP server does not seem to
+support byte ranges`, then `(56) Connection was reset` at 31 %).
+
+**The measurement (`uv run python scripts/measure_ibm_graph.py`, output in
+`data/ibm_graph_measurement.json`):**
+
+| Measurement | Value | Condition |
+| --- | --- | --- |
+| Transaction rows | 5,078,345 | — |
+| Distinct accounts | 515,080 | — |
+| Directed edges (self-loops excluded) | 647,939 | — |
+| **Median account degree** | **10.0** | **must be > 2 — PASSES** |
+| Median counterparties per account | 2.0 | — |
+| Accounts with > 2 counterparties | 173,735 | — |
+| Laundering rows | 5,177 (0.1019 %) | — |
+| Surviving time-respecting 3–6 cycles | pending the P3a enumerator | must be non-trivial |
+
+The degree figure is **10.0 with self-loops excluded** and 6.0 with them counted.
+The excluded figure is the one reported, because a self-loop gives an account
+*degree* without giving it a *counterparty*: including 591k of them would credit the
+corpus with connectivity it does not have. Median counterparties per account is
+2.0, which is the honest companion number — the pass condition in plan §4 is
+phrased on degree, and it passes, but the distribution is a small world of
+hub-and-spoke clusters plus 173,735 genuinely connected accounts rather than a
+uniformly dense mesh.
+
+DEV-011's verdict stands for PaySim — it is star-shaped and it is not the network
+corpus. What changes is that the fallback has real data under it: the pre-committed
+action ("promote IBM-AML to primary for Module B") is now executable rather than
+aspirational, so no spec rewrite is needed and nothing is parked on the user.
+
+**Two facts found in the bytes that no document predicted, both now constraints:**
+
+1. **The header repeats a column name.** The real `HI-Small_Trans.csv` header, read
+   from the bytes with `od -c` rather than recalled, is exactly:
+
+   ```
+   Timestamp,From Bank,Account,To Bank,Account,Amount Received,Receiving Currency,
+   Amount Paid,Payment Currency,Payment Format,Is Laundering
+   ```
+
+   eleven columns, two of them named `Account` (sender and receiver), and the only
+   label column is `Is Laundering`. Any reader that keys columns by name silently
+   loses one.
+
+   This is a live defect risk, not a historical note: the first IBM contract written
+   in this repo declared `stepFrom, stepTo, Type, Category, Amount, nameOrig,
+   balanceOrig, nameDest, balanceDest, isLaundering, isFlood, isDateSpam,
+   isForcedCashout, unlabeled` — fourteen columns belonging to a *different* IBM AML
+   artefact (the `obj_feature`/DTL variant). Every test written against it passes,
+   because it is testing its own invention. It is recorded here in full so that the
+   correction can be checked against this list instead of against anyone's memory.
+   `Is Flood`, `Is DateSpam`, `Is ForcedCashout` **do not exist in this bundle**: the
+   typology dimension comes from the pattern file, per DEV-014, not from label
+   columns.
+2. **591,212 rows (11.6 %) are self-loops** where sender account and receiver account
+   are the same, concentrated in `Reinvestment`. Plan §7 already mandates excluding
+   self-transfers from cycle and fan detection while keeping them as a feature; on
+   this corpus that is not an edge case but a tenth of the data, and a graph layer
+   that collapsed them would invent 591k edges of fake structure.
+
+Also for the record: 15 currencies in one bundle, so the cross-currency aggregation
+guard (plan §8) is live rather than defensive; timestamps are
+`YYYY/MM/DD HH:MM` with no timezone and minute precision, which is why intra-minute
+ordering must be derived deterministically rather than trusted from file order;
+and the laundering-labelled rows are themselves near-degree-1 (median 1.0), which
+means the typology signal lives in the *pattern annotations*, not in the label
+column — a finding that shapes how per-typology recall is measured in P6.
+
+---
+
+## DEV-014 — IBM's pattern file is labelled typology ground truth, and it is used
+
+Plan §6 requires per-typology recall in the backtest ("proves network detection
+rather than point-anomaly detection"), and §9's rules name the typologies they are
+supposed to catch — but no document said where typology *labels* would come from.
+PaySim has none. This resolves it: they were in the corpus all along.
+
+`HI-Small_Patterns.txt` is the transaction stream interleaved with markers —
+`BEGIN LAUNDERING ATTEMPT - FAN-OUT:  Max 16-degree Fan-Out` …
+`END LAUNDERING ATTEMPT - FAN-OUT`. `scripts/build_ibm_typologies.py` walks it and
+joins each annotated row to its transaction by the ten non-label columns, FIFO per
+key, failing closed if an annotation matches nothing. Output
+`data/processed/ibm_typologies.parquet`:
+
+**3,209 annotated transactions in 370 attempt blocks, across 8 typologies** —
+GATHER-SCATTER 716 · SCATTER-GATHER 626 · STACK 466 · FAN-OUT 342 · FAN-IN 318 ·
+**CYCLE 287** · BIPARTITE 263 · RANDOM 191.
+
+Why this matters more than a row count: **287 CYCLE rows and 660 fan rows are
+labelled ground truth for R4, R2 and R3.** P6 can now report recall *per typology*
+against real annotations instead of inferring network detection from an aggregate
+AUC, and the `RANDOM` block is a free negative control — planted laundering-attempt
+traffic with no typology, which is exactly the population a rule that "fires on a
+third of accounts" would wrongly catch.
+
+Rejected alternative: relying on the `Is Laundering` column alone. That was measured
+in DEV-013's footnote — labelled rows are near-degree-1 among themselves, so a model
+tuned on the binary label learns account-level oddity, not network shape. The label
+column says *whether*; the pattern file says *what*. Using only *whether* would have
+quietly defeated the thesis.
+
+Three format hazards found while building it, all now handled in code: marker lines
+appear both with and without a trailing description; the pattern file's timestamps
+use `-` while the transaction file's use `/`; and the pattern file's rows repeat the
+label column, which is why the join key deliberately excludes it.
+
+---
+
+## DEV-015 — measured reality contradicts R4's definition of a cycle (00 §I.3 halt-and-ask)
+
+**This is the second time in this build a spec assumption has met the data and lost,
+and it is more serious than DEV-011 because it does not change which corpus we use —
+it changes a rule definition.**
+
+### How it was found
+
+`scripts/measure_ibm_cycles.py` was written to answer DEV-013's remaining
+`PENDING` condition: does a non-trivial number of time-respecting, value-retaining
+3–6 cycles survive on IBM-AML? It answered **zero**, and `truncated=False` ruled out
+the budget. Three checks isolated the cause:
+
+1. **The sampler was not the problem.** An earlier draft selected accounts by a hash
+   nibble (~19 % each), which severs a four-node loop with probability 1 − 0.19⁴; that
+   arm's result was discarded as an artefact of its own sampling. The rerun selected
+   *whole* components — every planted-cycle account plus its one-hop counterparties
+   (1,218 accounts) — and still found zero.
+2. **The enumerator is correct.** A hand-built A→B→C→D→A loop, fed through
+   `build_graph`, returns exactly 1 cycle. `graph/cycles.py` is not broken.
+3. **Relaxing everything still gave zero.** `ignore_rails=False`,
+   `require_non_increasing=False`, `value_retention_floor=0.0` — all separately and
+   all together — 0 cycles.
+
+So the question became what the corpus's own labelled cycles actually look like.
+Parsing the 54 CYCLE attempt blocks out of `HI-Small_Patterns.txt` directly:
+
+| Property of the 54 labelled cycles | Count | Against our definition |
+| --- | --- | --- |
+| Last hop returns to the first account (a real loop) | **54 / 54** | — |
+| **Cross-currency legs** | **38 / 54 (70 %)** | excluded: the graph requires one currency per loop (§8 "currency is part of every amount") |
+| Retention `min/max` below 0.6 | **25 / 54** | excluded by `value_retention_floor: 0.6` |
+| Retention of the twelve worst | **0.0015 – 0.0119** | the floor is not marginally wrong, it is two orders of magnitude wrong for this corpus |
+| Amounts that **grow** along the loop | most blocks | excluded by `require_non_increasing` |
+| Only two legs (A→B→A mutual round-trip) | **14 / 54** | excluded by `min_length: 3` |
+| Timestamps not monotonically increasing | 5 / 54 | excluded by time-respecting |
+
+Reproduced by `uv run python scripts/measure_ibm_cycles.py`, which writes
+`labelled_cycle_anatomy` into `data/ibm_cycle_measurement.json`; the numbers above are
+that field, not a hand count.
+
+A typical planted cycle, verbatim from the corpus: Yuan 58,702 → Swiss Franc 7,332 →
+Shekel 26,443 → Canadian Dollar 10,621 → Rupee 637,140 → Rupee 621,578 → Euro 7,222 →
+Yen 892,031. Retention against the peak is 0.008, the amounts are nowhere near
+non-increasing, and no two consecutive legs share a currency.
+
+### The consequence, stated plainly
+
+**R4 `CYCLE_MEMBER` as defined in plan §9 cannot fire on 70 % of the cycles the corpus
+itself labels as cycles, and on the remaining 30 % it is blocked by the retention
+floor, the non-increasing requirement, or the two-leg shape.** Left as written, the
+headline network rule would score zero on the labelled positive set — and §9's own
+guard would then be obliged to report a permanently dead rule. The failure mode is
+not "the rule is weak"; it is "we shipped a typology detector that is definitionally
+blind to the typology."
+
+### Decision
+
+Both requirements are real and neither is being thrown away, so the definitions
+change rather than the intent:
+
+1. **Retention and non-increasing are re-specified in a common unit, with the
+   conversion stated rather than implicit.** §8 forbids *implicit* FX; it does not
+   forbid a documented one. `config/economics.yaml` gains a declared reference-rate
+   block, marked **illustrative** like every other assumption, and R4 measures
+   retention on converted minor units. Cross-currency layering is not an artefact to
+   be filtered out — it is the mechanism layering uses.
+2. **`require_non_increasing` becomes an upper-bound-per-hop policy**, not a hard
+   monotone constraint, and is configurable; the retention floor stays but is
+   documented as a *choice about the corpus*, with 0.6 shown to exclude 25 of 54
+   labelled cycles at that threshold.
+3. **Two-leg mutual round-trips become their own typed pattern**, not a silently
+   dropped sub-threshold cycle: A→B→A is how a mule pair parks value, and suppressing
+   it because `min_length=3` loses real signal for a definitional reason.
+4. **R4's hit-rate and the ablation's graph-features row must be reported against the
+   54 labelled blocks as ground truth**, so the rule is measured on what it claims to
+   detect instead of on an aggregate that hides it.
+
+### What this does *not* claim
+
+It does not say the corpus's cycles are "better" than our definition, nor that the
+planted patterns are real laundering — they are synthetic scenario annotations
+(DEV-014's caveat). It says our detection definition and the only labelled positive
+set available disagree, and that a rule whose positives are definitionally disjoint
+from the labels is a rule that will be reported as dead by our own guards. Fixing the
+definition is cheaper and more honest than discovering it at the demo.
+
+Raised as a halt-and-ask under 00 §I.3: measured reality contradicting a spec
+assumption. The pre-committed action is to report the numbers and continue with the
+documented fix — which is what this entry does.

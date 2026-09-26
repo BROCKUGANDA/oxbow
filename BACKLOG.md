@@ -1,0 +1,38 @@
+# BACKLOG
+
+Work that is deliberately not done yet, each with the reason it is deferred and
+what would force it. A deferral without a named reason is a lie by omission — the
+same failure mode as a silently dropped row (02 §D), applied to scope instead of
+data.
+
+## Blocking nothing, but real
+
+| Item | Phase | Why it is here | Force it with |
+| --- | --- | --- | --- |
+| Full-corpus metrics on IBM-AML typologies | P6 | The interactive product runs on a connected ~500 k subcorpus per the sampling rule in `config/pipeline.yaml`; full-corpus numbers are offline work. Plan §B3 sanctions the split. | `make eval --corpus ibmaml --full` |
+| Elliptic dataset | — | CC BY-NC-**ND** 4.0 forbids derivatives, so a derived sample would violate the licence. Cite-only in the README, never ingested. Enforced by `ingest_allowed: false` in `config/sources.yaml`, which the reader honours. | Nothing — it is a refusal, not a preference |
+| IEEE-CIS | — | Competition-governed; redistribution terms on derived splits are unclear. Never used. | Nothing |
+| Stream / CDC ingestion | P7 | `StreamSourceAdapter` is declared in `ports/source.py` and deliberately not built: the detection thesis is windowed, and incremental graph maintenance is a quarter of work, not a week (02 §C, §G). | A live-rails requirement, which the track rule forbids anyway |
+| Push-API ingestion | P7 | Route behind a flag, disabled in demo. | Real integrator demand |
+| Toxiproxy integration suite | P7 | Needs a pullable image and a network path; the degraded-response behaviour is unit-tested in the meantime. | CI with registry access |
+| Hosted read-only demo (Fly.io / Render) | P9 | Plan §15 lists it, but it publishes derived CC BY-SA / CDLA data and needs a human decision on share-alike publication first (00 §I.4). **Not deployed unilaterally.** | An explicit licensing confirmation |
+
+## Cut ladder position (00 §F)
+
+Nothing on the never-cut list is cut: the ablation table, the calibration curve,
+the walk-forward embargo, the cumulative benefit curve, the capacity cutoff line,
+the twelve typology glyphs, matched-geometry skeletons, the hash-chained decision
+log, the limitations section. If the schedule slips, cuts come in §17's order and
+each cut gets a line here naming what was dropped.
+
+## Known-unknowns carried into later phases
+
+- `local_hour` and `event_ts_utc` must never be mixed (03 §C). The rule engine and
+  the UI's hour-hunting both depend on this staying true; the graph and features
+  layers assert it at their boundaries.
+- PaySim balance columns are internally inconsistent with `amount`. That
+  inconsistency is a **feature**, not an error to repair — the repair would be the
+  silent coercion the contracts exist to prevent.
+- IBM-AML's column names must be re-verified against the real bytes on arrival if
+  the adapter was written before the download landed; `make data --verify-only`
+  is the check.

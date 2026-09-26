@@ -174,37 +174,82 @@ def test_rule_hit_rate_ceiling_is_one_third() -> None:
     assert rules["hit_rate_ceiling"] == 0.33
 
 
+def _model_features(raw: dict[str, object]) -> list[dict[str, object]]:
+    """The features that may enter the model matrix.
+
+    ``role: intermediate`` entries are scaffolding a declared feature is computed
+    from; they are deliberately excluded here because the plan's 60-75 target counts
+    what the model sees, and because an intermediate leaking into the matrix would
+    double-count the same signal under two names.
+    """
+    return [
+        entry
+        for entry in raw["features"]  # type: ignore[index]
+        if entry.get("role") != "intermediate"
+    ]
+
+
+def _window_days(entry: dict[str, object]) -> int:
+    """Lookback in whole days for a declared `24h` / `30d` / `point_in_time` window.
+
+    Three declared kinds reach no row's past at all and so contribute no lookback:
+    `point_in_time` reads the row itself, `lifetime` is a first-occurrence fact whose
+    value cannot change as future rows arrive, and `fold_scoped` is recomputed per
+    fold from that fold's edges only — which is the plan §8 guard that stops a graph
+    feature being computed once over the whole corpus and then read inside a fold.
+    """
+    window = entry.get("window")
+    if not isinstance(window, str) or window in {"point_in_time", "lifetime", "fold_scoped"}:
+        return 0
+    unit, amount = window[-1], window[:-1]
+    if not amount.isdigit():
+        raise AssertionError(f"window {window!r} is not a <int><unit> duration")
+    if unit == "d":
+        return int(amount)
+    if unit == "h":
+        return -(-int(amount) // 24)  # ceil: a partial day still reaches into a day
+    raise AssertionError(f"unsupported window unit in {window!r}")
+
+
 def test_feature_count_is_inside_the_sixty_to_seventy_five_target() -> None:
-    """Spec 5.2: target 60 to 75 features, with a plain sentence for each."""
+    """Spec 5.2: 60-75 model features, each with a plain sentence.
+
+    Asserted against the registry's own notion of a model feature rather than a
+    re-derived count, so the test and `config/features.yaml` cannot drift apart.
+    """
     features = load_yaml(REPO_ROOT / "config" / "features.yaml")
-    declared = [entry for group in features["groups"].values() for entry in group]
-    assert 60 <= len(declared) <= 75, f"expected 60-75 features, found {len(declared)}"
+    declared = _model_features(features)
+    assert 60 <= len(declared) <= 75, f"expected 60-75 model features, found {len(declared)}"
     for entry in declared:
-        assert entry["desc"].strip(), f"{entry['name']} has no plain-English description"
-        assert entry["lookback_days"] >= 1
+        assert str(entry.get("sentence", "")).strip(), f"{entry.get('id')} has no plain sentence"
+        assert entry.get("as_of"), f"{entry.get('id')} declares no as-of rule"
 
 
 def test_every_feature_declares_a_lookback_within_the_embargo() -> None:
     """The embargo must equal the longest feature lookback, or features leak.
 
-    A 30-day rolling feature computed just after the boundary would otherwise
-    see training-period data, which is the single most common way a backtest
-    becomes fiction (03 C).
+    A 30-day rolling feature computed just after the boundary would otherwise see
+    training-period data, which is the single most common way a backtest becomes
+    fiction (03 C).
     """
     features = load_yaml(REPO_ROOT / "config" / "features.yaml")
     splits = load_yaml(REPO_ROOT / "config" / "splits.yaml")
-    max_lookback = max(
-        entry["lookback_days"] for group in features["groups"].values() for entry in group
+    max_lookback = max(_window_days(entry) for entry in features["features"])  # type: ignore[index]
+    assert max_lookback == features["max_lookback_days"], (
+        f"longest declared window is {max_lookback}d but max_lookback_days says "
+        f"{features['max_lookback_days']}; the embargo is derived from this number"
     )
-    assert max_lookback == features["max_lookback_days"]
     assert splits["walk_forward"]["embargo_days"] == features["max_lookback_days"]
 
 
 def test_label_is_banned_from_the_feature_matrix() -> None:
-    """Spec 7.2: label_fraud never enters the feature matrix."""
+    """Spec 7.2: no label, in either corpus's spelling, may reach the matrix."""
     features = load_yaml(REPO_ROOT / "config" / "features.yaml")
-    assert "label_fraud" in features["guards"]["banned_inputs"]
+    banned = set(features["guards"]["banned_sources"])
+    for column in ("label_is_fraud", "label_is_flagged", "label_typology"):
+        assert column in banned, f"{column} is not banned from the feature matrix"
     assert features["guards"]["max_abs_correlation_with_label"] == 0.98
+    assert features["guards"]["require_finite"] is True
 
 
 def test_scorecard_scaling_constants_reproduce_600_at_fifty_to_one() -> None:

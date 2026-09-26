@@ -1,0 +1,144 @@
+{
+  "accounts_with_more_than_2_counterparties": 173735,
+  "command": "uv run python scripts/measure_ibm_graph.py",
+  "currencies": [
+    [
+      "US Dollar",
+      1879341
+    ],
+    [
+      "Euro",
+      1172017
+    ],
+    [
+      "Swiss Franc",
+      237884
+    ],
+    [
+      "Yuan",
+      206551
+    ],
+    [
+      "Shekel",
+      194988
+    ],
+    [
+      "Rupee",
+      192065
+    ],
+    [
+      "UK Pound",
+      181255
+    ],
+    [
+      "Ruble",
+      157361
+    ],
+    [
+      "Yen",
+      156319
+    ],
+    [
+      "Bitcoin",
+      148151
+    ],
+    [
+      "Canadian Dollar",
+      141357
+    ],
+    [
+      "Australian Dollar",
+      138511
+    ],
+    [
+      "Mexican Peso",
+      111030
+    ],
+    [
+      "Saudi Riyal",
+      89971
+    ],
+    [
+      "Brazil Real",
+      71544
+    ]
+  ],
+  "cycle_count_time_respecting_3_6": "PENDING the P3a cycle enumerator",
+  "degree_max": 169756,
+  "degree_median": 10.0,
+  "degree_p90": 53.0,
+  "degree_p99": 116.0,
+  "laundering_rate_pct": 0.1019,
+  "laundering_rows": 5177,
+  "measured_at_utc": "2026-09-26T07:00:14+00:00",
+  "median_counterparties_per_account": 2.0,
+  "n_currencies": 15,
+  "n_directed_edges_excl_self_loops": 647939,
+  "n_distinct_accounts": 515080,
+  "n_self_loop_rows": 591212,
+  "n_transaction_rows": 5078345,
+  "notes": [
+    "Timestamps in this file use '/' separators; the pattern file uses '-'.",
+    "The header repeats the column name 'Account' for sender and receiver.",
+    "Self-loops are excluded from degree, edge and counterparty figures."
+  ],
+  "pass_condition_median_degree_gt_2": true,
+  "payment_formats": [
+    [
+      "Cheque",
+      1864331
+    ],
+    [
+      "Credit Card",
+      1323324
+    ],
+    [
+      "ACH",
+      600797
+    ],
+    [
+      "Cash",
+      490891
+    ],
+    [
+      "Reinvestment",
+      481056
+    ],
+    [
+      "Wire",
+      171855
+    ],
+    [
+      "Bitcoin",
+      146091
+    ]
+  ],
+  "source": "ibmaml HI-Small bundle (data/raw/ibmaml/HI-Small_Trans.csv)",
+  "temporal_range": [
+    "2022-09-01 00:00",
+    "2022-09-18 16:18"
+  ],
+  "top20_degrees": [
+    169756,
+    103671,
+    20647,
+    18771,
+    17381,
+    16926,
+    16540,
+    14277,
+    13854,
+    13101,
+    12420,
+    11083,
+    9519,
+    8337,
+    6468,
+    308,
+    283,
+    282,
+    281,
+    274
+  ],
+  "typology_ground_truth": "data/processed/ibm_typologies.parquet \u2014 370 labelled attempt blocks (scripts/build_ibm_typologies.py)"
+}
