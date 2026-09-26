@@ -110,6 +110,24 @@ Ordered by damage if any of it survives into a claimed-complete phase.
    `ingest/paysim.py`; repo-root discovery in three places; deterministic JSON
    serialisation in three places; webhook signature verification in both
    `adapters/signing.py` and `apps/api/echo.py`.
+11. **`apps/api` described a guard that did not exist.** Both
+    `schemas/common.py:13` and `routers/common.py:6` state that "a doctrine test walks
+    the OpenAPI document and fails if any 2xx schema grows a `success` or `error`
+    property". No such test existed anywhere in the repo. It now exists at
+    `tests/integration/test_envelope_doctrine.py`: three checks pass, and the fourth
+    (walking the real OpenAPI document's 2xx responses) **fails on purpose** until
+    `apps/api/main.py` exposes the app — a skipped check is how a doctrine ends up
+    existing only in a docstring.
+    Note for whoever reads it next: `error` is banned at the *envelope top level* but
+    allowed as a domain field (`RunDetail.error`, `JobStatus.error` are facts about a
+    run, not a second status channel); a scanner that forbids the word outright would
+    force sensible fields to be renamed.
+12. **Repo-wide `make lint` is red: 208 ruff errors** concentrated in the packages
+    live agents are still writing, plus `make verify`'s P1a IBM gate. Architecture
+    contracts are green (import-linter: 4 kept, 0 broken over 197 files / 925
+    dependencies). Whole-suite status as measured: **405 passed, 6 failed**, all six
+    inside `tests/contracts/test_p1b_canonical_ingest.py` — the file the P1b agent is
+    editing right now, so that is in-flight work rather than decay.
 10. **Audit digest is delimiter-ambiguous.** `audit/chain.py::compute_row_hash`
     concatenates `HASH_VERSION | seq | occurred_at | actor_id | subject | action |
     canonical_json(payload) | prev_hash` with `"|"`. The payload's canonical JSON can
@@ -151,6 +169,15 @@ not on this list is *not* verified, regardless of what a package's own tests cla
 | IBM cycle reality vs R4 | `uv run python scripts/measure_ibm_cycles.py` | **0 found** under §9's definition → DEV-015 |
 | Tree syntax after interrupted agents | `py_compile` over every `.py` | clean |
 | `any` / unbuilt-stage gate | `uv run pytest -q tests/unit/test_anti_rubbish.py` | 3 passed |
+| Golden fixture self-check, no rule code | `uv run pytest -q tests/golden` | **27 passed**; two builds byte-identical (`49f6c3bd…`) |
+| P0 + P1a gates after the registry landed | `uv run pytest -q tests/unit/test_p0_toolchain.py tests/unit/test_p0_design_system.py tests/unit/test_p1a_sources.py tests/unit/test_anti_rubbish.py` | **121 passed** |
+| Feature registry declares what the plan asks | inspect `config/features.yaml` via the registry | 75 model features + 21 intermediates (target 60–75 met); longest window 30 d == `max_lookback_days` == embargo |
+
+### Commits on `main` so far
+`9d1a313` P3a graph · `433bc24` P5 quant · `3489755` P3b golden fixture ·
+`42e5968` P1/P2 evidence + gate tooling. Each was staged only after its own tests
+were run in the same session; `config/` files still under edit by live agents were
+deliberately left out of those commits.
 
 Still unverified and pending: P1b's 14 named contract tests (`tests/contracts/` is
 being written), `make ingest` end to end, P2's leakage gate, P3b's rule-vs-fixture
