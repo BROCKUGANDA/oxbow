@@ -321,6 +321,27 @@ Ordered by damage if any of it survives into a claimed-complete phase.
       all 8 failures in `tests/integration/test_p7_api.py` and item 15 the stated cause.
       `ruff check .` is at 45 errors, down from 85; the `F821` class is now zero.
 
+16. **P4's current blocker is a native fault inside OSQP's algebra probe, not the
+    bridge.** `uv run oxbow score --max-events 20000` now gets *past* features and dies
+    with `Segmentation fault` (exit 139, reproduced on an idle machine) while the
+    scorecard fit imports the solver stack; the deepest Python frames are
+    `osqp/interface.py:33 algebra_available` -> `:48 default_algebra` ->
+    `:59 default_algebra_module`, i.e. the import of `osqp.ext_builtin`. Ruled out by
+    measurement, not assumption: `import optbinning` alone, `lightgbm+numpy+optbinning`,
+    `osqp` alone, `osqp.ext_builtin` alone, the heavy stack then osqp, and osqp first
+    then the heavy stack -- all exit 0. So it is not import order and not a missing
+    binary; it needs the live stage context (plausibly numba/LightGBM's OpenMP runtime
+    already resident when the extension loads). A temporary bypass exists -- pointing
+    `OSQP_ALGEBRA_BACKEND` at a nonexistent key makes cvxpy skip OSQP with a
+    `KeyError` and the process survives to the next, legitimate refusal -- but that is
+    disabling a solver to dodge a crash, not a fix, and it is recorded as such rather
+    than shipped.
+    The stage's next blocker, seen once OSQP is skipped, is real and correct behaviour on
+    a small slice: `REFUSED (fold plan): the embargo puts the training cutoff ...`,
+    because a 30-day embargo against a 5k-row slice leaves no training window. P4 and
+    P6 therefore need a genuine full-corpus run, which is minutes of compute rather than
+    more diagnosis.
+
 ## Verification ledger (run by the orchestrator, not reported by agents)
 
 §16 requires a gate to be run in-session with observed output, so this is the list of
