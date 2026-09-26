@@ -28,6 +28,44 @@ paysim:
     modulus_us: 86_400_000_000  # spread within the step
     salt: "oxbow-paysim-step-v1"
 
+# --- IBM-AML step expansion (P1b) ----------------------------------------
+# IBM-AML's `stepFrom`/`stepTo` are the generator's own day counters: step 0 is
+# the simulator's internal t=0 and has no calendar meaning. Expanding them to an
+# instant therefore needs a fixed epoch, exactly like PaySim's `step`.
+#
+# EPOCH CHOSEN: 2019-01-01T00:00:00Z, for four reasons.
+#  1. It is DISJOINT from PaySim's 2014 epoch, so no canonical instant can be
+#     attributed to the wrong corpus by timestamp range alone. DEV-004 put both
+#     corpora in one table precisely because ids collide; timestamps must not.
+#  2. It is the year this corpus was published, which makes the synthetic origin
+#     obvious to anyone reading a derived date: nobody mistakes 2019-03-11 for an
+#     observed transaction date on data generated in 2019.
+#  3. Every derived instant is comfortably in the past relative to this build, so
+#     the `future_timestamp_tolerance_hours` guard below stays a real guard
+#     instead of rejecting a corpus whose epoch happens to sit ahead of now().
+#  4. Stepping forward from a year start keeps the documented ~365-step range
+#     inside one calendar year, which is what walk-forward folds (P6) and the
+#     30-day embargo need to see a plausible window rather than a compressed one.
+#
+# UNVERIFIED AGAINST REAL BYTES as this is written: data/raw/ibmaml/ holds only a
+# partial archive. On arrival, `scripts/download_data.py --verify-only` re-confirms
+# the header and the hash, and the true step range must be read off the real file;
+# if it runs past 365 the derived dates extend, still deterministically.
+ibmaml:
+  epoch_utc: "2019-01-01T00:00:00Z"
+  step_hours: 24
+  intra_step_offset:
+    method: hash_of_txn_id
+    # The modulus is the transaction's OWN stepFrom..stepTo window rather than a
+    # constant, so an event can never be placed after its own window closes. A
+    # same-day transaction therefore gets exactly one day (86_400_000_000 us),
+    # which is PaySim's modulus above: one rule, two corpora.
+    modulus: transaction_span
+    salt: "oxbow-ibmaml-step-v1"
+  # A window wider than this means the counters are not the documented day index,
+  # and the row is quarantined with `txn_span_exceeds_cap` for a human to read.
+  max_txn_span_days: 7
+
 # --- rows / corruption guards (03 B) -------------------------------------
 ingest:
   # A zero-row batch is an error, not a success: a clean run that scored nothing
@@ -40,6 +78,24 @@ ingest:
   future_timestamp_tolerance_hours: 6
   # 12 hex characters is 48 bits. Asserted unique per run; widen if it ever fails.
   account_key_prefix_len: 12
+  # Rows per canonicalisation batch. Deterministic slicing: the batch id is derived
+  # from the batch's own content, so a batch boundary that moved would move every
+  # batch id and make the two runs of `make verify-determinism` incomparable.
+  batch_rows: 100_000
+  # The scope of `oxbow ingest` when `--source` is not given.
+  #
+  # PaySim only, and the reason is measured rather than chosen: IBM-AML's declared
+  # raw contract (`contracts/raw_ibm_aml.py`) names fourteen columns belonging to a
+  # different IBM artefact, while `HI-Small_Trans.csv` on this host has eleven with
+  # `Account` repeated (DECISIONS DEV-013, STATE punch-list 1). A source whose
+  # contract does not match its bytes must be refused, not ingested and corrected
+  # downstream. `oxbow ingest --source ibmaml` therefore still runs the real path and
+  # fails loudly, and `--source all` reports PaySim green next to that refusal; the
+  # default scope is widened to both corpora in the same commit that corrects the
+  # contract, not before it.
+  default_sources:
+    - paysim
+
 
 # --- determinism ---------------------------------------------------------
 determinism:
@@ -78,6 +134,43 @@ graph:
   betweenness:
     # 500 pivots is the affordable approximation at this corpus size.
     pivots: 500
+  # --- cycle enumeration (P3a) ------------------------------------------
+  # A naive directed-cycle enumeration does not return slowly, it never
+  # returns: on a dense component the search is factorial. So the budget is
+  # not a performance knob, it is the thing that keeps the pipeline able to
+  # finish, and hitting it is a reported result (`cycle_search_truncated`)
+  # rather than a failure or a hang. `measure_graph.py` used the same 3..6
+  # length window and the same 0.6 floor as module constants; they live here
+  # now because 00 G forbids tunables in code.
+  cycles:
+    min_length: 3
+    max_length: 6
+    # Retention floor: last leg over first leg, as a ratio. Plan 4 pre-committed
+    # 0.6 before the number was known; it is not money and never multiplied
+    # into an amount.
+    value_retention_floor: 0.6
+    # Money may shrink along the loop but may not grow: a hop that forwards
+    # more than it received is funded from outside the loop, which is a
+    # different typology and not this evidence.
+    require_non_increasing: true
+    # A loop through a supernode is the whole economy, not a conspiracy, and it
+    # is also what makes the search explode. Rails are excluded by name.
+    ignore_rails: true
+    # A reversal is money going back the way it came, so it is not evidence of a
+    # loop that retained value. It stays a visible edge; it is not a cycle leg.
+    # Corpus-qualified vocabulary: IBM-AML's reversal label must be added here
+    # when that adapter lands, not guessed at in code (00 G).
+    excluded_txn_types:
+      - REVERSAL
+    # Per-component, so one dense cluster cannot starve the rest of the corpus.
+    max_visits_per_component: 200_000
+    max_cycles_reported: 5_000
+    timeout_seconds: 25
+
+# NOTE: there is deliberately no in-memory size knob here. `build_graph` compares
+# its event count against `sampling.interactive_txn_target` below, because the
+# interactive graph and the interactive subcorpus are one policy; a second cap
+# that can disagree with the first is a config bug waiting to happen.
 
 # --- exposure (spec 3.2) -------------------------------------------------
 # Exposure at risk E_i is the value still interceptable: funds that flow OUT of i
