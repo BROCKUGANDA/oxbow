@@ -194,8 +194,12 @@ def test_self_loop_excluded_from_cycles_and_degree_but_counted() -> None:
     assert graph.degree_of(ALICE) == 2
     assert graph.node_row(ALICE)["unique_counterparties"][0] == 2  # BOB and DAVE only
     assert ALICE not in graph.neighbours(ALICE)
-    # Retained as edges, and visible in the pair table as a self-pair.
-    assert graph.multigraph.number_of_edges(ALICE, ALICE) == 3
+    # Not traversal edges: the multigraph is what cycles, hops and degree are read
+    # from, so a self-transfer must be absent there to mean what the name of this
+    # test says. Visibility is the pair table's job, asserted next -- "kept in the
+    # record, excluded from detection" is a split across two structures, not a
+    # property of one.
+    assert graph.multigraph.number_of_edges(ALICE, ALICE) == 0
     assert graph.pairs.filter(pl.col("is_self_pair"))["edge_count"].to_list() == [3]
     # One cycle, and it is the four-node loop rather than anything built from a
     # self-transfer.

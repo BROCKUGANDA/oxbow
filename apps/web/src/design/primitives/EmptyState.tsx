@@ -90,11 +90,43 @@ export interface NoDisagreementState {
   onSetThreshold: (value: number) => void;
 }
 
+/**
+ * (e) no-cycles — the graph's own reason, and the one this product is judged on.
+ *
+ * A transaction graph can be full of accounts and edges and still contain no cycle.
+ * That is not "no data" and it is not a failure: it is the measured result for at least
+ * one of the two corpora (DEV-011 — PaySim, median counterparty degree 1.0, zero
+ * surviving time-respecting 3–6 cycles), and it is the result a time-respecting filter
+ * *ought* to produce on a corpus of one-hop transfers. Saying "no cycles found" would
+ * throw the finding away and read like a broken page, so this state names the filter
+ * that emptied it and what would have to change for anything to survive it.
+ *
+ * Every number here is a field the subgraph response already carries. The component is
+ * not given, and must not be given, a "cycles found before the filter" figure: the
+ * server does not publish one, and inventing one on a screen whose whole claim is
+ * traceability would be the exact failure DESIGN.md §7 exists to prevent.
+ */
+export interface NoCyclesState {
+  kind: 'no-cycles';
+  accountsDrawn: number;
+  edgesDrawn: number;
+  /** The window the filter ran over, already zone-formatted by the caller. */
+  windowFrom: string;
+  windowTo: string;
+  /** Hops actually traversed, and the server's ceiling for this route. */
+  currentHops: number;
+  maxHops: number;
+  onWidenHops: (hops: number) => void;
+  /** Drop the cycle overlay and draw the whole subgraph instead. */
+  onShowAllEdges: () => void;
+}
+
 export type EmptyStateProps =
   | FiltersExcludedState
   | NoRunState
   | WindowEmptyState
-  | NoDisagreementState;
+  | NoDisagreementState
+  | NoCyclesState;
 
 export interface EmptyStateFrameProps {
   children: ReactNode;
@@ -298,6 +330,8 @@ export function EmptyState(props: EmptyStateProps): ReactElement {
       return <WindowEmpty {...props} />;
     case 'no-disagreement':
       return <NoDisagreement {...props} />;
+    case 'no-cycles':
+      return <NoCycles {...props} />;
   }
 }
 
@@ -530,3 +564,60 @@ function NoDisagreement(props: NoDisagreementState): ReactElement {
 }
 
 export default EmptyState;
+
+/* (e) no time-respecting cycles survived ----------------------------------- */
+
+function NoCycles(props: NoCyclesState): ReactElement {
+  const atCeiling = props.currentHops >= props.maxHops;
+  return (
+    <EmptyStateFrame>
+      <Glyph name="cycle" title="No cycles" />
+      <div style={{ marginTop: 10 }}>
+        <Headline>No cycle survived the filters over this window</Headline>
+        <Body>
+          The explorer drew <Count value={props.accountsDrawn} /> accounts and{' '}
+          <Count value={props.edgesDrawn} /> edges between {props.windowFrom} and {props.windowTo}, and every
+          candidate loop was rejected for being out of order in time or for losing value along the way. That is a
+          measurement of this corpus, not a query that failed: a cycle here has to return to its origin, hand
+          money forward at each hop, and do both inside the window.
+        </Body>
+      </div>
+
+      <div
+        style={{
+          marginTop: 12,
+          padding: '8px 10px',
+          border: '1px solid var(--color-hairline)',
+          borderRadius: 'var(--radius-control)',
+          background: 'var(--color-canvas-sunken)',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          gap: 12,
+        }}
+      >
+        <span style={{ fontSize: '0.75rem', color: 'var(--color-ink-muted)', fontFamily: 'var(--font-sans)' }}>
+          Traversed <span className="u-tabular" style={{ color: 'var(--color-ink)', fontWeight: 600 }}>{props.currentHops}</span>{' '}
+          of up to <span className="u-tabular" style={{ color: 'var(--color-ink)', fontWeight: 600 }}>{props.maxHops}</span> hops
+        </span>
+        <span style={{ fontSize: '0.75rem', color: 'var(--color-ink-faint)', fontFamily: 'var(--font-sans)' }}>
+          Wider windows are set on the query, not here
+        </span>
+      </div>
+
+      <Row>
+        {atCeiling ? null : (
+          <Action onClick={() => props.onWidenHops(props.maxHops)} emphasis>
+            Re-run at {props.maxHops} hops
+          </Action>
+        )}
+        <Action onClick={props.onShowAllEdges}>Show the subgraph without the overlay</Action>
+      </Row>
+
+      <Hint>
+        Dropping the overlay shows the topology that was actually found. A two-hop round trip between one account
+        and itself is excluded on purpose: it is a reinvestment, not a network.
+      </Hint>
+    </EmptyStateFrame>
+  );
+}

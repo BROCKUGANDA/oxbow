@@ -25,6 +25,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 from collections.abc import Iterable, Sequence
 from pathlib import Path
 
@@ -46,7 +47,23 @@ def sha256_of(path: Path) -> str:
     return digest.hexdigest()
 
 
-def digests(root: Path) -> dict[str, str]:
+def _run_scoped_key(root: Path, path: Path) -> str:
+    """A relative path with any ULID directory segment replaced by ``<run_id>``.
+
+    Ingest lands content-addressed batch files under a source directory, so two runs
+    collide on one key. The later stages write ``out/<stage>/<run_id>/...``, where the
+    run id *is* a path segment: keyed literally, run 1's artifacts would all be
+    "present in run 1, absent in run 2" and the comparison would measure nothing while
+    reporting a difference. Folding the segment makes the two runs comparable by
+    content, which is the claim actually being tested.
+    """
+    from oxbow.identity import is_ulid
+
+    parts = [segment if not is_ulid(segment) else "<run_id>" for segment in path.relative_to(root).parts]
+    return "/".join(parts)
+
+
+def digests(root: Path, *, run_scoped_paths: bool = False) -> dict[str, str]:
     """Map every non-run-scoped file under ``root`` to its digest.
 
     Keys are relative paths, so a comparison names the offending file rather than
@@ -58,6 +75,9 @@ def digests(root: Path) -> dict[str, str]:
             continue
         relative = path.relative_to(root).as_posix()
         if any(marker in relative for marker in RUN_SCOPED_MARKERS):
+            continue
+        if run_scoped_paths:
+            found[_run_scoped_key(root, path)] = sha256_of(path)
             continue
         found[relative] = sha256_of(path)
     return found
@@ -76,15 +96,39 @@ def run_stage(command: Sequence[str], env: dict[str, str]) -> None:
         raise SystemExit(f"stage exited {proc.returncode}: {' '.join(command)}")
 
 
-def snapshot_to(dest: Path) -> dict[str, str]:
-    """Copy the current interim artifacts into ``dest`` and digest them."""
-    if not INTERIM.is_dir():
+def _any_recent(copied: Path, source_root: Path, since: float) -> bool:
+    """True when at least one compared file was written after ``since``.
+
+    mtimes are read from the source tree rather than the copy, because
+    ``copytree`` resets them.
+    """
+    for path in copied.rglob("*"):
+        if not path.is_file():
+            continue
+        original = source_root / path.relative_to(copied)
+        if original.is_file() and original.stat().st_mtime >= since:
+            return True
+    return False
+
+
+def snapshot_to(dest: Path, root: Path) -> dict[str, str]:
+    """Copy the stage's own artifacts into ``dest`` and digest them.
+
+    ``root`` is the tree the stage under test writes into. Passing the wrong one is
+    the failure mode this function exists to avoid: an earlier version compared
+    ``data/interim`` whatever the command was, so a graph run was "verified" against
+    ingest artifacts it never touched and passed without measuring anything.
+    """
+    if not root.is_dir():
         raise SystemExit(
-            f"no artifacts under {INTERIM}: run the stage first "
-            "(`make ingest`) before asking for a determinism check"
+            f"no artifacts under {root}: run the stage first, or pass --artifacts for "
+            "the tree it actually writes"
         )
-    shutil.copytree(INTERIM, dest, dirs_exist_ok=True)
-    return digests(dest)
+    shutil.copytree(root, dest, dirs_exist_ok=True)
+    table = digests(dest, run_scoped_paths=root != INTERIM)
+    if not table:
+        raise SystemExit(f"{root} holds no comparable artifacts for this command")
+    return table
 
 
 def compare(first: dict[str, str], second: dict[str, str]) -> list[str]:
@@ -117,6 +161,16 @@ def main(argv: Sequence[str] | None = None) -> int:
         help="The stage to re-run, as a shell-split string. Two runs are compared.",
     )
     parser.add_argument(
+        "--artifacts",
+        default=None,
+        help=(
+            "Artifact root the stage writes into, relative to the repo. Defaults to "
+            "data/interim, which is where ingest lands; the graph, score and backtest "
+            "stages write out/<stage>/<run_id>/ instead, and comparing the wrong tree "
+            "is a pass that measures nothing."
+        ),
+    )
+    parser.add_argument(
         "--reuse",
         action="store_true",
         help="Compare the artifacts already on disk against a fresh second run "
@@ -142,18 +196,30 @@ def main(argv: Sequence[str] | None = None) -> int:
         ) from exc
     child_env = dict(os.environ, RUN_SALT=salt, PYTHONIOENCODING="utf-8")
 
+    target = REPO_ROOT / args.artifacts if args.artifacts else INTERIM
+    print(f"comparing artifacts under {target}")
     with tempfile.TemporaryDirectory(prefix="oxbow-determinism-") as tmp:
         root = Path(tmp)
         first: dict[str, str] = {}
         if not args.reuse:
             print(f"$ {' '.join(command)}  (run 1)")
+            written_after = time.time() - 5
             run_stage(command, child_env)
-            first = snapshot_to(root / "run1")
+            first = snapshot_to(root / "run1", target)
+            # The tripwire: at least one compared file has to be one this run wrote.
+            # Without it, a stage that writes nothing elsewhere still "passes" by
+            # replaying a previous run's bytes, which is the exact empty claim a
+            # reproduction gate must not be able to make.
+            if not _any_recent(root / "run1", target, written_after):
+                raise SystemExit(
+                    f"neither run wrote anything under {target}: the comparison would "
+                    "have replayed artifacts this command did not produce"
+                )
         else:
-            first = digests(INTERIM)
+            first = digests(target, run_scoped_paths=target != INTERIM)
         print(f"$ {' '.join(command)}  (run 2)")
         run_stage(command, child_env)
-        second = snapshot_to(root / "run2")
+        second = snapshot_to(root / "run2", target)
 
     if not first:
         raise SystemExit("run 1 produced no comparable artifacts; nothing was verified")
