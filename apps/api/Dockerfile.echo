@@ -7,6 +7,12 @@
 # It is a real HTTP service that does real HMAC verification. It is not a
 # stub: if the signature is wrong it says so, and if it is right it records the
 # delivery so a replay can be detected.
+#
+# BUILD CONTEXT: the repository root, not apps/api. echo.py imports the signature
+# scheme from packages/pipeline/oxbow/adapters/signing.py, so that file has to be
+# reachable from the context. The `api` and `worker` services already build from the
+# root (`context: .` + `dockerfile: apps/api/Dockerfile`), so this is the house
+# convention rather than a special case invented here.
 
 FROM python:3.12-slim
 
@@ -20,7 +26,14 @@ RUN pip install --no-cache-dir \
     "uvicorn[standard]==0.34.0" \
     "httpx==0.28.1"
 
-COPY echo.py /srv/echo.py
+COPY apps/api/echo.py /srv/echo.py
+
+# One module, not the pipeline. signing.py imports only hashlib/hmac/time/typing, so
+# the echo image gets the single source of truth for the signature scheme without
+# pulling polars, lightgbm and the rest of the quantitative stack into it. The
+# oxbow/ and oxbow/adapters/ levels are PEP 420 namespace packages inside this image
+# -- no __init__.py is copied, so none of the real package's imports ever run.
+COPY packages/pipeline/oxbow/adapters/signing.py /srv/oxbow/adapters/signing.py
 
 # Local-only demo default. Compose overrides it from .env, which is never
 # committed (02 F: secrets from the environment, .env.example committed).

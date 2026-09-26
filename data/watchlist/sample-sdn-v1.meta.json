@@ -1,0 +1,12 @@
+{
+  "list_name": "oxbow-sdn-sample",
+  "version": "v1",
+  "effective_at": "2026-09-26T00:00:00Z",
+  "record_count": 12,
+  "source": "built-in sample",
+  "is_real_sanctions_list": false,
+  "warning": "These are twelve fictional entries, chosen so the offline matcher has something to match. This is NOT the OFAC SDN list and is not derived from it; no screening result against it says anything about any real person or entity. Point OXBOW_WATCHLIST_PATH at a published SDN.CSV download to screen for real.",
+  "replacement_procedure": "Download SDN.CSV from the publishing authority's site out of band, place it at data/watchlist/sdn.csv, set OXBOW_WATCHLIST_PATH to that file and restart the API and worker. The version reported on every hit is derived from the file's record count and mtime, so a stale snapshot is visible in the response rather than assumed.",
+  "columns": ["name", "alt_names", "country", "dob", "remarks"],
+  "license": "unencumbered sample data authored for this repository"
+}

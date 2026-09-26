@@ -1,27 +1,34 @@
-"""Webhook echo receiver: verifies OX BOW's outbound signature, for real.
+"""Webhook echo receiver: verifies OXBOW's outbound signature, for real.
 
 02 H: the point of this service is that signing, retries, idempotency and
 dead-lettering are exercised end to end against a real HTTP endpoint rather than
 a mock inside a test file. A mock proves your own arithmetic; a real receiver
-proves the wire format.
+proves the wire format -- that the header survives an actual HTTP round trip, that
+the body it was computed over is byte-for-byte the body that arrives, and that a
+retry with a fresh idempotency key is observable.
 
-02 E, the signing scheme:
+The scheme, stated once in ``oxbow.adapters.signing`` and not restated here:
 
     X-OXBOW-Signature: t=<unix>,v1=<hex>
 
 over ``t + "." + raw_body`` with HMAC-SHA256, a 300-second replay window and a
-constant-time compare. The receiver recomputes the HMAC, compares in constant
-time, rejects anything outside the replay window, and records the delivery so a
-duplicate is detectable downstream.
+constant-time compare.
 
-It records deliveries; it never acts on them. OX BOW's payloads are advisory and
+**This endpoint does not implement verification of its own.** It used to, and the
+duplicate drifted into a second definition of the header grammar, the replay window
+and the compare. The single implementation is :func:`oxbow.adapters.signing.verify_signature`
+and this fixture calls it, so the sender and the receiver cannot disagree by
+construction. What is genuinely cross-checked here is the *transport*, not the
+crypto, and that is the honest scope of the guarantee: a shared library cannot
+catch a body that changed in flight, and that is exactly what this does.
+
+It records deliveries; it never acts on them. OXBOW's payloads are advisory and
 every one of them says so in the body.
 """
 
 from __future__ import annotations
 
 import hashlib
-import hmac
 import json
 import os
 import time
@@ -29,6 +36,17 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, Header, Request, Response
+
+from oxbow.adapters.signing import (
+    IDEMPOTENCY_HEADER,
+    REPLAY_WINDOW_SECONDS,
+    SIGNATURE_HEADER,
+    MalformedSignatureError,
+    SignatureExpiredError,
+    SignatureMismatchError,
+    parse_signature_header,
+    verify_signature,
+)
 
 app = FastAPI(
     title="OXBOW webhook echo",
@@ -42,34 +60,14 @@ app = FastAPI(
 SIGNING_SECRET: str = os.environ.get("SIGNING_SECRET", "oxbow_local_secret")
 RECORD_PATH: Path = Path(os.environ.get("RECORD_PATH", "/data/deliveries.jsonl"))
 
-# 02 E: 300-second replay window. A legitimate delivery rejected for clock skew,
-# or a replay accepted because the window is too wide, are both real failures.
-REPLAY_WINDOW_SECONDS: int = 300
 
-SIGNATURE_HEADER = "X-OXBOW-Signature"
-IDEMPOTENCY_HEADER = "Idempotency-Key"
-
-
-def compute_signature(timestamp: str, raw_body: bytes, secret: str) -> str:
-    """Recompute the expected v1 hex digest for a delivery."""
-    signed_payload = timestamp.encode() + b"." + raw_body
-    return hmac.new(secret.encode(), signed_payload, hashlib.sha256).hexdigest()
-
-
-def parse_signature_header(header_value: str) -> tuple[str, str]:
-    """Split ``t=<unix>,v1=<hex>`` into its two parts.
-
-    Raises ValueError on a malformed header rather than guessing which part is
-    which: a signature check that parses ambiguously is not a signature check.
-    """
-    timestamp_part, _, digest_part = header_value.partition(",")
-    if not _ or not digest_part:
-        raise ValueError(f"malformed {SIGNATURE_HEADER}: expected 't=<unix>,v1=<hex>'")
-    timestamp = timestamp_part.removeprefix("t=").strip()
-    digest = digest_part.removeprefix("v1=").strip()
-    if not timestamp or not digest:
-        raise ValueError(f"malformed {SIGNATURE_HEADER}: empty timestamp or digest")
-    return timestamp, digest
+def _json_response(payload: dict[str, Any], status_code: int) -> Response:
+    """One shape for every reply, so a rejection cannot differ by accident."""
+    return Response(
+        content=json.dumps(payload, sort_keys=True, separators=(",", ":")),
+        status_code=status_code,
+        media_type="application/json",
+    )
 
 
 def record_delivery(entry: dict[str, Any]) -> None:
@@ -96,62 +94,48 @@ async def webhook(
 
     Returns 401 on a bad or replayed signature, 400 on a malformed one, and 200
     only when the signature verified in constant time inside the replay window.
+    Every one of those decisions is ``oxbow.adapters.signing``'s; this function only
+    maps the three failure kinds onto the HTTP status each one deserves, and records
+    what a verified delivery looked like.
     """
     raw_body = await request.body()
 
     if x_oxbow_signature is None:
-        return Response(
-            content=json.dumps({"detail": f"missing {SIGNATURE_HEADER}"}),
-            status_code=401,
-            media_type="application/json",
-        )
+        return _json_response({"detail": f"missing {SIGNATURE_HEADER}"}, 401)
 
-    try:
-        timestamp, provided_digest = parse_signature_header(x_oxbow_signature)
-    except ValueError as exc:
-        return Response(
-            content=json.dumps({"detail": str(exc)}),
-            status_code=400,
-            media_type="application/json",
-        )
-
-    try:
-        sent_at = int(timestamp)
-    except ValueError:
-        return Response(
-            content=json.dumps({"detail": f"non-integer timestamp: {timestamp!r}"}),
-            status_code=400,
-            media_type="application/json",
-        )
-
+    # One clock for the whole request: the same `now` gates the replay window and
+    # stamps the delivery record, so the two can never disagree about when it landed.
     now = int(time.time())
-    if abs(now - sent_at) > REPLAY_WINDOW_SECONDS:
+    try:
+        verify_signature(x_oxbow_signature, raw_body, SIGNING_SECRET, now=now)
+    except MalformedSignatureError as exc:
+        # A client bug rather than an attack, and reported as one.
+        return _json_response({"detail": str(exc)}, 400)
+    except SignatureExpiredError as exc:
         # Distinct from a bad signature: this is clock skew or a replay, and the
-        # operator needs to tell those two apart (03 J).
-        return Response(
-            content=json.dumps(
-                {
-                    "detail": "signature outside the replay window",
-                    "error_type": "clock_skew_or_replay",
-                    "skew_seconds": now - sent_at,
-                    "window_seconds": REPLAY_WINDOW_SECONDS,
-                }
-            ),
-            status_code=401,
-            media_type="application/json",
+        # operator needs to tell those two apart (03 J). The header parsed -- it was
+        # the window that refused it -- so the skew is still reportable.
+        try:
+            stamp, _ = parse_signature_header(x_oxbow_signature)
+            skew_seconds: int | None = now - int(stamp)
+        except (MalformedSignatureError, ValueError):
+            skew_seconds = None
+        return _json_response(
+            {
+                "detail": str(exc),
+                "error_type": "clock_skew_or_replay",
+                "skew_seconds": skew_seconds,
+                "window_seconds": REPLAY_WINDOW_SECONDS,
+            },
+            401,
         )
-
-    expected_digest = compute_signature(timestamp, raw_body, SIGNING_SECRET)
-    if not hmac.compare_digest(expected_digest, provided_digest):
-        return Response(
-            content=json.dumps(
-                {
-                    "detail": "signature mismatch",
-                    "error_type": "bad_signature",
-                }
-            ),
-            status_code=401,
-            media_type="application/json",
+    except SignatureMismatchError:
+        return _json_response(
+            {
+                "detail": "signature mismatch",
+                "error_type": "bad_signature",
+            },
+            401,
         )
 
     try:
@@ -170,17 +154,14 @@ async def webhook(
         }
     )
 
-    return Response(
-        content=json.dumps(
-            {
-                "received": True,
-                "signature_verified": True,
-                "idempotency_key": idempotency_key,
-                "advisory_only": True,
-            }
-        ),
-        status_code=200,
-        media_type="application/json",
+    return _json_response(
+        {
+            "received": True,
+            "signature_verified": True,
+            "idempotency_key": idempotency_key,
+            "advisory_only": True,
+        },
+        200,
     )
 
 
