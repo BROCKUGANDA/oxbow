@@ -401,6 +401,22 @@ In order, each unblocking the next:
    `uv run oxbow pipeline --limit 20000` reaches backtest for the first time, which is
    the precondition for P6's numbers, MODEL_CARD/ECONOMICS_CARD being generated from
    measured results rather than placeholders, and a landed case bundle.
+2a. **The seam is smaller than the refusal says — three verified findings.** Every input
+   the composition needs exists and is named: `load_split_config` and
+   `build_walk_forward` (`backtest/splits.py:392` and `:409`, the latter already
+   refusing `shuffle: true` and `purge: false`), `fold_providers`
+   (`features/fold_providers.py:438`, returning the graph and rule providers as a pair
+   so each fold's graph is built once), and `build_account_frame`
+   (`features/bridge.py:271`). Second, `02 §B seam 3` is **already satisfied** on this
+   path — `test_p2_grain_bridge.py::test_the_bridge_output_satisfies_the_scoring_contract`
+   asserts `training.feature_spec_hash == registry.spec_hash == bridged.spec_hash`, so
+   the stale-spec guard passes and that clause of the refusal text is out of date.
+   Third, and the reason to do this as two commits: **nothing under `tests/` is named
+   for P4** — no file matches p4, scorecard, model, calibration or SHAP — so those two
+   P2 tests are the only contact the scoring layer has ever had, and the model fitting
+   has never been executed from a test or from the CLI. Read `oxbow.models.run` before
+   assuming it has one entrypoint. Task 14 carries the chain with line numbers.
+
 3. **Reconcile DEV-015's four cycle-test disagreements** (item 13) and the
    `amount_increases_along_loop` aggregate, now that self-edges are settled.
 4. **`make demo`**: `scripts/demo_seed.py` does not exist (item 11). It needs a landed
