@@ -97,8 +97,12 @@ PHASES: tuple[Phase, ...] = (
     ),
     Phase(
         name="P1b",
-        done=True,
-        pending_reason="ingest layer in build: canonical v1, adapters, quarantine, writers",
+        done=False,
+        pending_reason=(
+            "the ingest layer passes all three gates below; the phase is held open on "
+            "its dataset-card deliverable, whose authored measured figures a `make eval` "
+            "run overwrote (STATE.md punch list 2a)"
+        ),
         gates=(
             Gate(
                 "Pandera contracts, quarantine and determinism",
@@ -107,6 +111,14 @@ PHASES: tuple[Phase, ...] = (
             Gate(
                 "`make ingest` completes with zero silent coercions",
                 ("uv", "run", "oxbow", "ingest", "--limit", "200000"),
+            ),
+            # The default scope above resolves to PaySim only, so Module B's corpus had
+            # a passing phase gate without ever being read by one. 200,000 rows is the
+            # smallest slice that reaches the typology annotations (DEV-014: 0.063% of
+            # the corpus), which is what exercises the annotation join.
+            Gate(
+                "IBM-AML canonicalises through its adapter, annotation join included",
+                ("uv", "run", "oxbow", "ingest", "--source", "ibmaml", "--limit", "200000"),
             ),
         ),
     ),
