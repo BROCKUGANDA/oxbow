@@ -196,7 +196,7 @@ services:
     environment:
       DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-oxbow}:${POSTGRES_PASSWORD:-oxbow_local_only}@postgres:5432/${POSTGRES_DB:-oxbow}
       REDIS_URL: redis://redis:6379/0
-      OXBOW_RUN_SALT: ${RUN_SALT:?RUN_SALT is required and must come from the environment, never the repo}
+      RUN_SALT: ${RUN_SALT:?RUN_SALT is required and must come from the environment, never the repo}
       OXBOW_SEED: ${OXBOW_SEED:-1337}
     ports: ["8000:8000"]
 
@@ -213,7 +213,7 @@ services:
     environment:
       DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-oxbow}:${POSTGRES_PASSWORD:-oxbow_local_only}@postgres:5432/${POSTGRES_DB:-oxbow}
       REDIS_URL: redis://redis:6379/0
-      OXBOW_RUN_SALT: ${RUN_SALT:?RUN_SALT is required}
+      RUN_SALT: ${RUN_SALT:?RUN_SALT is required}
       OXBOW_SEED: ${OXBOW_SEED:-1337}
 
   web:
@@ -224,7 +224,7 @@ services:
     profiles: ["full"]
     depends_on: [api]
     environment:
-      NEXT_PUBLIC_API_BASE: http://localhost:8000
+      NEXT_PUBLIC_API_BASE_URL: http://localhost:8000
     ports: ["3000:3000"]
 
 volumes:

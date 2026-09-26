@@ -129,3 +129,39 @@ def test_the_gate_itself_bites() -> None:
     )
     assert missing == ["OXBOW_NOT_DOCUMENTED_ANYWHERE"], missing
     assert "RUN_SALT" in declared, "RUN_SALT must stay declared or the check above lies"
+
+
+# Names docker-compose injects into the API/worker/web containers must be the names
+# the code resolves. This was wrong twice in one session -- OXBOW_RUN_SALT vs
+# resolve_run_salt(), NEXT_PUBLIC_API_BASE vs transport.ts -- and the second time it
+# silently regressed after being fixed, which is why it is a test and not a note.
+COMPOSE_CONSUMES: dict[str, str] = {
+    "RUN_SALT": "oxbow.config.resolve_run_salt",
+    "DATABASE_URL": "apps/api/deps.py and scripts/verify_audit.py",
+    "REDIS_URL": "apps/api/worker.py",
+    "SIGNING_SECRET": "apps/api/echo.py",
+    "NEXT_PUBLIC_API_BASE_URL": "apps/web/src/lib/api/transport.ts",
+    "OXBOW_SEED": "config seed, read by the pipeline",
+}
+RETIRED_COMPOSE_NAMES: dict[str, str] = {
+    "OXBOW_RUN_SALT": "RUN_SALT",
+    "NEXT_PUBLIC_API_BASE": "NEXT_PUBLIC_API_BASE_URL",
+}
+
+
+def test_compose_injects_the_names_the_code_reads() -> None:
+    text = (REPO_ROOT / "docker-compose.yml").read_text(encoding="utf-8")
+    injected = {
+        match.group(1)
+        for match in re.finditer(r"^ {6}([A-Z][A-Z0-9_]{2,}):", text, re.MULTILINE)
+    }
+    for name, reader in COMPOSE_CONSUMES.items():
+        assert name in injected, (
+            f"{reader} reads {name}, but no compose service injects it -- the "
+            "container would start with a missing dependency and find out at runtime"
+        )
+    for stale, replacement in RETIRED_COMPOSE_NAMES.items():
+        assert stale not in injected, (
+            f"compose still injects {stale}; the code reads {replacement}. This exact "
+            "mismatch was fixed once and reverted, so it is now a test"
+        )
