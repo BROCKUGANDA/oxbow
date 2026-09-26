@@ -174,6 +174,16 @@ Ordered by damage if any of it survives into a claimed-complete phase.
    carries the anatomy. The fix is a configurable, documented currency/retention
    policy plus a distinct two-leg round-trip pattern — **not** a quiet default change.
 
+10. **`make packet` is blocked twice over, and neither block is the PDF library.**
+    Running `uv run oxbow packet` refuses correctly -- no case bundle exists under
+    `out/case_sink`, it says so, exits 1, and does not invent an exhibit. The reason
+    there is no bundle is that P7's decision path has never executed, so the packet
+    depends on the API being run, not on the renderer. Separately, WeasyPrint cannot
+    import on this host at all (`import weasyprint` fails for want of libgobject/Pango;
+    no GTK runtime is installed anywhere on the box, and none will be installed
+    silently). So even with a landed case the PDF step would fail here. Both must be
+    named in `LIMITATIONS.md`; only the first is this build's to fix.
+
 ## Verification ledger (run by the orchestrator, not reported by agents)
 
 §16 requires a gate to be run in-session with observed output, so this is the list of
@@ -182,7 +192,13 @@ not on this list is *not* verified, regardless of what a package's own tests cla
 
 | What | Command | Result |
 | --- | --- | --- |
-| Completed-phase gates as claimed | `uv run python scripts/verify.py` | 4 PASS / 1 FAIL — PaySim SHA-256 verified; the failure was IBM's declared file absent (since resolved) |
+| Completed-phase gates as claimed | `uv run python scripts/verify.py` | superseded by the per-phase rows below, run after DEV-016/017/018 landed |
+| P1a gates | `uv run python scripts/verify.py --phase P1a` | **2/2 PASS** — PaySim and all three IBM members match their recorded SHA-256 against bytes on disk (475 MB + 34 MB + 324 KB) |
+| P1b gates | `uv run python scripts/verify.py --phase P1b` | **3/3 PASS** — 28 contract tests; 200,000 canonical events with 0 quarantined and 0 silently coerced from PaySim **and** from IBM through its own adapter. Held pending on the dataset-card deliverable, not on ingest |
+| Byte determinism (01 §D, DEV-007) | `uv run python scripts/verify_determinism.py --command "uv run oxbow ingest --source ibmaml --limit 50000"` | **67 artifacts byte-identical across two runs**, including the IBM batch whose txn ids are hashed in a process pool. This gate had never actually executed before: it read RUN_SALT from the environment while the CLI resolves it from `.env`, so it refused in every shell where ingest works |
+| Packet refusal | `uv run oxbow packet` | **exits 1, names the missing case bundle, invents nothing** — see punch-list item 10 |
+| IBM/contract suites | `uv run pytest -q tests/contracts/test_p1b_canonical_ingest.py tests/unit/test_p1b_ibm_aml.py` | **137 passed** (then 28 of them inside the P1b gate) |
+| P4's reported mlflow blocker | `uv run python -c "import mlflow"` | **not a blocker** — imports fine at 2.19.0. An agent's MemoryError was host load under concurrent runs, and is recorded here so nobody re-escalates it |
 | Graph layer | `uv run pytest -q tests/unit/test_p3a_graph.py tests/unit/test_p3a_cycles.py` | **61 passed** |
 | Quant layer (P5) | `uv run pytest -q tests/unit -k p5` | **89 passed** (economics, allocate, exposure, frontier, monte carlo) |
 | Cycle enumerator is not broken | hand-built `A→B→C→D→A` through `build_graph` | exactly **1 cycle** found, not truncated |
