@@ -99,9 +99,10 @@ PHASES: tuple[Phase, ...] = (
         name="P1b",
         done=False,
         pending_reason=(
-            "the ingest layer passes all three gates below; the phase is held open on "
-            "its dataset-card deliverable, whose authored measured figures a `make eval` "
-            "run overwrote (STATE.md punch list 2a)"
+            "all three gates pass on the current tree; the phase stays open on one "
+            "outstanding observation -- `oxbow eval` must be seen to leave "
+            "data/DATASET_CARD.md untouched, not merely declared to (oxbow.dataset_card "
+            "now verifies it, punch list 2a)"
         ),
         gates=(
             Gate(
