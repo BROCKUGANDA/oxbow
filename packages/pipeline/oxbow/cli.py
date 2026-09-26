@@ -1087,19 +1087,22 @@ def run_graph_stage(
 
 SCORECARD_GAP: Final[str] = (
     "the model stack (WOE scorecard, LightGBM, Isolation Forest, calibration, fusion, SHAP) "
-    "is wired and runs: the txn->account grain bridge (oxbow.features.bridge), the two "
-    "fold-scoped providers (oxbow.features.fold_providers) and a real fold-fitting Scorer "
-    "(oxbow.models.scorer.WalkForwardScorer over oxbow.models.run.FoldModelRunner) are all "
-    "in place and reached from this stage. What can still refuse, and is reported by name "
-    "rather than softened, is a corpus whose timeline cannot hold the configured 30-day "
-    "embargo across five folds: the ONE splits module "
+    "is wired and reached from this stage: the txn->account grain bridge "
+    "(oxbow.features.bridge), the two fold-scoped providers (oxbow.features.fold_providers) "
+    "and a real fold-fitting Scorer (oxbow.models.scorer.WalkForwardScorer over "
+    "oxbow.models.run.FoldModelRunner). Two refusals are still reachable and are reported by "
+    "name rather than softened. First, a corpus whose timeline cannot hold the configured "
+    "30-day embargo across five folds: the ONE splits module "
     "(oxbow.backtest.splits.build_walk_forward) raises a SplitError then, because inventing "
-    "fold boundaries to make the arithmetic work is the leakage plan §8 forbids. On such a "
-    "corpus the score stage lands the rules and the feature matrix and refuses the model "
-    "step by that named cause (DEV-013); the multi-fold walk-forward demonstration runs on "
-    "`oxbow backtest --demo-fakes`, and a corpus long enough to support it runs the real "
-    "stack end to end. Calibration likewise refuses rather than emit a below-floor "
-    "probability (isotonic then Platt then refuse), and the row says so."
+    "fold boundaries to make the arithmetic work is the leakage plan §8 forbids -- measured "
+    "on a 20,000-row slice spanning 7 days, which is why the score stage reads a landed "
+    "window and not a head slice. Second, a fold whose fit population the scorecard cannot "
+    "defend, which the run reports as that fold being SKIPPED with the reason, and if no "
+    "fold survives it refuses the stage rather than scoring nothing and calling it a model. "
+    "Calibration likewise refuses rather than emit a below-floor probability (isotonic then "
+    "Platt then refuse), and the row says so. The multi-fold demonstration against synthetic "
+    "spec hashes runs on `oxbow backtest --demo-fakes` and is labelled provenance=fake_harness; "
+    "it is a harness check, never a result."
 )
 
 
@@ -1123,6 +1126,7 @@ def _score_models_and_land(
     slice_events: pl.DataFrame,
     feature_registry: object,
     configs: Mapping[str, object],
+    plan: object,
 ) -> int:
     """Bridge the matrix to account grain, fit the fold stack, and land the artifacts.
 
@@ -1135,11 +1139,8 @@ def _score_models_and_land(
     payload; the corpus frame written beside them is the ``oxbow backtest --corpus`` input.
     """
     from oxbow.backtest.fold_provider import SplitsFoldProvider
-    from oxbow.backtest.splits import SplitError, build_walk_forward
     from oxbow.features.bridge import build_account_frame
-    from oxbow.features.build import entity_event_frame
     from oxbow.features.fold_providers import fold_providers
-    from oxbow.features.kinds import ENTITY, EVENT_TS
     from oxbow.models.run import FoldModelRunner
     from oxbow.models.scorer import FixedFoldSlicesProvider, FrameRuleHitProvider
     from oxbow.quant.economics import load_economics
@@ -1157,18 +1158,6 @@ def _score_models_and_land(
     split_cfg = configs["split"]
     scoring_registry = configs["scoring_registry"]
     categorical = tuple(scorecard_cfg.binning.categorical_features)
-
-    timeline = entity_event_frame(slice_events).select([EVENT_TS, ENTITY]).sort([EVENT_TS, ENTITY])
-    try:
-        plan = build_walk_forward(timeline, registry=feature_registry, config_dir=ctx.config_dir)
-    except SplitError as exc:
-        ctx.echo(f"[score] REFUSED (fold plan): {exc}", err=True)
-        handle.mark_unavailable(
-            f"the corpus cannot support the configured walk-forward, so the model stack is "
-            f"not fitted: {exc}"
-        )
-        return EXIT_FAILED
-    ctx.echo(f"[score] split: {plan.as_report_line()}")
 
     graph, rules = fold_providers(slice_events, feature_registry, ctx.cfg)
     grain = build_account_frame(
@@ -1354,6 +1343,51 @@ def run_score_stage(
     events = _load_canonical_events(ctx, sources=_resolve_sources(ctx, source), with_sidecar=True)
     slice_events, slice_note = _slice_for_interactive_build(ctx, events, max_events=max_events)
     ctx.echo(f"[score] slice: {slice_note}")
+
+    # THE CHEAPEST CHECK IN THIS STAGE RUNS FIRST. Building the graph, firing the twelve
+    # rules and computing 75 features is 20-45 minutes of work; deciding whether the landed
+    # corpus can hold the configured embargo across five folds is arithmetic on two
+    # timestamps. Running the arithmetic last meant refusing a 5,000-row corpus (or one
+    # whose slice happened to land in the first days of the timeline) after paying the whole
+    # cost to find out -- three attempts this session, and `make verify` re-points the
+    # corpus the score stage reads, so it can recur at any time.
+    #
+    # The refusal itself is the correct behaviour and stays: inventing fold boundaries to
+    # make the arithmetic work is the leakage plan §8 forbids. What changed is only when it
+    # is discovered. The plan computed here is the same object the model stack would have
+    # computed, and is the one it now uses.
+    from oxbow.backtest.splits import SplitError, build_walk_forward
+    from oxbow.features.build import entity_event_frame
+    from oxbow.features.compute import registry_from_repo
+    from oxbow.features.kinds import ENTITY, EVENT_TS
+
+    feature_registry = registry_from_repo(str(ctx.root))
+    timeline = entity_event_frame(slice_events).select([EVENT_TS, ENTITY]).sort([EVENT_TS, ENTITY])
+    try:
+        split_plan = build_walk_forward(
+            timeline, registry=feature_registry, config_dir=ctx.config_dir
+        )
+    except SplitError as exc:
+        window = ", ".join(
+            str(value)
+            for value in (
+                timeline.get_column(EVENT_TS).min(),
+                timeline.get_column(EVENT_TS).max(),
+            )
+        )
+        ctx.echo(
+            f"[score] REFUSED (fold plan, before the graph or the features): {exc} | this "
+            f"slice spans {window}; widen --max-events, or read a longer corpus, rather than "
+            "shortening the embargo the features depend on",
+            err=True,
+        )
+        handle.mark_unavailable(
+            f"the corpus cannot support the configured walk-forward, so no stage of the "
+            f"model stack ran: {exc}"
+        )
+        return EXIT_FAILED
+    ctx.echo(f"[score] split: {split_plan.as_report_line()}")
+
     graph = build_graph(slice_events, ctx.cfg)
     ctx.echo(
         f"[score] graph for the rules layer: {_count(graph.stats.node_count)} nodes, "
@@ -1389,10 +1423,9 @@ def run_score_stage(
         assert_totals_match_rendered_rows,
         build_feature_table,
         graph_null_rate,
-        registry_from_repo,
     )
 
-    registry = registry_from_repo(str(ctx.root))
+    registry = feature_registry
     table = build_feature_table(slice_events, registry, cfg=ctx.cfg)
     assert_totals_match_rendered_rows(slice_events, table)
     report = table.report
@@ -1427,7 +1460,12 @@ def run_score_stage(
 
     configs = _load_p4_configs(ctx.root)
     return _score_models_and_land(
-        ctx, handle, slice_events=slice_events, feature_registry=registry, configs=configs
+        ctx,
+        handle,
+        slice_events=slice_events,
+        feature_registry=registry,
+        configs=configs,
+        plan=split_plan,
     )
 
 
