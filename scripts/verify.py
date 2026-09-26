@@ -164,8 +164,8 @@ PHASES: tuple[Phase, ...] = (
     ),
     Phase(
         name="P3b",
-        done=False,
-        pending_reason="82 rules and golden-matrix tests pass; 4 labelled-cycle tests disagree with DEV-015/018 (STATE item 13)",
+        done=True,
+        pending_reason="",
         gates=(
             Gate(
                 "golden fixture is self-consistent (hand-computed ground truth)",
