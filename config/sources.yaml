@@ -25,9 +25,13 @@ sources:
         # filename carries the simulator's run timestamp, so it is not the
         # tidy "PS_2014_01.csv" one might assume. P0 declared that guess and the
         # downloader failed closed on it, which is the behaviour we want.
-        # SHA-256 is verified at download and re-verified by `make data`. A
-        # mismatch fails closed; it never proceeds with the wrong bytes.
-        sha256: "RECORDED_AT_DOWNLOAD"
+        # SHA-256 of the extracted bytes, recorded 2026-09-26 from the file the
+        # pipeline actually reads (not the archive). Verified at download and
+        # re-verified by `make data`. A mismatch fails closed; it never proceeds
+        # with the wrong bytes.
+        #
+        # 493,534,783 bytes, 6,362,620 data rows (+1 header line).
+        sha256: "16910f90577b0d981bf8ff289714510bb89bc71bff7d3f220f024e287e4eea6b"
     license: "CC BY-SA 4.0"
     license_obligation: >-
       Share-alike. Any derivative dataset we publish, including the canonical

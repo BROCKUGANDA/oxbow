@@ -159,8 +159,10 @@ def extract_declared(
         for entry in declared_files:
             name = entry["name"]
             leaf = name.rsplit("/", 1)[-1]
-            member = name if name in members else next(
-                (n for n in members if n.rsplit("/", 1)[-1] == leaf), None
+            member = (
+                name
+                if name in members
+                else next((n for n in members if n.rsplit("/", 1)[-1] == leaf), None)
             )
             if member is None:
                 die(
@@ -230,8 +232,6 @@ def legacy_fetch_one() -> None:
     return
 
 
-
-
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -284,10 +284,21 @@ def main() -> int:
                 path = source_dir / entry["name"]
                 if not path.is_file():
                     die(f"verify-only: {path} does not exist")
-                actual = hashlib.sha256(path.read_bytes()).hexdigest()
+                actual = hash_on_disk(path)["sha256"]
                 recorded = entry.get("sha256", RECORDED_AT_DOWNLOAD)
+                if recorded == RECORDED_AT_DOWNLOAD:
+                    # The placeholder means "not yet pinned", not "mismatch". The
+                    # download path already skips the check in that state;
+                    # verify-only must agree, or the first verification run after
+                    # a fresh checkout fails on a file that is perfectly correct.
+                    print(
+                        f"  {entry['name']:38} NOT PINNED  {actual}\n"
+                        f"  {'':38} record it in config/sources.yaml to arm the pin.",
+                        flush=True,
+                    )
+                    continue
                 status = "MISMATCH" if recorded.lower() != actual else "ok"
-                print(f"  {entry['name']:24} {status}  {actual[:16]}...")
+                print(f"  {entry['name']:38} {status}  {actual}")
                 if status == "MISMATCH":
                     die(
                         f"{path} does not match the recorded hash.\n"

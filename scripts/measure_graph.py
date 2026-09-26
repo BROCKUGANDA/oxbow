@@ -178,9 +178,7 @@ def count_cycles(df: pl.DataFrame) -> dict[str, Any]:
 
 def main() -> int:
     if not RAW.is_file():
-        die(
-            f"{RAW} not found. Run: uv run python scripts/download_data.py --source paysim"
-        )
+        die(f"{RAW} not found. Run: uv run python scripts/download_data.py --source paysim")
 
     print(f"reading {RAW.name} ({RAW.stat().st_size:,} bytes) ...", flush=True)
     # Read only what the measurement needs: the full corpus is 6.3M rows and
@@ -203,9 +201,7 @@ def main() -> int:
 
     # Degree = total incident edges per account. pl.concat of two Series yields a
     # Series, which has no group_by; the frame is what carries the operation.
-    all_nodes = pl.DataFrame(
-        {"acct": pl.concat([src, dst], how="vertical")}
-    )
+    all_nodes = pl.DataFrame({"acct": pl.concat([src, dst], how="vertical")})
     deg = all_nodes.group_by("acct").len()["len"]
     deg_stats = degree_stats(deg)
 
