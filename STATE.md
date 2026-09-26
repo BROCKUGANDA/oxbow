@@ -308,6 +308,43 @@ being written), `make ingest` end to end, P2's leakage gate, P3b's rule-vs-fixtu
 gate, P4b, P6's ablation, P7's API gates, P8's browser gates, P9's packet/demo. The
 IBM adapter's schema is known-wrong (item 1) and its correction is unscheduled work.
 
+## Where this stands, and the next five moves
+
+Measured on a quiet tree at commit `0e8a5b8`: **789 passed, 8 failed, 1 skipped**
+(`uv run pytest -q tests`, 7m15s). `make verify` claims P0, P1a, P1b, P3a, P5.
+`make lint`'s format leg passes for the first time; `ruff check` has 46 errors left
+(15 unused test-fixture arguments, 7 docstring style, 6 `isinstance` tuple form) and
+`mypy` has 304 in 64 files, led by `scoring/model.py` (87).
+
+The eight failures are all `tests/integration/test_p7_api.py` needing PostgreSQL
+through the Docker engine, which went down mid-session (item 15). None is a code
+defect on the evidence available.
+
+In order, each unblocking the next:
+
+1. **Start Docker Desktop**, then `docker compose up -d postgres redis` and
+   `uv run pytest -q tests/integration`. That converts eight unknowns into a verdict
+   on P7 and is the only thing standing between P7 and being claimable.
+2. **Wire the grain bridge into `run_score_stage`** (`cli.py` still carries the
+   refusal string at the score body; `oxbow.features.bridge.build_account_frame` and
+   the two fold-scoped providers exist with 17 passing tests). Then
+   `uv run oxbow pipeline --limit 20000` reaches backtest for the first time, which is
+   the precondition for P6's numbers, MODEL_CARD/ECONOMICS_CARD being generated from
+   measured results rather than placeholders, and a landed case bundle.
+3. **Reconcile DEV-015's four cycle-test disagreements** (item 13) and the
+   `amount_increases_along_loop` aggregate, now that self-edges are settled.
+4. **`make demo`**: `scripts/demo_seed.py` does not exist (item 11). It needs a landed
+   case from step 2, then a pinned snapshot under `data/snapshots/`.
+5. **`make packet`** is blocked twice and only one block is ours: no case bundle
+   (step 2), and no Pango/GObject on this host. The packet's HTML and SVG are proven
+   byte-identical; the PDF test skips with the reason printed rather than pretending.
+
+Blocked on a human, not on work: the hosted read-only demo publishes CC BY-SA /
+CDLA share-alike derived data and needs a licensing decision (BACKLOG.md, 00 §I.4).
+Unresolved data question worth a decision: PaySim's `step` runs 1-743 against a config
+modelling 30 synthetic days (item 14), which touches the split rationale and one
+published limitation.
+
 ## Reviewed and sound (read, not merely reported)
 
 - `scoring/scale.py` + `scoring/config.py`: `factor = PDO/ln2`,
