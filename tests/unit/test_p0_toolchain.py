@@ -7,6 +7,7 @@ reverting any of it turns the suite red.
 
 from __future__ import annotations
 
+import json
 import tomllib
 from pathlib import Path
 
@@ -343,6 +344,32 @@ def test_python_is_pinned_to_three_twelve() -> None:
 def test_pnpm_lockfile_is_committed() -> None:
     """pnpm-lock.yaml is the JS reproducibility artifact."""
     assert (REPO_ROOT / "apps" / "web" / "pnpm-lock.yaml").is_file()
+
+
+def test_web_dependencies_support_the_installed_react_major() -> None:
+    """No web package may declare a peer range that excludes our React.
+
+    Found by reading an install log rather than by a runtime failure: visx 3.12
+    declares react ^16 || ^17 || ^18, so the React 19 tree emitted six unmet-peer
+    warnings and the graph layer would have been the first thing to break at
+    runtime. visx 4.0.0 declares ^18 || ^19, and the lockfile must hold it.
+    """
+    package = REPO_ROOT / "apps" / "web" / "package.json"
+    manifest = json.loads(package.read_text(encoding="utf-8"))
+    assert manifest.get("dependencies", {}).get("react"), "apps/web must declare react"
+
+    lock = (REPO_ROOT / "apps" / "web" / "pnpm-lock.yaml").read_text(encoding="utf-8")
+    for name, spec in manifest.get("dependencies", {}).items():
+        if not name.startswith("@visx/"):
+            continue
+        assert f"{name}@{spec.lstrip('^~')}" in lock, (
+            f"{name} is declared as {spec} in package.json but is not locked at that "
+            "version, so the committed tree is not the tree that was tested"
+        )
+    assert "@visx/shape@4.0.0" in lock, (
+        "visx 3.12 declares react ^16 || ^17 || ^18, incompatible with the React 19 in "
+        "this tree; the lockfile must hold a React-19-capable major"
+    )
 
 
 def test_every_direct_dependency_is_exactly_pinned() -> None:
