@@ -28,8 +28,16 @@ COMPOSE   := docker compose
 WEB       := apps/web
 PIPELINE_STAGES := ingest graph score backtest
 
-export RUN_SALT ?= $(shell uv run python -c "import secrets;print(secrets.token_hex(32))")
 export OXBOW_SEED ?= 1337
+
+# RUN_SALT is deliberately NOT defaulted here. It used to be
+# `export RUN_SALT ?= $(shell uv run python -c "import secrets;...")`, which minted a
+# fresh salt per invocation, re-keyed every account in the corpus on every `make`, and made
+# two verify-determinism runs incomparable - the exact failure
+# `oxbow.config.resolve_run_salt`'s own docstring names. The salt is an identity: it must
+# come from the environment or .env. tests/unit/test_p0_toolchain.py asserts the text below.
+# (Commit 8daa148 restored this line by accident while editing this file; the guard test
+# caught it, which is the test doing its job.)
 
 # ---------------------------------------------------------------- help
 
