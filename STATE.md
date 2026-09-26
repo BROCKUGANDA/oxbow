@@ -122,13 +122,24 @@ Ordered by damage if any of it survives into a claimed-complete phase.
     allowed as a domain field (`RunDetail.error`, `JobStatus.error` are facts about a
     run, not a second status channel); a scanner that forbids the word outright would
     force sensible fields to be renamed.
-12. **Repo-wide `make lint` is red: 208 ruff errors** concentrated in the packages
+12. **`adapters/goaml/xml.py:77` defaults money to no-currency.**
+    `currency = str(txn.get("currency", "XXX"))` — `XXX` is ISO-4217's "no currency"
+    code, so a canonical row that somehow lacks a currency emits a case packet to a
+    AML system asserting the transaction had no currency, rather than failing. The
+    canonical contract declares `currency` non-nullable, so the branch is
+    unreachable-by-contract and wrong-if-reached: 03 A rule 1 wants a loud boundary
+    failure, and a money figure whose currency was invented is the one class of error
+    the whole no-implicit-FX rule exists to stop. Fix: raise, naming the txn_id.
+    (Separately confirmed *not* a defect: `features/registry.py:216`'s "lorem ipsum"
+    is an entry in a banned-substring list for feature descriptions — a guard, not a
+    placeholder.) §19's marker grep over all `.py`/`.ts`/`.tsx` returns no other hits.
+13. **Repo-wide `make lint` is red: 208 ruff errors** concentrated in the packages
     live agents are still writing, plus `make verify`'s P1a IBM gate. Architecture
     contracts are green (import-linter: 4 kept, 0 broken over 197 files / 925
     dependencies). Whole-suite status as measured: **405 passed, 6 failed**, all six
     inside `tests/contracts/test_p1b_canonical_ingest.py` — the file the P1b agent is
     editing right now, so that is in-flight work rather than decay.
-10. **Audit digest is delimiter-ambiguous.** `audit/chain.py::compute_row_hash`
+14. **Audit digest is delimiter-ambiguous.** `audit/chain.py::compute_row_hash`
     concatenates `HASH_VERSION | seq | occurred_at | actor_id | subject | action |
     canonical_json(payload) | prev_hash` with `"|"`. The payload's canonical JSON can
     contain `"|"` inside string values, and so can `subject`/`action`, so two different
