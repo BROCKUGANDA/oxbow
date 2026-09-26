@@ -264,6 +264,44 @@ Ordered by damage if any of it survives into a claimed-complete phase.
     user's action, after which `uv run pytest -q tests/integration` is the command that
     says whether P7 holds.
 
+16. **A four-way audit found two gates that cannot pass and one that cannot fail.**
+    Reports are in `docs/audit/` (`00-architecture.md`, `01-inventory.md`,
+    `02-code-review.md`, `03-gates.md`), measured against HEAD `470b09c`.
+    * **The P7 port-conformance gate is UNRUNNABLE.** `tests/contracts_adapters/`
+      holds no test module — one fixture and nothing else — so `pytest -q
+      tests/contracts_adapters` collects zero tests and exits 5. The gate named "port
+      conformance across every adapter" cannot pass, and every one of the 7 ports, 7
+      `Null*` implementations and 7 adapter families is unverified against the others.
+      `apps/api/routers/cases.py:482` cites
+      `tests/contracts_adapters/test_watchlist_conformance.py` as its justification and
+      that file does not exist. **This is the "part judges interrogate".**
+    * **The P4 gate is UNRUNNABLE.** `verify.py` selects it with `-k p4` and no
+      `test_p4_*.py` exists anywhere, so the phase's real state is "no tests", which
+      the phase table's "not verified by the orchestrator" understates.
+    * **`make verify` being green does not mean the gates pass.** Bare `verify.py` calls
+      `verify(PHASES)`, which runs only the gates of phases *marked done*; P7 is not, so
+      its unrunnable gate is skipped rather than passed. Run a phase explicitly to see
+      it. `470b09c`'s "record make verify green" is true as written and misleading as a
+      summary.
+    * **Fixed here: `Makefile` minted a `RUN_SALT` per invocation.**
+      `export RUN_SALT ?= $(shell ... secrets.token_hex(32))` applied whenever the
+      environment and `.env` were both empty, re-keying every account in the corpus on
+      every `make` and making the two `verify-determinism` runs incomparable — the exact
+      failure `oxbow.config.resolve_run_salt`'s own docstring names. Removed, with
+      `test_the_makefile_does_not_invent_a_run_salt` added and verified to fail when the
+      line is restored.
+    * **Open, and deliberately not fixed blind: 20 raw PaySim account ids are committed**
+      in `data/graph_measurement.json` (`C1065307291` and 19 more). That is the PII
+      boundary the plan draws at ingest. The remedy is a history rewrite, which is a
+      human's call, so it is recorded rather than performed.
+    * Also missing and load-bearing: `apps/api/worker.py` (so `make worker` and the
+      `full` Compose profile cannot start), `scripts/demo_seed.py` (item 11), `PROMPT.md`,
+      `notebooks/02_features.ipynb`, `notebooks/03_validation.ipynb`, `apps/api/Dockerfile`
+      and `apps/web/Dockerfile` (both referenced by `docker-compose.yml`).
+    * The suite is otherwise green: **790 passed, 8 failed, 1 skipped in 427 s**, with
+      all 8 failures in `tests/integration/test_p7_api.py` and item 15 the stated cause.
+      `ruff check .` is at 45 errors, down from 85; the `F821` class is now zero.
+
 ## Verification ledger (run by the orchestrator, not reported by agents)
 
 §16 requires a gate to be run in-session with observed output, so this is the list of
