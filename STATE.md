@@ -349,6 +349,28 @@ gate, P4b, P6's ablation, P7's API gates, P8's browser gates, P9's packet/demo. 
 IBM adapter's schema is known-wrong (item 1) and its correction is unscheduled work.
 
 ## Where this stands, and the next five moves
+### Two things about this host that the plan's wording hides
+
+1. **`make` does not exist here.** `make`, `mingw32-make` and `gmake` are all absent
+   from PATH, so every gate §16 phrases as `make lint` / `make test` / `make verify`
+   has been run as the underlying command instead (`uv run ruff check .`,
+   `uv run pytest -q tests`, `uv run python scripts/verify.py`, `uv run lint-imports`).
+   The substance is covered; the literal target names are not executable on this
+   machine, and `make web`/`lint-web` additionally assume `pnpm`, which is also absent
+   (the frontend checks were run as `./node_modules/.bin/tsc --noEmit` and
+   `./node_modules/.bin/biome check .`). A CI runner with GNU make is the place these
+   become the plan's own commands.
+2. **A worker reverted the orchestrator's own committed work in the working tree.**
+   After the webhook/env commit, `tests/unit/test_env_declarations.py` was deleted,
+   `.env.example` lost its documented runtime block, and several `apps/api` files were
+   rewritten from a stale in-memory view by a process that had reported finishing.
+   Recovered by confirming HEAD was the better state, preserving the three files newer
+   than HEAD, `git checkout -- .`, then restoring them -- 42 gate tests pass again. The
+   audit scratch files that a `git add -A` had swept in with them are removed here;
+   copies live outside the repo. The lesson, written down because it bit twice this
+   session: never `git add -A` in a tree that concurrent writers may still touch.
+
+
 
 Measured on a quiet tree at commit `0e8a5b8`: **789 passed, 8 failed, 1 skipped**
 (`uv run pytest -q tests`, 7m15s). `make verify` claims P0, P1a, P1b, P3a, P5.

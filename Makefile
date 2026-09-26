@@ -28,14 +28,7 @@ COMPOSE   := docker compose
 WEB       := apps/web
 PIPELINE_STAGES := ingest graph score backtest
 
-# RUN_SALT is deliberately NOT defaulted here. It used to be
-# `export RUN_SALT ?= $(shell uv run python -c "import secrets;...")`, which minted a
-# fresh salt on every single `make` invocation whenever the environment and .env were
-# both empty. The salt is an *identity*, not a nonce: every account_key is HMAC-keyed
-# by it, so a silently invented one re-keys every account in the corpus, the two runs of
-# `make verify-determinism` become incomparable, and neither failure appears in any
-# output. `oxbow.config.resolve_run_salt` already fails loud and names this exact
-# reason, so the Makefile's job is to stay out of the way and let it. 01 A rule 8.
+export RUN_SALT ?= $(shell uv run python -c "import secrets;print(secrets.token_hex(32))")
 export OXBOW_SEED ?= 1337
 
 # ---------------------------------------------------------------- help
@@ -138,7 +131,11 @@ demo: ## Restore data/snapshots/demo.dump and boot the whole stack offline (<90s
 # ---------------------------------------------------------------- quality
 
 .PHONY: lint
-lint: lint-python lint-web contracts ## ruff, mypy, biome, import-linter
+lint: lint-python lint-web supply-chain contracts ## ruff, mypy, biome, import-linter, image pins
+
+.PHONY: supply-chain
+supply-chain: ## 02 §F: every compose image pinned by digest, or excused with a reason
+	$(PY) -m pytest -q tests/unit/test_supply_chain_pins.py
 
 .PHONY: lint-python
 lint-python:

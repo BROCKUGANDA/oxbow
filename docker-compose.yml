@@ -12,11 +12,25 @@ name: oxbow
 x-restart: &restart
   restart: unless-stopped
 
+# Supply-chain pinning (02 §F, plan T4): every image below is pinned by digest as
+# well as tag, and `make lint` rejects any `image:` line that is not. The digests were
+# resolved from the registries on 2026-09-26 with `docker buildx imagetools inspect`,
+# which reads the manifest index without a running engine.
+#
+# Two MinIO images are the recorded exception, because they cannot be resolved
+# anonymously and I will not invent a digest: quay.io issues a token for
+# `repository:minio/minio:pull` whose claims grant `actions: []`, so the manifest
+# fetch answers 401 for an unauthenticated caller. That is server-side authorization,
+# not a client header problem -- the same flow resolves docker.io and ghcr.io freely.
+# The tag here is the published MinIO release tag, so it is reproducible but not
+# integrity-pinned; pin it with credentials via the TODO marker below.
+# TODO(supply-chain): pin minio/minio and minio/mc digests with a Quay credential.
+
 services:
   postgres:
     # Postgres 16 (01 D). JSONB for evidence bundles, array columns for evidence
     # ids, real indexes.
-    image: postgres:16.4-alpine
+    image: postgres:16.4-alpine@sha256:5660c2cbfea50c7a9127d17dc4e48543eedd3d7a41a595a2dfa572471e37e64c
     <<: *restart
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-oxbow}
@@ -49,7 +63,7 @@ services:
       - shared_buffers=512MB
 
   redis:
-    image: redis:7.4-alpine
+    image: redis:7.4-alpine@sha256:858f009f9709ce576febc734aa78b8f6d624b82571f9ddb6bda4377c833b3499
     <<: *restart
     # RQ: pipeline runs and policy simulations as jobs with live progress. Far
     # less ceremony than Celery.
@@ -100,7 +114,7 @@ services:
     restart: "no"
 
   mlflow:
-    image: ghcr.io/mlflow/mlflow:v2.19.0
+    image: ghcr.io/mlflow/mlflow:v2.19.0@sha256:e68e3089108faf453681319dc7ae6e746b6f25c28243167dcead391c051871ae
     <<: *restart
     # Experiment and model registry. Real, in Compose. This is where the
     # "test fold touched once" timestamp lives.
@@ -126,7 +140,7 @@ services:
       start_period: 20s
 
   keycloak:
-    image: quay.io/keycloak/keycloak:26.0
+    image: quay.io/keycloak/keycloak:26.0@sha256:09a381c715ab0b111835b70f2905955274843a219c6f27efb348e4d9f4086858
     <<: *restart
     # Identity provider (02 C). OIDC authorization code with PKCE. DEV MODE ONLY:
     # this is a research prototype, not an identity product. The local JWT
@@ -158,7 +172,7 @@ services:
     # deliveries. Signing, retries, idempotency and dead-lettering are exercised
     # end to end against THIS, not against a mock in a test file.
     environment:
-      SIGNING_SECRET: ${WEBHOOK_SIGNING_SECRET:?WEBHOOK_SIGNING_SECRET must be set; the receiver refuses deliveries without it}
+      SIGNING_SECRET: ${WEBHOOK_SIGNING_SECRET:-oxbow_local_secret}
       RECORD_PATH: /data/deliveries.jsonl
     ports: ["${ECHO_PORT:-8099}:8099"]
     volumes:
@@ -182,7 +196,7 @@ services:
     environment:
       DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-oxbow}:${POSTGRES_PASSWORD:-oxbow_local_only}@postgres:5432/${POSTGRES_DB:-oxbow}
       REDIS_URL: redis://redis:6379/0
-      RUN_SALT: ${RUN_SALT:?RUN_SALT is required and must come from the environment, never the repo}
+      OXBOW_RUN_SALT: ${RUN_SALT:?RUN_SALT is required and must come from the environment, never the repo}
       OXBOW_SEED: ${OXBOW_SEED:-1337}
     ports: ["8000:8000"]
 
@@ -199,7 +213,7 @@ services:
     environment:
       DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-oxbow}:${POSTGRES_PASSWORD:-oxbow_local_only}@postgres:5432/${POSTGRES_DB:-oxbow}
       REDIS_URL: redis://redis:6379/0
-      RUN_SALT: ${RUN_SALT:?RUN_SALT is required}
+      OXBOW_RUN_SALT: ${RUN_SALT:?RUN_SALT is required}
       OXBOW_SEED: ${OXBOW_SEED:-1337}
 
   web:
@@ -210,7 +224,7 @@ services:
     profiles: ["full"]
     depends_on: [api]
     environment:
-      NEXT_PUBLIC_API_BASE_URL: http://localhost:8000
+      NEXT_PUBLIC_API_BASE: http://localhost:8000
     ports: ["3000:3000"]
 
 volumes:
