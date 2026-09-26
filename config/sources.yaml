@@ -56,23 +56,74 @@ sources:
       - "Fraud prevalence is a simulator parameter, not a measured rate."
       - "Balance columns are known to be internally inconsistent with amount."
 
-  # --- secondary: AML typologies ------------------------------------------
+  # --- primary for Module B: AML typologies --------------------------------
   - id: ibmaml
     name: "IBM Transactions for Anti-Money Laundering"
-    role: secondary
-    module: "network typology detection"
+    role: primary
+    module: "network typology detection (Module B)"
     # NOTE: the slug ends in "-aml". P0 declared the slug without that suffix
     # and Kaggle answered 403 "Permission 'datasets.get' was denied", which
-    # reads like a credentials problem and is actually a wrong slug. Verified
-    # against the API: this is the dataset, 41.6 GB, CDLA-Sharing-1.0.
+    # reads like a credentials problem and is actually a wrong slug.
+    # The size first recorded here, 41.6 GB, was read off the dataset listing and
+    # is wrong for our purposes: DEV-013 measured the bundle actually served at
+    # 8.18 GB, of which the HI-Small scenario we ingest is ~510 MB.
     source_url: "https://www.kaggle.com/datasets/ealtman2019/ibm-transactions-for-anti-money-laundering-aml"
     retrieval: "scripts/download_data.py"
+    # --- MEASURED AGAINST REAL BYTES, 2026-09-26, and it contradicts this block ----
+    # The archive this slug serves is the 2023 revision of the corpus (citation:
+    # arXiv 2306.16424). Its transaction file is HI-Small_Trans.csv, NOT
+    # transactions.csv, and its header is 11 columns with `Account` appearing
+    # TWICE (source account, destination account):
+    #   Timestamp,From Bank,Account,To Bank,Account,Amount Received,
+    #   Receiving Currency,Amount Paid,Payment Currency,Payment Format,Is Laundering
+    # There is no stepFrom/stepTo, no balanceOrig/balanceDest, and no
+    # isFlood/isDateSpam/isForcedCashout/unlabeled set. The typology taxonomy lives
+    # in HI-Small_Patterns.txt instead, as labelled blocks of transaction rows
+    # (CYCLE, FAN-OUT, GATHER-SCATTER, SCATTER-GATHER, BIPARTITE, STACK, RANDOM).
+    # Measured over all 5,078,345 rows (DEV-013): laundering prevalence 0.1019%,
+    # median account degree 10.0, 647,939 directed edges once self-loops are set
+    # aside, and 591,212 rows that are self-edges (mostly Payment Format =
+    # Reinvestment). On the first 50,000 rows specifically: 114 rows whose
+    # receiving and payment currency differ, 19 amounts with three or more decimal
+    # places, and nine currency NAMES rather than ISO-4217 codes ("US Dollar",
+    # "Euro", "Yuan", "Rupee", "UK Pound", "Mexican Peso", "Bitcoin",
+    # "Australian Dollar", "Yen").
+    # The two entries this block used to carry, transactions.csv and patterns.csv,
+    # are member names of the *2019* revision of the corpus. This slug serves the
+    # 2023 revision, where they do not exist; a hash slot for a file that is not
+    # there can only be filled by a sentinel or a fabrication, so both are gone and
+    # the three members below are the whole of what Module B reads.
     files:
-      - name: "transactions.csv"
-        sha256: "RECORDED_AT_DOWNLOAD"
-      - name: "patterns.csv"
-        sha256: "RECORDED_AT_DOWNLOAD"
+      - name: "HI-Small_Trans.csv"
+        # 475,664,283 bytes, 5,078,345 data rows plus one header line. Measured
+        # 2026-09-26 from the file the pipeline would read.
+        sha256: "b19d39f515523373f991b689c07e11e7b0b95c17a2c27a87d91584ae16c5b040"
+      - name: "HI-Small_accounts.csv"
+        # 34,053,187 bytes. Header: Bank Name,Bank ID,Account Number,Entity ID,
+        # Entity Name. This is what makes an account identity a (bank, account)
+        # PAIR: the same account number recurs across banks, so hashing the account
+        # string alone would merge distinct accounts into one node.
+        sha256: "786808526e33cfc441212dd6fccda7edfc24172149bed59c6ef59b186836b014"
+      - name: "HI-Small_Patterns.txt"
+        # 323,844 bytes, 4,319 lines, 740 block headers over 370 labelled attempts.
+        # Not CSV: BEGIN/END "LAUNDERING ATTEMPT - <TYPOLOGY>" blocks wrapping
+        # transaction rows, so typology membership is recovered by matching rows
+        # back to their block.
+        sha256: "2c546b5ce6009e73851f0139af053cf845f08bf92f3bc82fe1eb937dec2ef39b"
     license: "CDLA-Sharing-1.0"
+    # --- WHAT ACTUALLY SITS ON DISK ----------------------------------------
+    # The corpus ships six scenario bundles: HI/LI (high intensity / low
+    # intensity) crossed with Small / Medium / Large. Only HI-Small was acquired:
+    # it is the bundle carrying the labelled typology blocks, and the other five
+    # would take the acquisition from ~510 MB to the full ~8.18 GB (DEV-013) for
+    # no additional typology ground truth. Every Module B number in this
+    # repository -- median degree 10.0, the DEV-015 cycle table, the DEV-014
+    # typology counts -- is measured over HI-Small alone and must be quoted that
+    # way. A reviewer who reads "IBM-AML has 5.08M rows" without the scope
+    # attached will overstate the evidence behind the network claim.
+    acquisition_scope: >-
+      Six bundles exist (HI/LI x Small/Medium/Large); only HI-Small was acquired,
+      ~510 MB of the ~8.18 GB served by the slug.
     license_obligation: >-
       Share-alike on derived data. Any derivative dataset we publish inherits
       CDLA-Sharing-1.0. The repository code is Apache-2.0, but the DATA carries

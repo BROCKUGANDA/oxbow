@@ -393,3 +393,56 @@ definition is cheaper and more honest than discovering it at the demo.
 Raised as a halt-and-ask under 00 §I.3: measured reality contradicting a spec
 assumption. The pre-committed action is to report the numbers and continue with the
 documented fix — which is what this entry does.
+
+## DEV-016 — the IBM source entry declared files that do not exist, and hid its own scope
+
+**Authority:** 00 §C step 1 ("acquire the data before writing code that assumes its
+shape") and §16's definition-of-done item requiring every recorded figure to be
+reproducible from a command.
+
+### The observation
+
+`config/sources.yaml` pinned `ibmaml` to two members, `transactions.csv` and
+`patterns.csv`, each carrying `sha256: "RECORDED_AT_DOWNLOAD"`. Neither exists in the
+archive the declared slug serves, so `scripts/download_data.py --verify-only` — the
+P1a gate — died with `does not exist`, and had done so since the entry was written.
+The same entry declared `role: secondary` while every Module B artefact in the
+repository, including DEV-013's graph measurements and DEV-015's cycle table, was
+computed from this corpus and from nothing else.
+
+### Why it survived
+
+The sentinel is the mechanism: a slot that reads `RECORDED_AT_DOWNLOAD` looks like
+an unfinished task rather than a false claim, so it passes a reviewer's eye and fails
+only a command that actually opens the file. The two names came from the 2019
+revision of the corpus; the slug serves the 2023 revision (arXiv 2306.16424), whose
+members are `HI-Small_Trans.csv`, `HI-Small_accounts.csv` and `HI-Small_Patterns.txt`
+— the shape DEV-013 established by reading bytes. `role: secondary` was written when
+PaySim was assumed sufficient for the whole build, which DEV-011 later refuted.
+
+### The resolution
+
+1. Both phantom entries are deleted. A hash slot for an absent file can only hold a
+   sentinel or an invention, and the gate's job is to distinguish "not yet
+   downloaded" from "this is not what the source ships". The three real members now
+   carry hashes measured on this host, and `--verify-only` confirms all three
+   against 475 MB, 34 MB and 324 KB of bytes on disk.
+2. `role` becomes `primary` and `module` names Module B explicitly, because the
+   config is what an operator reads to learn what the evidence rests on.
+3. A new `acquisition_scope` field states that the corpus ships six bundles — HI/LI
+   crossed with Small/Medium/Large — and that only HI-Small was acquired, about
+   510 MB of the 8.18 GB served. Without that sentence, "IBM-AML has 5,078,345 rows"
+   reads as if the network claim were measured over the corpus; it is measured over
+   one scenario bundle.
+4. The stale 41.6 GB figure in the same block's comment is replaced with the
+   measured 8.18 GB (DEV-013), and the 50,000-row statistics are now labelled as the
+   slice they are, with the full-corpus prevalence (0.1019%) and median degree (10.0)
+   alongside.
+
+### Consequence to watch
+
+The P1a gate now passes for a verifiable reason, which means it can also fail for one:
+if the bundle is ever re-acquired under a different revision, the hashes break by
+design. That is the intended behaviour, not a regression — a silent mismatch between
+declared and actual bytes is the failure this entry exists to prevent.
+
