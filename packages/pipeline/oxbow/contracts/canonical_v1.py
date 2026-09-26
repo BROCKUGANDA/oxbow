@@ -144,11 +144,22 @@ TIMESTAMP_COLUMNS: Final[tuple[str, ...]] = ("event_ts_utc", "ingested_at")
 # either importing the other.
 CANONICAL_TOTAL_ORDER: Final[tuple[str, str]] = ("event_ts_utc", "txn_id")
 
-# Only ``label_typology`` is nullable, and only because PaySim has no typology
-# taxonomy at all (its labels are isFraud/isFlaggedFraud). IBM-AML does carry
-# typologies, so a null there is an unmappable label and per-source nullability is
-# asserted by :func:`assert_label_provenance` rather than left to the schema.
-NULLABLE_COLUMNS: Final[tuple[str, ...]] = ("label_typology",)
+# ``label_typology`` is nullable because PaySim has no typology taxonomy at all (its
+# labels are isFraud/isFlaggedFraud), and the four balance columns are nullable
+# because IBM-AML carries no balance ledger: DEV-013 read its header off real bytes
+# and there is no balanceOrig/balanceDest anywhere in the 11 columns. Both nulls are
+# "the source does not have this", never "the value is unknown", which is why the
+# all-or-nothing rule in :func:`assert_balance_provenance` guards the second case --
+# a half-populated balance column is a parse that lost rows, and no schema can tell
+# that apart from an absent ledger without the per-source assertion.
+BALANCE_COLUMNS: Final[tuple[str, ...]] = (
+    "src_balance_before_minor",
+    "src_balance_after_minor",
+    "dst_balance_before_minor",
+    "dst_balance_after_minor",
+)
+
+NULLABLE_COLUMNS: Final[tuple[str, ...]] = ("label_typology", *BALANCE_COLUMNS)
 
 # 03 B: the account key is 12 hex characters, displayed uppercased as ACC-XXXXXX.
 ACCOUNT_KEY_LENGTH: Final = 12
@@ -161,7 +172,6 @@ ERR_NEGATIVE_MONEY: Final = "negative_money"
 ERR_LABEL_NOT_BINARY: Final = "label_not_binary"
 ERR_LOCAL_HOUR_RANGE: Final = "local_hour_out_of_range"
 ERR_DATE_DRIFT: Final = "event_date_local_drift"
-ERR_SELF_EDGE: Final = "canonical_self_edge"
 ERR_ACCOUNT_KEY_SHAPE: Final = "account_key_shape"
 ERR_UNKNOWN_COLUMN: Final = "unknown_column"
 ERR_MISSING_COLUMN: Final = "missing_required_column"
@@ -169,6 +179,7 @@ ERR_DTYPE_MISMATCH: Final = "dtype_mismatch"
 ERR_NULL_IN_REQUIRED: Final = "null_in_required_column"
 ERR_COERCION_REQUIRED: Final = "coercion_required"
 ERR_LABEL_PROVENANCE: Final = "label_provenance_missing"
+ERR_BALANCE_PROVENANCE: Final = "balance_provenance_ambiguous"
 
 
 # --- frame-level checks ---------------------------------------------------
@@ -266,18 +277,6 @@ def _event_date_local_bounded(data: object) -> pl.LazyFrame:
     return _bool_col(frame.select(mask.fill_null(False)).to_series())
 
 
-def _no_self_edge(data: object) -> pl.LazyFrame:
-    """Originator and destination keys must differ.
-
-    A canonical row with ``account_from == account_to`` contributes a self loop with
-    no counterparty, and 01 P3 excludes self transfers from cycle and fan detection
-    while keeping them as a feature. Catching it at the boundary means a graph query
-    never has to guess whether an edge it found is an artefact of the ingest.
-    """
-    frame = _frame(data)
-    return _bool_col(frame.select(pl.col("account_from") != pl.col("account_to")).to_series())
-
-
 def _account_keys_wellformed(data: object) -> pl.LazyFrame:
     """Both endpoint keys are 12 lowercase hex characters.
 
@@ -302,13 +301,20 @@ def _account_keys_wellformed(data: object) -> pl.LazyFrame:
 
 
 _CHECKS: Final[list[pa.Check]] = [
+    # There is deliberately no check that ``account_from != account_to``. A
+    # self-referential transfer is a real event, and 01 P3 asks for exactly the
+    # treatment the money rules give reversals: kept in the record, excluded from
+    # cycle and fan detection. Refusing it here was not conservative, it was lossy —
+    # DEV-013 measured 591,212 self-transfers in IBM-AML's HI-Small bundle, 11.6% of
+    # that corpus, which is the reinvestment traffic a portfolio's own turnover
+    # profile is made of. The exclusion therefore lives in ``oxbow.graph``, where the
+    # traversal decides what a counterparty is, and that layer counts what it drops.
     pa.Check(_txn_id_namespaced, error=ERR_TXN_ID_NOT_NAMESPACED),
     pa.Check(_total_order_unique, error=ERR_DUPLICATE_TOTAL_ORDER),
     pa.Check(_money_nonnegative, error=ERR_NEGATIVE_MONEY),
     pa.Check(_labels_are_binary, error=ERR_LABEL_NOT_BINARY),
     pa.Check(_local_hour_in_range, error=ERR_LOCAL_HOUR_RANGE),
     pa.Check(_event_date_local_bounded, error=ERR_DATE_DRIFT),
-    pa.Check(_no_self_edge, error=ERR_SELF_EDGE),
     pa.Check(_account_keys_wellformed, error=ERR_ACCOUNT_KEY_SHAPE),
 ]
 
@@ -470,7 +476,6 @@ _CHECK_COLUMNS: Final[dict[str, tuple[str, ...]]] = {
     ERR_LABEL_NOT_BINARY: ("label_is_fraud", "label_is_flagged"),
     ERR_LOCAL_HOUR_RANGE: ("local_hour",),
     ERR_DATE_DRIFT: ("event_date_local", "event_ts_utc"),
-    ERR_SELF_EDGE: ("account_from", "account_to"),
     ERR_ACCOUNT_KEY_SHAPE: ("account_from", "account_to"),
 }
 
@@ -497,9 +502,16 @@ def assert_label_provenance(frame: pl.DataFrame, *, source_carries_typology: boo
     * ``source_dataset`` null or blank means the row does not say which corpus it
       came from, so the per-corpus reporting the gate requires (01 P1: "we report
       metrics per corpus and never average them") is impossible.
-    * ``source_carries_typology=True`` with a null ``label_typology`` means a label
-      existed and was dropped. IBM-AML ships typologies; discarding them quietly is
-      how the network pillar loses its own ground truth.
+    * ``source_carries_typology=True`` with a null ``label_typology`` is normal and
+      means the row sits outside any annotated block. What is not normal is *every*
+      row being null: DEV-014 measured 3,209 annotated transactions inside a
+      5,078,345-row stream, so annotations cover six hundredths of one percent and
+      the rest is the graph's background topology. A whole frame of nulls means the
+      annotation join stopped working, which is how the network pillar loses its own
+      ground truth without any error being raised.
+    * ``source_carries_typology=True`` with a *blank* (empty or whitespace) value
+      means an annotation lost its name — a typology that is not a named typology is
+      not evidence of anything.
     * ``source_carries_typology=False`` with a *non-null* ``label_typology`` means
       somebody invented a typology for PaySim, which has none. That is worse than a
       null, because it reads like evidence.
@@ -519,20 +531,67 @@ def assert_label_provenance(frame: pl.DataFrame, *, source_carries_typology: boo
 
     typology = frame.get_column("label_typology")
     null_count = int(typology.null_count())
-    if source_carries_typology and null_count:
-        raise CanonicalContractError(
-            f"{ERR_LABEL_PROVENANCE}: {null_count} row(s) have a null label_typology "
-            "although this source carries typologies; an unmappable label belongs in "
-            "quarantine, not in a null",
-            column="label_typology",
-        )
-    if not source_carries_typology and null_count != frame.height:
+    if source_carries_typology:
+        named = typology.drop_nulls()
+        blank_named = int((named.str.strip_chars() == "").sum())
+        if blank_named:
+            raise CanonicalContractError(
+                f"{ERR_LABEL_PROVENANCE}: {blank_named} row(s) carry a blank "
+                "label_typology; an annotation that lost its name is not a typology",
+                column="label_typology",
+            )
+        if null_count == frame.height:
+            raise CanonicalContractError(
+                f"{ERR_LABEL_PROVENANCE}: this source ships a typology taxonomy and none "
+                f"of the {frame.height} canonical row(s) joined to it. One null per row "
+                "is expected — DEV-014 measured 3,209 annotated rows out of 5,078,345 — "
+                "but a frame with zero annotations is a broken join, not an unlabelled "
+                "corpus",
+                column="label_typology",
+            )
+    elif null_count != frame.height:
         raise CanonicalContractError(
             f"{ERR_LABEL_PROVENANCE}: this source has no typology taxonomy, so "
             "label_typology must be null on every row; a value there is an invented "
             "label and reads like evidence",
             column="label_typology",
         )
+
+
+def assert_balance_provenance(frame: pl.DataFrame) -> None:
+    """Assert a frame's balance columns are either fully present or wholly absent.
+
+    Both are legitimate. PaySim ships a ledger, so every row carries four balances
+    (and the plan treats their inconsistency as a feature signal, not an error).
+    IBM-AML ships no ledger at all, so every balance is null and no balance-derived
+    feature may be claimed for it. What is not legitimate is a mixture: that is a
+    parse which lost a column on some rows, and because the columns are nullable in
+    the schema, nothing else in the pipeline would notice.
+
+    ``source_dataset`` is checked first per row, so a frame mixing corpora is refused
+    rather than passing on the strength of one corpus's complete ledger.
+    """
+    if frame.height == 0:
+        return
+    corpora = frame.get_column("source_dataset").unique().sort().to_list()
+    if len(corpora) != 1:
+        raise CanonicalContractError(
+            f"{ERR_BALANCE_PROVENANCE}: a batch spans {len(corpora)} corpora "
+            f"({corpora}); balance presence is asserted per source, so batches must be "
+            "kept apart",
+        )
+    for name in BALANCE_COLUMNS:
+        column = frame.get_column(name)
+        nulls = int(column.null_count())
+        if nulls and nulls != frame.height:
+            raise CanonicalContractError(
+                f"{ERR_BALANCE_PROVENANCE}: {name} is null on {nulls} of {frame.height} "
+                f"{corpora[0]} row(s). Either the source has a ledger and every row "
+                "carries it, or it has none and no row does -- a partial ledger is a "
+                "column that failed to parse, and a null here would then be read "
+                "downstream as 'this account had no balance' rather than 'unknown'",
+                column=name,
+            )
 
 
 def empty_canonical_frame(*, persisted: bool = True) -> pl.DataFrame:
@@ -564,10 +623,12 @@ def utc_now_us() -> dt.datetime:
 
 __all__ = [
     "ACCOUNT_KEY_LENGTH",
+    "BALANCE_COLUMNS",
     "CANONICAL_COLUMNS",
     "CANONICAL_DTYPES",
     "CANONICAL_TOTAL_ORDER",
     "ERR_ACCOUNT_KEY_SHAPE",
+    "ERR_BALANCE_PROVENANCE",
     "ERR_COERCION_REQUIRED",
     "ERR_DATE_DRIFT",
     "ERR_DTYPE_MISMATCH",
@@ -578,7 +639,6 @@ __all__ = [
     "ERR_MISSING_COLUMN",
     "ERR_NEGATIVE_MONEY",
     "ERR_NULL_IN_REQUIRED",
-    "ERR_SELF_EDGE",
     "ERR_TXN_ID_NOT_NAMESPACED",
     "ERR_UNKNOWN_COLUMN",
     "MONEY_COLUMNS",
@@ -588,6 +648,7 @@ __all__ = [
     "TIMESTAMP_COLUMNS",
     "UTC_MICROS",
     "CanonicalContractError",
+    "assert_balance_provenance",
     "assert_canonical_frame",
     "assert_label_provenance",
     "canonical_v1_persisted_schema",

@@ -449,6 +449,91 @@ def test_label_provenance_required(
         assert_label_provenance(events.clear(), source_carries_typology=False)
 
 
+def test_typology_bearing_source_allows_background_rows_but_not_a_dead_join(
+    identity: RunIdentity, canonical_kwargs: dict[str, Any]
+) -> None:
+    """Sparse annotations are the corpus; zero annotations are a broken join.
+
+    The first version of this guard refused any null ``label_typology`` on a
+    typology-bearing source, which read sensibly and could not run: DEV-014 measured
+    3,209 annotated transactions in a 5,078,345-row stream, so 99.94% of the graph's
+    background edges are legitimately unlabelled and quarantining them would have
+    deleted the substrate the network pillar is computed over. What the guard can
+    still refuse is a frame where the annotation join produced nothing at all --
+    the shape a wrong row-offset basis produces -- and an annotation that lost its
+    name.
+    """
+    from oxbow.contracts.canonical_v1 import assert_label_provenance
+
+    result = _batch([dict(r) for r in ROWS], identity, canonical_kwargs)
+    events = result.events
+    mostly_background = events.with_columns(
+        pl.when(pl.col("txn_id") == events.get_column("txn_id")[0])
+        .then(pl.lit("FAN-OUT"))
+        .otherwise(pl.lit(None, dtype=pl.String))
+        .alias("label_typology")
+    )
+    assert mostly_background.get_column("label_typology").null_count() == events.height - 1
+    assert_label_provenance(mostly_background, source_carries_typology=True)
+
+    with pytest.raises(CanonicalContractError, match="none of the|zero"):
+        assert_label_provenance(events, source_carries_typology=True)
+
+    lost_name = mostly_background.with_columns(
+        pl.when(pl.col("label_typology") == "FAN-OUT")
+        .then(pl.lit("   "))
+        .otherwise(pl.col("label_typology"))
+        .alias("label_typology")
+    )
+    with pytest.raises(CanonicalContractError, match="lost its name"):
+        assert_label_provenance(lost_name, source_carries_typology=True)
+
+
+def test_balance_columns_are_all_present_or_all_absent(
+    identity: RunIdentity, canonical_kwargs: dict[str, Any]
+) -> None:
+    """A ledger either exists for every row or for none; a half-ledger is a parse bug.
+
+    The four balance columns became nullable so IBM-AML, which ships no balance
+    columns at all, can be canonical without inventing zeroes (DEV-017). Nullable is
+    not the same as unconstrained: this guards the reading a null would otherwise
+    acquire downstream, which is "this account held nothing" rather than "this source
+    does not record balances".
+    """
+    from oxbow.contracts.canonical_v1 import (
+        BALANCE_COLUMNS,
+        assert_balance_provenance,
+    )
+
+    result = _batch([dict(r) for r in ROWS], identity, canonical_kwargs)
+    events = result.events
+    assert events.get_column(BALANCE_COLUMNS[0]).null_count() == 0
+    assert_balance_provenance(events)
+
+    absent = events.with_columns(
+        *[pl.lit(None, dtype=pl.Int64).alias(name) for name in BALANCE_COLUMNS]
+    )
+    assert_balance_provenance(absent)
+
+    half_lost = events.with_columns(
+        pl.when(pl.col("txn_id") == events.get_column("txn_id")[0])
+        .then(pl.lit(None, dtype=pl.Int64))
+        .otherwise(pl.col("src_balance_after_minor"))
+        .alias("src_balance_after_minor")
+    )
+    with pytest.raises(CanonicalContractError, match="balance_provenance_ambiguous"):
+        assert_balance_provenance(half_lost)
+
+    mixed = pl.concat(
+        [
+            events,
+            absent.with_columns(pl.lit("ibmaml").alias("source_dataset")),
+        ]
+    )
+    with pytest.raises(CanonicalContractError, match="spans 2 corpora"):
+        assert_balance_provenance(mixed)
+
+
 def test_empty_batch_errors(
     tmp_path: Path, identity: RunIdentity, canonical_kwargs: dict[str, Any]
 ) -> None:

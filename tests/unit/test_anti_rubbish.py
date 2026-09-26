@@ -10,8 +10,9 @@ Scope note: §19.1's unfinished-work markers are **already** enforced by
 `RECORDED_AT_DOWNLOAD` sentinel or on a comment explaining one. This file does not
 duplicate that gate; it adds the two checks that were missing — the frontend `any`
 ban in §19.2, which is what keeps the generated API client's error union typed, and
-the "a claimed-complete stage still says NOT IMPLEMENTED" check, which is the
-cheapest way to catch a phase that was marked done before its verb was wired.
+the "a claimed-complete phase's verb is actually wired to a stage runner" check,
+which is the cheapest way to catch a phase that was marked done before its command
+was built.
 
 Each failure prints the offending path and line: "found 9 violations" is not
 actionable, and a fix has to be locatable from the assertion message alone.
@@ -22,14 +23,15 @@ strings as patterns.
 
 from __future__ import annotations
 
+import ast
 import re
-import subprocess
 import sys
 from pathlib import Path
 from typing import Final
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 HERE = Path(__file__).resolve()
+CLI_PATH = REPO_ROOT / "packages" / "pipeline" / "oxbow" / "cli.py"
 
 FRONTEND_SUFFIXES = frozenset({".ts", ".tsx", ".js", ".jsx"})
 
@@ -110,13 +112,24 @@ def test_no_any_in_frontend_source() -> None:
 # A completed phase replaces its verb's placeholder body; this maps each verb to the
 # phase whose gate makes that verb real, so the check tightens as `make verify`
 # claims phases rather than failing permanently while they are still in build.
-STAGE_OWNERS: Final[dict[str, str]] = {
-    "ingest": "P1b",
-    "graph": "P3a",
-    "score": "P4",
-    "backtest": "P6",
+STAGE_OWNERS: Final[dict[str, tuple[str, str]]] = {
+    "ingest": ("P1b", "run_ingest_stage"),
+    "graph": ("P3a", "run_graph_stage"),
+    "score": ("P4", "run_score_stage"),
+    "backtest": ("P6", "run_backtest_stage"),
 }
-PLACEHOLDER_MARKER: Final = "NOT IMPLEMENTED"
+
+
+def _calls_reachable_from(function: ast.FunctionDef) -> set[str]:
+    """Every callable name mentioned anywhere inside one function, nested defs included."""
+    names: set[str] = set()
+    for node in ast.walk(function):
+        if isinstance(node, ast.Call):
+            if isinstance(node.func, ast.Name):
+                names.add(node.func.id)
+            elif isinstance(node.func, ast.Attribute):
+                names.add(node.func.attr)
+    return names
 
 
 def _completed_phases() -> set[str]:
@@ -142,30 +155,44 @@ def _completed_phases() -> set[str]:
     return {phase.name for phase in module.PHASES if phase.done}
 
 
-def test_claimed_complete_stages_are_not_placeholders() -> None:
-    """For every phase `make verify` claims as done, its verb must do real work.
+def test_claimed_complete_stages_are_wired_to_a_runner() -> None:
+    """For every phase `make verify` claims done, its verb must reach a stage runner.
 
-    Catches the specific regression where a phase flag is flipped before the CLI body
-    is swapped — the phase then reports green while the command still prints that it
-    was never built.
+    This reads the CLI's syntax tree rather than running the verbs. Running them was
+    slow and blind at once: `oxbow ingest` with no arguments ingests the whole PaySim
+    corpus, so `make test` was spawning a second full pipeline inside itself and
+    timing out; and the string it grepped for, a "NOT IMPLEMENTED" banner, appears
+    nowhere in the CLI, so an unwired verb passed it. A verb whose body never mentions
+    the runner it is supposed to drive is the actual shape of "claimed complete,
+    never built".
     """
+    tree = ast.parse(CLI_PATH.read_text(encoding="utf-8"))
+    functions = {
+        node.name: node
+        for node in tree.body
+        if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef)
+    }
     completed = _completed_phases()
-    for verb, owner in STAGE_OWNERS.items():
+    checked: list[str] = []
+    for verb, (owner, runner) in STAGE_OWNERS.items():
         if owner not in completed:
             continue
-        proc = subprocess.run(
-            ["uv", "run", "oxbow", verb],
-            cwd=REPO_ROOT,
-            capture_output=True,
-            text=True,
-            timeout=600,
-            shell=False,
+        command = verb if verb in functions else f"{verb}_cmd"
+        assert command in functions, (
+            f"{owner} is marked complete but `oxbow {verb}` defines no function named "
+            f"{command!r} in {CLI_PATH.relative_to(REPO_ROOT)}"
         )
-        output = proc.stdout + proc.stderr
-        assert PLACEHOLDER_MARKER not in output, (
-            f"{owner} is marked complete in scripts/verify.py, but `oxbow {verb}` "
-            f"still reports itself unbuilt:\n{output.strip()[:500]}"
+        reached = _calls_reachable_from(functions[command])
+        assert runner in reached, (
+            f"{owner} is marked complete in scripts/verify.py, but {command}() never "
+            f"calls {runner}(), so it is a verb that does not run the stage it names. "
+            f"Calls made inside it: {sorted(reached)}"
         )
+        checked.append(f"{verb}->{runner}")
+    assert checked, (
+        "no claimed-complete phase mapped to a verb, so this test proved nothing; "
+        f"scripts/verify.py reports completed={sorted(completed)}"
+    )
 
 
 def test_scanners_are_proven_to_bite() -> None:
