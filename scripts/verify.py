@@ -149,8 +149,8 @@ PHASES: tuple[Phase, ...] = (
     ),
     Phase(
         name="P2",
-        done=False,
-        pending_reason="splits, providers and the grain bridge are tested; the score stage still refuses at the unwired bridge call",
+        done=True,
+        pending_reason="",
         gates=(
             Gate(
                 "the leakage gate passes AND is proven to bite",
