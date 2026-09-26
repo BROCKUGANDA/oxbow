@@ -87,3 +87,6 @@ desktop.ini
 
 # --- agent plan scratch --------------------------------------------------
 .hermes/
+
+# Playwright run artifacts (traces, failure screenshots) -- local evidence, not source.
+apps/web/.test-output/
