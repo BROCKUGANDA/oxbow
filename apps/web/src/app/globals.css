@@ -1,0 +1,170 @@
+@import 'tailwindcss';
+@import '../design/tokens.css';
+
+/* =============================================================================
+   Application base. The token file owns every value; this file owns only the
+   defaults no component should have to repeat, plus the two stylesheets the design
+   contract requires and a component cannot express inline: reduced motion and print.
+   ============================================================================= */
+
+@layer base {
+  html,
+  body {
+    /* Zero page-level margin is the difference between a full-bleed investigation
+       surface and a document with a toolbar stuck to it. */
+    margin: 0;
+    padding: 0;
+    background: var(--color-canvas);
+    color: var(--color-ink);
+    font-family: var(--font-sans);
+    font-size: var(--text-body);
+    line-height: 1.5;
+    /* Tabular numerals by default: a stray proportional digit in a money column is
+       the defect the token file calls out, so the base state carries the fix. */
+    font-variant-numeric: tabular-nums;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  ::selection {
+    background: var(--color-evidence);
+    color: var(--color-ink-inverse);
+  }
+
+  :focus-visible {
+    outline: 2px solid var(--color-focus);
+    outline-offset: 1px;
+  }
+
+  a {
+    color: inherit;
+    text-decoration: none;
+  }
+
+  button {
+    font: inherit;
+  }
+
+  /* Scrollbars are chrome, not content: hairline-coloured and thin, so a dense
+     queue does not lose two columns to an overlay scrollbar on Windows. */
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: var(--color-hairline-strong) transparent;
+  }
+}
+
+/* ------------------------------------------------------------- motion -----
+   The token layer collapses --duration-* to 0ms under the media query, which
+   covers everything animated from a token. These two rules cover what the token
+   layer cannot reach: the shimmer sweep and any CSS animation a chart uses, both
+   of which loop and would otherwise keep running for a reduced-motion user.
+   DESIGN.md §4: shimmer loops PAUSED, not removed — the moving highlight is the
+   signal that work is in flight, so the shape stays and the sweep stops. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* The gallery's forced-reduced-motion path: /dev/states?motion=reduced sets this
+   attribute so the guarantee is demonstrable without changing the OS setting, which
+   is the difference between a tested path and an assertion. */
+html[data-motion='reduced'] *,
+html[data-motion='reduced'] *::before,
+html[data-motion='reduced'] *::after {
+  animation-duration: 0.001ms !important;
+  animation-iteration-count: 1 !important;
+  transition-duration: 0.001ms !important;
+}
+
+html[data-motion='reduced'] [data-shimmer-sweep] {
+  display: none;
+}
+
+/* --------------------------------------------------------------- print ----
+   DESIGN.md §6: a band that cannot survive a laser-printed packet is not a band.
+   The export packet is rendered from these screens, so the print stylesheet is
+   part of the risk-legibility guarantee and is tested, not assumed.
+   Inverted to ink on paper; the meter glyph and the band letter are what carry
+   severity, so the greyscale conversion loses only hue and keeps the ranking. */
+@media print {
+  @page {
+    margin: 14mm;
+  }
+
+  html,
+  body {
+    background: var(--color-paper);
+    color: var(--color-ink-inverse);
+    font-size: 10pt;
+  }
+
+  /* Chrome, footer, nav and the action rail are not part of a record. */
+  [data-print-hide] {
+    display: none !important;
+  }
+
+  [data-print-block] {
+    break-inside: avoid;
+  }
+
+  /* Bands print greyscale-dark, ordered, so A to E remain distinguishable after the
+     colour channel is gone. The letter and the meter stay because they are markup. */
+  [data-band='A'] {
+    color: oklch(0.32 0 0) !important;
+  }
+  [data-band='B'] {
+    color: oklch(0.4 0 0) !important;
+  }
+  [data-band='C'] {
+    color: oklch(0.48 0 0) !important;
+  }
+  [data-band='D'] {
+    color: oklch(0.28 0 0) !important;
+  }
+  [data-band='E'] {
+    color: oklch(0.14 0 0) !important;
+  }
+
+  [data-money-figure] {
+    border: 1px solid oklch(0.2 0 0.01 90 / 0.24);
+    padding: 4pt;
+  }
+
+  [data-assumption-line],
+  [data-recovery-band] {
+    color: oklch(0.25 0 0) !important;
+  }
+
+  a[href^='/']::after {
+    content: ' (' attr(href) ')';
+    font-family: var(--font-mono);
+    font-size: 8pt;
+  }
+}
+
+/* ------------------------------------------------------------ utilities ---- */
+
+/* A region that scrolls without leaking its first row's border under the header. */
+.u-scroll {
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.u-grid-2 {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.u-grid-3 {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.u-num {
+  font-variant-numeric: tabular-nums;
+}

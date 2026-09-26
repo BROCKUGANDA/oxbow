@@ -1,0 +1,269 @@
+/* =============================================================================
+   Command dashboard — plan §14 P8a-1.
+
+   The top strip is in currency, not counts, and in that order: expected loss
+   avoided with its r band, benefit per analyst-hour, residual exposure at ES97.5.
+   A count first would be the ordinary dashboard; the argument this product makes is
+   that monitoring has a price, so the price is what is largest on the page.
+
+   Second row is model quality with its delta against the named baseline, because a
+   PR-AUC without the thing it beat is a number with no comparison. Then the
+   cumulative benefit curve (never-cut list), the band distribution, and the
+   latest-pattern feed.
+
+   Every figure is a `MoneyFigure` component, which cannot render without its
+   assumption line, so the plan §11 clause is structural here rather than a caption
+   someone remembered to add.
+   ============================================================================= */
+
+'use client';
+
+import Link from 'next/link';
+import type { ReactElement } from 'react';
+
+import { Icon } from '@/design/icons/Icon';
+import { EmptyState } from '@/design/primitives/EmptyState';
+import { TYPOLOGY_META, glyphFor } from '@/components/typology';
+import { Pane } from '@/components/Pane';
+import { MultiLineChart } from '@/components/charts/charts';
+import { MoneyFigure } from '@/components/ui/MoneyFigure';
+import { Assumptions, Timestamp } from '@/components/ui/provenance';
+import { BandBadge } from '@/components/ui/BandBadge';
+import { PIPELINE_COMMAND, RUNTIME_ESTIMATE_FALLBACK } from '@/lib/copy';
+import { ROUTES } from '@/lib/api/contract';
+import { useResource } from '@/lib/api/hooks';
+import { compactFromMinor, count, moneyAxisFormatter } from '@/lib/format/money';
+import { GAP_TIGHT, PANEL_SUNKEN, T_LABEL, T_MICRO } from '@/components/ui/sx';
+
+/** The KPI strip's skeleton geometry: three money figures, each with a band line. */
+const STRIP_COLUMNS = [
+  { key: 'loss', width: 'minmax(0, 1fr)' },
+  { key: 'hour', width: 'minmax(0, 1fr)' },
+  { key: 'residual', width: 'minmax(0, 1fr)' },
+  { key: 'alerts', width: 'minmax(0, 1fr)' },
+  { key: 'networks', width: 'minmax(0, 1fr)' },
+];
+
+export default function DashboardPage(): ReactElement {
+  const dashboard = useResource('dashboard', ROUTES.dashboard.path, ROUTES.dashboard.data);
+  const runtime = useResource('runtime', ROUTES.runtime.path, ROUTES.runtime.data);
+  const timeZone = runtime.data?.deployment_timezone ?? 'UTC';
+  const assumptions = dashboard.meta?.assumptions ?? [];
+
+  if (dashboard.data === null) {
+    return (
+      <div style={{ padding: 'var(--spacing-pane-gap)', display: 'flex', flexDirection: 'column', gap: 12 }}>
+        <Pane id="dashboard-strip" title="Command strip" operation="Loading the command strip" skeleton={{ columns: STRIP_COLUMNS, rows: 1, rowHeight: 96 }}>
+          <Pending state={dashboard} />
+        </Pane>
+      </div>
+    );
+  }
+
+  const data = dashboard.data;
+  const totalAccounts = data.band_distribution.reduce((sum, bucket) => sum + bucket.accounts, 0);
+  const noRunYet = data.alerts_generated === 0 && data.latest_patterns.length === 0;
+
+  return (
+    <div style={{ padding: 'var(--spacing-pane-gap)', display: 'flex', flexDirection: 'column', gap: 'var(--spacing-pane-gap)' }}>
+      {/* ---- the currency strip ---------------------------------------- */}
+      <section data-strip aria-label="Period economics" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 'var(--spacing-pane-gap)' }}>
+        <MoneyFigure
+          figure={data.expected_loss_avoided}
+          assumptions={assumptions}
+          label="Expected loss avoided this period"
+          emphasis="kpi"
+          source={data.economics_source}
+        />
+        <MoneyFigure
+          figure={data.benefit_per_analyst_hour}
+          assumptions={assumptions}
+          label="Benefit per analyst-hour"
+          emphasis="kpi"
+          source={data.economics_source}
+        />
+        <MoneyFigure
+          figure={data.residual_exposure}
+          assumptions={assumptions}
+          label="Residual exposure (ES 97.5%)"
+          emphasis="kpi"
+          source={data.economics_source}
+        />
+
+        {/* Counts are the third row of the strip and smaller: the plan's clause is
+            "currency, not counts", so the two counts that still matter come after. */}
+        <div style={{ ...PANEL_SUNKEN, padding: 10 }}>
+          <p style={{ ...T_LABEL, textTransform: 'uppercase', letterSpacing: '0.06em' }}>Alerts generated</p>
+          <p className="u-num" style={{ fontFamily: 'var(--font-condensed)', fontSize: 'var(--text-kpi)', fontWeight: 600, margin: '2px 0 0' }}>
+            {count(data.alerts_generated)}
+          </p>
+          <p style={{ ...T_MICRO, color: 'var(--color-ink-faint)' }}>
+            {count(data.capacity.reviewed)} reviewed of {count(data.capacity.available)} {data.capacity.unit} ·{' '}
+            {data.capacity.period_label}
+          </p>
+        </div>
+
+        <div style={{ ...PANEL_SUNKEN, padding: 10 }}>
+          <p style={{ ...T_LABEL, textTransform: 'uppercase', letterSpacing: '0.06em' }}>High-risk networks</p>
+          <p className="u-num" style={{ fontFamily: 'var(--font-condensed)', fontSize: 'var(--text-kpi)', fontWeight: 600, margin: '2px 0 0' }}>
+            {count(data.high_risk_networks)}
+          </p>
+          <p style={{ ...T_MICRO, color: 'var(--color-ink-faint)' }}>
+            components with a flagged member ·{' '}
+            <Link href="/network" style={{ textDecoration: 'underline' }}>
+              open the explorer
+            </Link>
+          </p>
+        </div>
+      </section>
+
+      {/* ---- model quality chips --------------------------------------- */}
+      <section aria-label="Model quality" style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+        <Chip label="PR-AUC" metric={data.model_quality.pr_auc} />
+        <Chip label="Precision at budget" metric={data.model_quality.precision_at_budget} />
+        <Chip label="Brier" metric={data.model_quality.brier} lowerIsBetter />
+      </section>
+
+      {noRunYet ? (
+        <EmptyState kind="no-run" command={PIPELINE_COMMAND} expectedRuntime={RUNTIME_ESTIMATE_FALLBACK} corpus={runtime.data?.dataset ?? undefined} />
+      ) : null}
+
+      {/* ---- the curve, the distribution, the feed ---------------------- */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 2fr) minmax(0, 1fr)', gap: 'var(--spacing-pane-gap)' }}>
+        <Pane
+          id="curve"
+          title="Cumulative benefit by policy"
+          operation="Loading the cumulative benefit curve"
+          meta={dashboard.meta}
+          skeleton={{ columns: [{ key: 'curve', width: '100%' }], rows: 1, rowHeight: 300 }}
+        >
+          <MultiLineChart
+            series={data.cumulative_benefit.series}
+            yIsMoney={data.cumulative_benefit.y_is_money}
+            formatY={moneyAxisFormatter(data.expected_loss_avoided.value.decimals)}
+            ariaLabel={`${data.cumulative_benefit.y_axis_label} by ${data.cumulative_benefit.x_axis_label}, one line per policy`}
+          />
+          <Assumptions assumptions={assumptions} source={data.economics_source} />
+        </Pane>
+
+        <Pane
+          id="bands"
+          title="Band distribution"
+          operation="Loading the band distribution"
+          meta={dashboard.meta}
+          skeleton={{ columns: [{ key: 'band', width: '40%' }, { key: 'share', width: '60%' }], rows: 5, rowHeight: 32 }}
+        >
+          <ul style={{ listStyle: 'none', margin: 0, padding: 0 }}>
+            {data.band_distribution.map((bucket) => (
+              <li key={bucket.band} style={{ display: 'grid', gridTemplateColumns: '56px 1fr auto', alignItems: 'center', gap: 8, height: 'var(--spacing-row)', borderBottom: '1px solid var(--color-hairline)' }}>
+                <BandBadge band={bucket.band} describe={false} />
+                <span aria-hidden="true" style={{ height: 8, background: 'var(--color-hairline)', position: 'relative' }}>
+                  <span
+                    style={{
+                      position: 'absolute',
+                      inset: 0,
+                      width: `${Math.round(bucket.population_share * 100)}%`,
+                      background: `var(--color-band-${bucket.band.toLowerCase()})`,
+                    }}
+                  />
+                </span>
+                <span className="u-num" style={{ ...T_MICRO, color: 'var(--color-ink-muted)' }}>
+                  {count(bucket.accounts)} · {(bucket.population_share * 100).toFixed(1)}%
+                </span>
+              </li>
+            ))}
+          </ul>
+          <p style={{ ...T_MICRO, color: 'var(--color-ink-faint)', marginTop: 8 }}>
+            {count(totalAccounts)} scored accounts. Bands are ordered by observed bad rate on validation, and each
+            carries its letter and five-segment meter as well as its colour.
+          </p>
+        </Pane>
+      </div>
+
+      <Pane
+        id="patterns"
+        title="Latest patterns"
+        operation="Loading the pattern feed"
+        meta={dashboard.meta}
+        skeleton={{
+          columns: [
+            { key: 'rule', width: '44px' },
+            { key: 'account', width: '140px' },
+            { key: 'observed', width: 'minmax(0, 1fr)' },
+            { key: 'exposure', width: '140px', align: 'end' },
+            { key: 'seen', width: '190px', align: 'end' },
+          ],
+          rows: 6,
+        }}
+      >
+        {data.latest_patterns.length === 0 ? (
+          <p style={{ ...T_LABEL, color: 'var(--color-ink-muted)', maxWidth: '64ch' }}>
+            No rule crossed its threshold in {data.capacity.period_label}, although {count(data.alerts_generated)}{' '}
+            accounts were scored. A feed that is quiet because nothing fired is a result, and it is worth checking
+            the thresholds before reading it as a clean period.
+          </p>
+        ) : (
+          <ul style={{ listStyle: 'none', margin: 0, padding: 0 }}>
+            {data.latest_patterns.map((hit) => (
+              <li key={`${hit.rule_code}-${hit.account_key}`} style={{ display: 'grid', gridTemplateColumns: '44px 140px minmax(0, 1fr) 160px 200px', alignItems: 'center', gap: 8, minHeight: 'var(--spacing-row)', borderBottom: '1px solid var(--color-hairline)' }}>
+                <span title={`${hit.rule_code} · ${TYPOLOGY_META[hit.typology].reads}`} style={{ color: 'var(--color-ink-muted)' }}>
+                  <Icon name={glyphFor(hit.typology)} size={16} title={`${hit.rule_code} ${TYPOLOGY_META[hit.typology].name}`} />
+                </span>
+                <Link href={hit.case_href} style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-label)', color: 'var(--color-ink)' }}>
+                  {hit.account_key}
+                </Link>
+                <span style={{ ...T_LABEL, color: 'var(--color-ink-muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={hit.observed}>
+                  {hit.rule_code} · {hit.observed}
+                </span>
+                <span className="u-num" style={{ ...T_LABEL, textAlign: 'right', color: 'var(--color-ink)' }}>
+                  {compactFromMinor(hit.exposure.value.minor, hit.exposure.value.decimals)} {hit.exposure.value.currency}
+                </span>
+                <span style={{ textAlign: 'right' }}>
+                  <Timestamp iso={hit.first_seen} timeZone={timeZone} sense="first seen" />
+                </span>
+              </li>
+            ))}
+          </ul>
+        )}
+      </Pane>
+    </div>
+  );
+}
+
+/** A model-quality chip: the value, its delta, and the baseline the delta is against. */
+function Chip({ label, metric, lowerIsBetter = false }: { label: string; metric: { value: number; delta_vs_baseline: number | null; baseline_label: string | null; unit: string; ci: number[] | null }; lowerIsBetter?: boolean }): ReactElement {
+  const delta = metric.delta_vs_baseline;
+  const improving = delta === null ? null : lowerIsBetter ? delta < 0 : delta > 0;
+  return (
+    <div style={{ ...PANEL_SUNKEN, padding: '8px 10px', display: 'flex', flexDirection: 'column', ...GAP_TIGHT }} data-chip={label}>
+      <p style={{ ...T_LABEL, textTransform: 'uppercase', letterSpacing: '0.06em' }}>{label}</p>
+      <p style={{ display: 'flex', alignItems: 'baseline', gap: 6, margin: 0 }}>
+        <span className="u-num" style={{ fontFamily: 'var(--font-condensed)', fontSize: 'var(--text-kpi)', fontWeight: 600, color: 'var(--color-ink)' }}>
+          {metric.value.toFixed(metric.unit === 'Brier' ? 4 : 3)}
+        </span>
+        {delta !== null ? (
+          <span className="u-num" style={{ ...T_MICRO, color: improving === null ? 'var(--color-ink-faint)' : improving ? 'var(--color-state-done)' : 'var(--color-state-failed)' }}>
+            {delta > 0 ? '+' : ''}
+            {delta.toFixed(metric.unit === 'Brier' ? 4 : 3)} vs {metric.baseline_label ?? 'baseline'}
+          </span>
+        ) : (
+          <span style={{ ...T_MICRO, color: 'var(--color-ink-faint)' }}>no baseline recorded for this run</span>
+        )}
+        {metric.ci !== null && metric.ci.length === 2 ? (
+          <span className="u-num" style={{ ...T_MICRO, color: 'var(--color-ink-faint)' }}>
+            95% CI {metric.ci[0]?.toFixed(3)}–{metric.ci[1]?.toFixed(3)}
+          </span>
+        ) : null}
+      </p>
+    </div>
+  );
+}
+
+function Pending({ state }: { state: { isPending: boolean; failure: unknown } }): ReactElement {
+  return (
+    <p style={{ ...T_MICRO, color: 'var(--color-ink-faint)' }}>
+      {state.failure !== null ? 'The command strip failed to load; the rest of the page is unaffected.' : 'Loading the period economics.'}
+    </p>
+  );
+}
+

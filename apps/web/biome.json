@@ -1,0 +1,56 @@
+{
+  "$schema": "https://json.schemastore.org/biome",
+  "organizeImports": { "enabled": true, "ignore": ["node_modules", ".next", "out"] },
+  "files": {
+    "ignore": ["node_modules", ".next", "out", "playwright-report", "test-results", "src/design/tokens.ts", "src/design/icons/sprite.svg"],
+    "maxSize": 4194304
+  },
+  "formatter": {
+    "enabled": true,
+    "indentStyle": "space",
+    "indentWidth": 2,
+    "lineWidth": 120,
+    "formatWithErrors": false
+  },
+  "javascript": {
+    "formatter": {
+      "quoteStyle": "single",
+      "jsxQuoteStyle": "double",
+      "semicolons": "always",
+      "trailingCommas": "all",
+      "arrowParentheses": "always"
+    }
+  },
+  "linter": {
+    "enabled": true,
+    "rules": {
+      "recommended": true,
+      "style": {
+        "noNonNullAssertion": "error",
+        "useConst": "error",
+        "noUnusedTemplateLiteral": "error"
+      },
+      "suspicious": {
+        "noArrayIndexKey": "off",
+        "noExplicitAny": "error"
+      },
+      "a11y": {
+        "useKeyWithClickEvents": "off",
+        "useButtonType": "error",
+        "noSvgWithoutTitle": "off",
+        "useSemanticElements": "off",
+        "useMediaCaption": "error"
+      },
+      "correctness": {
+        "useExhaustiveDependencies": "warn",
+        "noUnknownProperty": "off",
+        "noNodejsModules": "off"
+      },
+      "complexity": {
+        "noExcessiveCognitiveComplexity": "off",
+        "useLiteralKeys": "off"
+      },
+      "security": { "noDangerouslySetInnerHtml": "error" }
+    }
+  }
+}
