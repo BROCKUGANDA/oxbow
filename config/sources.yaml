@@ -69,6 +69,10 @@ sources:
     # 8.18 GB, of which the HI-Small scenario we ingest is ~510 MB.
     source_url: "https://www.kaggle.com/datasets/ealtman2019/ibm-transactions-for-anti-money-laundering-aml"
     retrieval: "scripts/download_data.py"
+    # ACQUISITION SCOPE: the dataset ships six bundles — HI and LI (high/low injection)
+    # crossed with Small, Medium and Large. ONLY HI-Small is acquired here; the other
+    # five are not on this host and are not hashed, so every count quoted from this
+    # source describes HI-Small alone and must be labelled as such wherever it appears.
     # --- MEASURED AGAINST REAL BYTES, 2026-09-26, and it contradicts this block ----
     # The archive this slug serves is the 2023 revision of the corpus (citation:
     # arXiv 2306.16424). Its transaction file is HI-Small_Trans.csv, NOT
@@ -82,12 +86,16 @@ sources:
     # (CYCLE, FAN-OUT, GATHER-SCATTER, SCATTER-GATHER, BIPARTITE, STACK, RANDOM).
     # Measured over all 5,078,345 rows (DEV-013): laundering prevalence 0.1019%,
     # median account degree 10.0, 647,939 directed edges once self-loops are set
-    # aside, and 591,212 rows that are self-edges (mostly Payment Format =
-    # Reinvestment). On the first 50,000 rows specifically: 114 rows whose
-    # receiving and payment currency differ, 19 amounts with three or more decimal
-    # places, and nine currency NAMES rather than ISO-4217 codes ("US Dollar",
-    # "Euro", "Yuan", "Rupee", "UK Pound", "Mexican Peso", "Bitcoin",
-    # "Australian Dollar", "Yen").
+    # aside, and 591,212 rows (11.642%) that are self-edges — every one of the
+    # 481,056 Payment Format = Reinvestment rows among them. Counts for the whole
+    # file, not a sample: 15 currency NAMES rather than ISO-4217 codes ("US Dollar",
+    # "Euro", "Swiss Franc", "Yuan", "Shekel", "Rupee", "UK Pound", "Ruble", "Yen",
+    # "Bitcoin", "Canadian Dollar", "Australian Dollar", "Mexican Peso", "Saudi
+    # Riyal", "Brazil Real"), 72,170 rows whose receiving and payment currencies
+    # differ, 72,158 where the two amounts differ, 146,066 amounts with more than
+    # two decimals (all Bitcoin, all six places), and 9 rows duplicated across all
+    # eleven columns. The 50,000-row sample an earlier revision of this comment
+    # quoted is a subset of the above and was provisional.
     # The two entries this block used to carry, transactions.csv and patterns.csv,
     # are member names of the *2019* revision of the corpus. This slug serves the
     # 2023 revision, where they do not exist; a hash slot for a file that is not
@@ -135,11 +143,20 @@ sources:
       cycles, stacks, gather-scatter. This is the corpus that proves network
       detection, because it carries explicit typology labels.
     label_caveat: >-
-      Labelled typologies are curated, not independently verified. A labelled
-      cycle is a research annotation, not a prosecuted case.
+      Is Laundering is a curated research annotation, not a prosecuted case, and it
+      is the corpus's ONLY label column: 5,177 of 5,078,345 rows. Typology
+      membership is not a label at all — it comes from the annotated attempt blocks
+      in HI-Small_Patterns.txt, which cover just 3,209 of those 5,177 positives, so
+      1,968 laundering rows carry no typology and a row with no typology is
+      unlabeled rather than clean. No threshold-flag concept exists here, so
+      label_is_flagged is 0 with the meaning "no equivalent", never "checked and
+      cleared".
     known_biases:
-      - "Curated synthetic-scale corpus; account identifiers are already pseudonymous."
-      - "Typology labels are not balanced across categories."
+      - "Synthetic injection over a simulated base; the injected patterns are designed, not observed."
+      - "11.642% of rows are self-transfers. They are carried by ingest and excluded at the graph layer, not treated as errors."
+      - "Minute-precision timestamps with no declared zone: instants are read in the zone named by config/pipeline.yaml ibmaml.source_timezone_assumption, which is an assumption."
+      - "Amount Paid and Amount Received differ on 72,158 rows; canonical v1 has one amount slot, so the spread is dropped."
+      - "Typology labels are not balanced across categories (716 GATHER-SCATTER down to 191 RANDOM)."
 
   # --- cite only, NEVER ingested -----------------------------------------
   - id: elliptic

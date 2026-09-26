@@ -188,6 +188,30 @@ def pair_aggregates(frame: pl.DataFrame) -> pl.DataFrame:
     )
 
 
+def self_transfer_totals(frame: pl.DataFrame) -> tuple[tuple[str, int], ...]:
+    """Value the self-transfers moved, per currency, in minor units.
+
+    The counted half of the self-transfer rule. A corpus where a tenth of the rows
+    are ``A -> A`` has to be able to say how much money that was *as well as* how
+    many rows, because excluding 591 k reinvestment entries from every aggregate
+    without stating their value would under-report the corpus by that value.
+
+    Keyed by currency and never flattened — :func:`oxbow.graph.events.require_single_currency`
+    is the only place a currency dimension may disappear, and this is not it. The
+    sums are ``Int64`` minor units, so no float touches an amount (01 B, DEV-005).
+    """
+    totals = (
+        frame.filter(pl.col(DERIVED_SELF_COLUMN))
+        .group_by("currency")
+        .agg(pl.col("amount_minor").sum().cast(pl.Int64).alias("self_value_minor"))
+        .sort("currency")
+    )
+    return tuple(
+        (str(currency), int(value))
+        for currency, value in totals.select(["currency", "self_value_minor"]).iter_rows()
+    )
+
+
 def split_currency_pairs(pairs: pl.DataFrame) -> list[tuple[str, str, int]]:
     """Unordered ``(left, right, edge_count)`` with both directions merged.
 
@@ -246,5 +270,6 @@ __all__ = [
     "build_multigraph",
     "build_node_skeleton",
     "pair_aggregates",
+    "self_transfer_totals",
     "split_currency_pairs",
 ]

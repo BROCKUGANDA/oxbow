@@ -264,7 +264,7 @@ def test_arrivals_at_one_account_are_merged_per_level(cfg: Economics) -> None:
 def test_component_external_edges_are_excluded_and_counted(cfg: Economics) -> None:
     """The component is P3a's answer, so this layer must not widen it silently."""
     accounts, edges = chain()
-    leaking = edges + [edge("txn:leak", "ACC-A", "ACC-GHOST", 9 * ARRIVAL)]
+    leaking = [*edges, edge("txn:leak", "ACC-A", "ACC-GHOST", 9 * ARRIVAL)]
     graph = graph_from(cfg, accounts, leaking)
     assert graph.excluded_edges == 1
     assert graph.edge_count == 5

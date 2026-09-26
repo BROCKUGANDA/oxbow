@@ -1,176 +1,1542 @@
-# OXBOW feature specification.
-# Spec 5.2: features are computed strictly as of the split cutoff. The leakage
-# gate is a CI test: any feature computation touching a timestamp after
-# cutoff_ts fails the build.
+# OXBOW feature registry — the single declaration of what the feature layer computes.
 #
-# Owner: P2 (feature layer).
+# Plan §8 (P2): "Every feature in config/features.yaml declares an as-of timestamp and
+# a lookback window. Rolling aggregates computed with Polars over sorted time, NEVER
+# over the whole corpus."
 #
-# TWO INVARIANTS, both enforced by tests rather than by discipline:
-#  1. Every feature declares an as-of timestamp and a lookback window. Rolling
-#     aggregates are computed over sorted time within that window, NEVER over
-#     the whole corpus.
-#  2. A feature-spec HASH is written alongside the feature table. Change the spec,
-#     change the hash, and every downstream artifact is invalidated
-#     automatically. At scoring time the hash is compared against the one
-#     recorded at training; mismatch REFUSES to score (02 B seam 3).
+# THIS FILE IS THE CODE. `oxbow.features.registry` loads it and `oxbow.features.kinds`
+# dispatches on the declared `kind`; neither module contains a feature name. A feature
+# that is not declared here does not exist, and an undeclared kind, a missing lookback
+# or an empty sentence fails the load naming the feature. That inversion is deliberate:
+# a registry nobody can read is a feature list nobody can audit.
 #
-# target 60-75 features. feature_spec.yaml holds one plain-English sentence per
-# feature; it is both the SHAP panel's dictionary and the scorecard's attribute
-# labels.
+# ENTRY FIELDS (required unless marked optional)
+#   id                 column name in the feature matrix
+#   group              one of the nine plan §8 taxonomy groups
+#   sentence           ONE plain-English sentence. This string is the SHAP panel's
+#                      dictionary entry and the scorecard's attribute label, so it is
+#                      written for a reader who has never seen the code: no jargon, no
+#                      filler, no "this feature measures…".
+#   kind               which kernel computes it (see the kinds table below)
+#   as_of              row_event_ts | fold_scoped — the cutoff rule
+#   window             a duration, or lifetime | point_in_time | fold_scoped
+#   group_by           the partition key: entity, plus currency for money and
+#                      counterparty for pair-level counts
+#   dtype              int64 | float64 | int32 | bool
+#   null_policy        what a null means here, stated rather than left to inference
+#   leakage_sensitive  true | false, with `leakage_note` justifying it either way
+#   role               optional: feature (in the matrix, default) | intermediate
+#                      (consumed by other entries, never published)
+#   winsorise          optional: clip this column at the fitted percentile, features only
+#   source / where / agg / quantile / subject / value / formula / numerator /
+#   denominator / denominator_power / scale / a / b / field / rule_id / categories
+#                      optional, read only by the kinds that name them
+#
+# MONEY (DEV-005, plan §8): every money column is int64 minor units and named
+# `*_minor`. Money is never averaged, differenced or ratioed into a float: means and
+# shares are exact integer quotients (`sum // count`, `num * 10_000 // den` in basis
+# points). Where a float is the only sane answer — a robust z-score, a Benford
+# deviation, a centrality, a rule severity — the column is named as a score, its dtype
+# is float64, and its entry carries `declared_score_because`. Currency is part of the
+# partition key for every money aggregate, so a cross-currency sum is structurally
+# unavailable, and the build still fails loudly if one entity shows two currencies.
+#
+# TIME (03 C): ordering and windows read `event_ts_utc` only. Human-hours features read
+# `local_hour` / `event_date_local` only. No entry reads both to answer one question:
+# an ODD_HOUR signal computed from a UTC hour would flag an entire East African morning.
+#
+# AS-OF: the window is (cutoff − window, cutoff] with cutoff = the scored row's own
+# event_ts_utc, so the row's own fields are in scope and nothing after it can be.
+# Right-closed because the decision is taken at that instant with that instant already
+# known; fold cutoffs use the same rule with the fold boundary as the anchor.
 
-spec_version: 1
-target_feature_count: 60
+spec_version: 2
+code_version: "p2.1"
 
-# As-of semantics. `as_of` is the account's cutoff timestamp for the fold; every
-# window is [as_of - lookback, as_of] and is half-open at the top so a row
-# timestamped exactly at as_of is excluded from the feature that predicts as_of.
+# --- window semantics -----------------------------------------------------
 window_semantics:
-  as_of: fold_cutoff_ts
-  interval: "[as_of - lookback, as_of)"
-  sort_order: [ts_utc, txn_id]     # the codebase-wide total order
-  # Features are computed per window from a SEALED window. A late row lands in
-  # the next window and increments a late_arrival counter shown on the run, so a
-  # feature computed at 10:00 does not change when a 09:00 row arrives at 11:00.
+  as_of: row_event_ts
+  interval: "(event_ts_utc - window, event_ts_utc]"
+  fold_interval: "(fold_cutoff_ts - window, fold_cutoff_ts]"
+  sort_order: [event_ts_utc, txn_id] # the codebase-wide total order (plan §7)
   sealed_windows: true
   late_arrival_counter: true
-  # Windows overlap by the longest rule lookback so a pattern spanning a
-  # boundary is visible in at least one window.
+  # Windows overlap by the longest rule lookback so a pattern spanning a boundary is
+  # visible in at least one window (plan §8); hits are deduplicated by pattern
+  # signature, not by window. Both live in oxbow.backtest.splits, the one module
+  # allowed to compute windows.
   overlap_hours: 168
 
-# The longest lookback in the registry. This number is what the walk-forward
-# embargo must equal, because a 30-day rolling feature computed just after the
-# boundary would otherwise see training-period data.
+# The longest rolling lookback in the registry. The split module asserts that this
+# equals walk_forward.embargo_days in config/splits.yaml: an embargo shorter than the
+# longest feature window would let a training row read test-period data.
 max_lookback_days: 30
 
+# --- taxonomy -------------------------------------------------------------
 groups:
-  volume_value:
-    - { name: txn_count_1d,          lookback_days: 1,  desc: "Transactions in the last day" }
-    - { name: txn_count_7d,          lookback_days: 7,  desc: "Transactions in the last 7 days" }
-    - { name: txn_count_30d,         lookback_days: 30, desc: "Transactions in the last 30 days" }
-    - { name: amount_sum_in_30d,      lookback_days: 30, desc: "Total value received in 30 days" }
-    - { name: amount_sum_out_30d,     lookback_days: 30, desc: "Total value sent in 30 days" }
-    - { name: amount_mean_in_30d,     lookback_days: 30, desc: "Average value received" }
-    - { name: amount_median_in_30d,   lookback_days: 30, desc: "Typical value received" }
-    - { name: amount_std_in_30d,      lookback_days: 30, desc: "Spread of values received" }
-    - { name: amount_max_in_30d,      lookback_days: 30, desc: "Largest single receipt" }
-    - { name: in_out_amount_ratio_30d, lookback_days: 30, desc: "Value received divided by value sent" }
-    - { name: net_flow_30d,           lookback_days: 30, desc: "Value received minus value sent" }
-    - { name: amount_entropy_30d,     lookback_days: 30, desc: "How varied the transaction amounts are" }
-    - { name: benford_first_digit_dev, lookback_days: 30, desc: "How far the leading digits depart from Benford's law" }
+  - volume_value
+  - counterparty
+  - temporal
+  - graph_local
+  - graph_global
+  - graph_typology
+  - balance_proxy
+  - exposure
+  - rule_derived
 
-  counterparty:
-    - { name: unique_counterparties_in_30d,  lookback_days: 30, desc: "Distinct accounts that paid this one" }
-    - { name: unique_counterparties_out_30d, lookback_days: 30, desc: "Distinct accounts this one paid" }
-    - { name: counterparty_churn_rate_30d,   lookback_days: 30, desc: "Share of counterparties new this period" }
-    - { name: repeat_counterparty_share_30d, lookback_days: 30, desc: "Share of transactions with a repeat counterparty" }
-    - { name: new_counterparty_ratio_7d,     lookback_days: 7,  desc: "Share of counterparties never seen before" }
-    - { name: new_counterparty_ratio_30d,    lookback_days: 30, desc: "Share of counterparties never seen before, monthly" }
-    - { name: herfindahl_concentration_30d,  lookback_days: 30, desc: "How concentrated volume is in one counterparty" }
+# --- kinds ----------------------------------------------------------------
+# The dispatch table. Every kind here has exactly one implementation in
+# oxbow.features.kinds and the two are cross-checked at import: a registry entry
+# naming a kind that is not declared here fails the load, and a declared kind with no
+# implementation fails the import. Neither list may contain a feature name.
+kinds:
+  window_agg: "aggregate over (cutoff - window, cutoff] within group_by, honouring `where`"
+  forward_window: "aggregate over [cutoff, cutoff + window): role 'outcome' only, never a matrix column"
+  distinct_in_window: "count of key first-occurrences in the window; the subject must be a timestamp-ordered label"
+  cumulative_distinct: "how many distinct subjects the partition has ever met, as of each row"
+  first_seen_flag: "1 on the first row that ever pairs this group with this subject"
+  quotient_int: "exact integer ratio of two declared features, scaled then floored"
+  diff_int: "exact integer difference of two declared features"
+  row_flag: "boolean predicate over the row's own canonical fields"
+  row_value: "int64 value derived from the row's own canonical fields"
+  event_field: "row field carried as a code from a declared, sorted category list"
+  float_stat: "declared float score over a trailing window: robust z, burstiness, Benford"
+  recency: "whole hours between the cutoff and the last row matching `where`"
+  cumulative: "lifetime as-of quantity: everything in the group up to the cutoff"
+  graph_node: "fold-sealed node attribute supplied by the P3a graph layer"
+  rule_field: "fold-sealed rule severity supplied by the P3b rules layer"
 
-  temporal:
-    - { name: txns_per_active_day_30d,     lookback_days: 30, desc: "Transactions per day on days with activity" }
-    - { name: interarrival_mean_30d,       lookback_days: 30, desc: "Average gap between transactions" }
-    - { name: interarrival_std_30d,        lookback_days: 30, desc: "Variability in those gaps" }
-    - { name: interarrival_min_30d,        lookback_days: 30, desc: "Shortest gap between transactions" }
-    - { name: burstiness_fano_30d,         lookback_days: 30, desc: "Whether activity comes in bursts rather than steadily" }
-    - { name: hour_of_day_entropy_30d,     lookback_days: 30, desc: "How spread activity is across the day" }
-    - { name: weekend_share_30d,           lookback_days: 30, desc: "Share of activity at the weekend" }
-    - { name: dormancy_length_days,        lookback_days: 30, desc: "Days of silence before the most recent activity" }
-    - { name: time_to_next_transfer_h,     lookback_days: 30, desc: "Hours between receiving money and sending it on" }
+# --- the registry ---------------------------------------------------------
+features:
+  # =======================================================================
+  # volume / value
+  # =======================================================================
+  # Zero-amount rows are balance probes: kept, flagged, and excluded from value
+  # features by the `*_nonzero` predicates those features name (plan §8, 03 D).
+  - id: is_zero_value
+    group: volume_value
+    role: intermediate
+    sentence: "Marks a transaction that moved no money at all, which is how a balance probe looks."
+    kind: row_flag
+    predicate: zero_amount
+    as_of: row_event_ts
+    window: point_in_time
+    group_by: [entity]
+    dtype: bool
+    null_policy: never_null
+    leakage_sensitive: false
+    leakage_note: "reads only the scored row's own amount, so there is no window to leak through"
+  - id: txn_count_in_24h
+    group: volume_value
+    sentence: "How many transactions this account took part in during the previous day."
+    kind: window_agg
+    agg: count
+    source: row_unit
+    where: always
+    as_of: row_event_ts
+    window: 24h
+    group_by: [entity]
+    dtype: int64
+    null_policy: never_null
+    leakage_sensitive: true
+    leakage_note: "a count over a trailing day is only honest if rows after the cutoff cannot enter it"
+  - id: txn_count_in_30d
+    group: volume_value
+    sentence: "How many transactions this account took part in during the previous month."
+    kind: window_agg
+    agg: count
+    source: row_unit
+    where: always
+    as_of: row_event_ts
+    window: 30d
+    group_by: [entity]
+    dtype: int64
+    null_policy: never_null
+    leakage_sensitive: true
+    leakage_note: "trailing thirty-day window; its length is what max_lookback_days and the embargo agree on"
+  - id: zero_value_count_30d
+    group: volume_value
+    sentence: "How many times last month this account sent a transaction worth nothing to test the water."
+    kind: window_agg
+    agg: count
+    source: row_unit
+    where: is_zero_value
+    as_of: row_event_ts
+    window: 30d
+    group_by: [entity]
+    dtype: int64
+    null_policy: never_null
+    leakage_sensitive: true
+    leakage_note: "trailing count filtered on a row-local flag"
+  - id: amount_in_24h_minor
+    group: volume_value
+    sentence: "Total money received in the previous day, in minor units."
+    kind: window_agg
+    agg: sum
+    source: amount_minor
+    where: is_inflow_nonzero
+    as_of: row_event_ts
+    window: 24h
+    group_by: [entity, currency]
+    dtype: int64
+    null_policy: never_null
+    winsorise: true
+    leakage_sensitive: true
+    leakage_note: "sums money over a trailing day; a future receipt would inflate it"
+  - id: amount_in_30d_minor
+    group: volume_value
+    sentence: "Total money received in the previous month, in minor units."
+    kind: window_agg
+    agg: sum
+    source: amount_minor
+    where: is_inflow_nonzero
+    as_of: row_event_ts
+    window: 30d
+    group_by: [entity, currency]
+    dtype: int64
+    null_policy: never_null
+    winsorise: true
+    leakage_sensitive: true
+    leakage_note: "sums money over a trailing month"
+  - id: amount_out_24h_minor
+    group: volume_value
+    sentence: "Total money sent in the previous day, in minor units."
+    kind: window_agg
+    agg: sum
+    source: amount_minor
+    where: is_outflow_nonzero
+    as_of: row_event_ts
+    window: 24h
+    group_by: [entity, currency]
+    dtype: int64
+    null_policy: never_null
+    winsorise: true
+    leakage_sensitive: true
+    leakage_note: "sums money out over a trailing day"
+  - id: amount_out_30d_minor
+    group: volume_value
+    sentence: "Total money sent in the previous month, in minor units."
+    kind: window_agg
+    agg: sum
+    source: amount_minor
+    where: is_outflow_nonzero
+    as_of: row_event_ts
+    window: 30d
+    group_by: [entity, currency]
+    dtype: int64
+    null_policy: never_null
+    winsorise: true
+    leakage_sensitive: true
+    leakage_note: "sums money out over a trailing month"
+  - id: inflow_count_30d
+    group: volume_value
+    sentence: "How many times money arrived in the previous month."
+    kind: window_agg
+    agg: count
+    source: row_unit
+    where: is_inflow
+    as_of: row_event_ts
+    window: 30d
+    group_by: [entity]
+    dtype: int64
+    null_policy: never_null
+    leakage_sensitive: true
+    leakage_note: "trailing count over a direction-filtered window"
+  - id: net_flow_30d_minor
+    group: volume_value
+    sentence: "Money received minus money sent over the previous month, in minor units."
+    kind: diff_int
+    a: amount_in_30d_minor
+    b: amount_out_30d_minor
+    as_of: row_event_ts
+    window: 30d
+    group_by: [entity]
+    dtype: int64
+    null_policy: never_null
+    winsorise: true
+    leakage_sensitive: true
+    leakage_note: "difference of two trailing thirty-day sums, both anchored at the scored row"
+  - id: typical_movement_30d_minor
+    group: volume_value
+    sentence: "A middle-sized movement of the same kind as this one, in or out, over the previous month."
+    kind: window_agg
+    agg: median
+    source: amount_minor
+    where: always
+    as_of: row_event_ts
+    window: 30d
+    group_by: [entity, direction]
+    dtype: int64
+    null_policy: null_when_window_empty
+    leakage_sensitive: true
+    leakage_note: "an order statistic over a trailing window; reading forward would move it"
+  - id: largest_movement_30d_minor
+    group: volume_value
+    sentence: "The single largest movement of the same kind as this one last month, in minor units."
+    kind: window_agg
+    agg: max
+    source: amount_minor
+    where: always
+    as_of: row_event_ts
+    window: 30d
+    group_by: [entity, direction]
+    dtype: int64
+    null_policy: null_when_window_empty
+    winsorise: true
+    leakage_sensitive: true
+    leakage_note: "a maximum over a trailing window"
+  - id: amount_in_mean_30d_minor
+    group: volume_value
+    sentence: "The average size of a receipt last month, in whole minor units."
+    kind: quotient_int
+    numerator: amount_in_30d_minor
+    denominator: inflow_count_30d
+    scale: 1
+    as_of: row_event_ts
+    window: 30d
+    group_by: [entity]
+    dtype: int64
+    null_policy: null_when_zero_denominator
+    winsorise: true
+    leakage_sensitive: true
+    leakage_note: "quotient of two trailing aggregates, so it inherits their window"
+  - id: balance_kept_share_30d_bps
+    group: volume_value
+    sentence: "Of everything received last month, how much stayed rather than being sent straight on."
+    kind: quotient_int
+    numerator: net_flow_30d_minor
+    denominator: amount_in_30d_minor
+    scale: 10_000
+    as_of: row_event_ts
+    window: 30d
+    group_by: [entity]
+    dtype: int64
+    null_policy: null_when_zero_denominator
+    leakage_sensitive: true
+    leakage_note: "ratio of two trailing aggregates; a pass-through mule sits near zero"
+  - id: amount_robust_z_last
+    group: volume_value
+    sentence: "How out of the ordinary this amount is against the account's own recent history."
+    kind: float_stat
+    formula: robust_z
+    source: amount_minor
+    where: is_nonzero
+    as_of: row_event_ts
+    window: 30d
+    group_by: [entity]
+    dtype: float64
+    null_policy: null_when_indeterminate
+    leakage_sensitive: true
+    leakage_note: "standardised against a trailing thirty-day baseline, never against a corpus mean fitted later"
+    declared_score_because: "a standardised deviation is a score in minor-unit-free units; it is float by definition and never summed"
+  - id: benford_deviation_30d
+    group: volume_value
+    sentence: "How far the leading digits of this account's recent amounts drift from the pattern natural spending follows."
+    kind: float_stat
+    formula: benford_dev
+    source: amount_minor
+    where: is_nonzero
+    as_of: row_event_ts
+    window: 30d
+    group_by: [entity]
+    dtype: float64
+    null_policy: null_when_indeterminate
+    leakage_sensitive: true
+    leakage_note: "mean log-mantissa deviation over a trailing window of the account's own amounts"
+    declared_score_because: "a deviation scaled to [0,1] against Benford's law; a statistic, not money"
 
-  graph_local:
-    - { name: in_degree,                   lookback_days: 30, desc: "Distinct accounts that paid this one" }
-    - { name: out_degree,                  lookback_days: 30, desc: "Distinct accounts this one paid" }
-    - { name: degree_ratio,                lookback_days: 30, desc: "Out-degree divided by in-degree" }
-    - { name: neighbourhood_1hop,          lookback_days: 30, desc: "Accounts one payment away" }
-    - { name: neighbourhood_2hop,          lookback_days: 30, desc: "Accounts two payments away" }
-    - { name: clustering_coefficient,      lookback_days: 30, desc: "How tightly this account's contacts also trade with each other" }
-    - { name: reciprocity,                 lookback_days: 30, desc: "Share of counterparties that trade both ways" }
-    - { name: triangle_count,              lookback_days: 30, desc: "Closed three-party trading rings" }
+  # =======================================================================
+  # counterparty
+  # =======================================================================
+  # Distinct counts use the first-in-window identity: the number of distinct keys in a
+  # window equals the number of rows in it whose previous occurrence of that key sits
+  # before the window start. Exact, backward-only and vectorised, which a rolling
+  # n_unique is not.
+  - id: is_self_transfer
+    group: counterparty
+    role: intermediate
+    sentence: "Marks a transaction where the sender and the receiver are the same account."
+    kind: row_flag
+    predicate: self_transfer
+    as_of: row_event_ts
+    window: point_in_time
+    group_by: [entity]
+    dtype: bool
+    null_policy: never_null
+    leakage_sensitive: false
+    leakage_note: "a property of the scored row's two account fields"
+  - id: not_self_transfer
+    group: counterparty
+    role: intermediate
+    sentence: "Marks a transaction with a real counterparty on the other end."
+    kind: row_flag
+    predicate: not_self_transfer
+    as_of: row_event_ts
+    window: point_in_time
+    group_by: [entity]
+    dtype: bool
+    null_policy: never_null
+    leakage_sensitive: false
+    leakage_note: "a property of the scored row"
+  - id: is_reversal
+    group: counterparty
+    sentence: "Marks a transaction that reverses an earlier one, which is a refund and not a cycle back to the sender."
+    kind: row_flag
+    predicate: reversal_txn
+    as_of: row_event_ts
+    window: point_in_time
+    group_by: [entity]
+    dtype: bool
+    null_policy: never_null
+    leakage_sensitive: false
+    leakage_note: "a property of the scored row's type and its linked predecessor"
+  - id: reversal_linked_count_30d
+    group: counterparty
+    sentence: "How many reversals involving this account happened last month."
+    kind: window_agg
+    agg: count
+    source: row_unit
+    where: is_reversal
+    as_of: row_event_ts
+    window: 30d
+    group_by: [entity]
+    dtype: int64
+    null_policy: never_null
+    leakage_sensitive: true
+    leakage_note: "trailing count of a row-local flag"
+  - id: lifetime_counterparties
+    group: counterparty
+    sentence: "How many different accounts this one has ever dealt with, up to this transaction."
+    kind: cumulative_distinct
+    subject: counterparty
+    where: not_self_transfer
+    as_of: row_event_ts
+    window: lifetime
+    group_by: [entity]
+    dtype: int64
+    null_policy: never_null
+    leakage_sensitive: true
+    leakage_note: "distinct count over a trailing window via the first-in-window identity"
+  - id: lifetime_inflow_counterparties
+    group: counterparty
+    sentence: "How many different accounts have ever paid this one, up to this transaction."
+    kind: cumulative_distinct
+    subject: counterparty
+    where: is_inflow_not_self
+    as_of: row_event_ts
+    window: lifetime
+    group_by: [entity]
+    dtype: int64
+    null_policy: never_null
+    leakage_sensitive: true
+    leakage_note: "distinct senders over a trailing window"
+  - id: lifetime_outflow_counterparties
+    group: counterparty
+    sentence: "How many different accounts this one has ever paid, up to this transaction."
+    kind: cumulative_distinct
+    subject: counterparty
+    where: is_outflow_not_self
+    as_of: row_event_ts
+    window: lifetime
+    group_by: [entity]
+    dtype: int64
+    null_policy: never_null
+    leakage_sensitive: true
+    leakage_note: "distinct recipients over a trailing window"
+  - id: is_counterparty_first_ever
+    group: counterparty
+    role: intermediate
+    sentence: "Counts the first time this account has ever been seen dealing with that counterparty."
+    kind: first_seen_flag
+    subject: counterparty
+    where: not_self_transfer
+    as_of: row_event_ts
+    window: lifetime
+    group_by: [entity]
+    dtype: int64
+    null_policy: never_null
+    leakage_sensitive: true
+    leakage_note: "'first ever' is a backward minimum over the pair's own history; a later duplicate cannot undo it"
+  - id: counterparties_first_seen_30d
+    group: counterparty
+    sentence: "How many brand-new counterparties appeared during the previous month."
+    kind: window_agg
+    agg: sum
+    source: is_counterparty_first_ever
+    where: always
+    as_of: row_event_ts
+    window: 30d
+    group_by: [entity]
+    dtype: int64
+    null_policy: never_null
+    leakage_sensitive: true
+    leakage_note: "sum of a backward first-seen flag over a trailing window"
+  - id: new_counterparty_share_of_network_bps
+    group: counterparty
+    sentence: "Of every account this one has ever met, how large a share first appeared last month."
+    kind: quotient_int
+    numerator: counterparties_first_seen_30d
+    denominator: lifetime_counterparties
+    scale: 10_000
+    as_of: row_event_ts
+    window: 30d
+    group_by: [entity]
+    dtype: int64
+    null_policy: null_when_zero_denominator
+    leakage_sensitive: true
+    leakage_note: "ratio of two trailing aggregates"
+  - id: nonself_visit_count_30d
+    group: counterparty
+    role: intermediate
+    sentence: "How many transactions last month involved a real counterparty rather than the account itself."
+    kind: window_agg
+    agg: count
+    source: row_unit
+    where: not_self_transfer
+    as_of: row_event_ts
+    window: 30d
+    group_by: [entity]
+    dtype: int64
+    null_policy: never_null
+    leakage_sensitive: true
+    leakage_note: "trailing count over a counterparty-filtered window"
+  - id: repeat_visit_count_30d
+    group: counterparty
+    role: intermediate
+    sentence: "How many of last month's transactions repeated an already-known counterparty."
+    kind: diff_int
+    a: nonself_visit_count_30d
+    b: counterparties_first_seen_30d
+    as_of: row_event_ts
+    window: 30d
+    group_by: [entity]
+    dtype: int64
+    null_policy: never_null
+    leakage_sensitive: true
+    leakage_note: "difference of two trailing counts"
+  - id: nonzero_inflow_count_30d
+    group: volume_value
+    role: intermediate
+    sentence: "How many receipts of a real value arrived last month."
+    kind: window_agg
+    agg: count
+    source: row_unit
+    where: is_inflow_nonzero
+    as_of: row_event_ts
+    window: 30d
+    group_by: [entity]
+    dtype: int64
+    null_policy: never_null
+    leakage_sensitive: true
+    leakage_note: "trailing count over a filtered window"
+  - id: repeat_visit_share_30d_bps
+    group: counterparty
+    sentence: "What share of last month's transactions went to someone this account already knew."
+    kind: quotient_int
+    numerator: repeat_visit_count_30d
+    denominator: txn_count_in_30d
+    scale: 10_000
+    as_of: row_event_ts
+    window: 30d
+    group_by: [entity]
+    dtype: int64
+    null_policy: null_when_zero_denominator
+    leakage_sensitive: true
+    leakage_note: "ratio of two trailing aggregates"
+  - id: pair_visit_count_30d
+    group: counterparty
+    sentence: "How many times this account dealt with the counterparty on this transaction during the previous month."
+    kind: window_agg
+    agg: count
+    source: row_unit
+    where: not_self_transfer
+    as_of: row_event_ts
+    window: 30d
+    group_by: [entity, counterparty]
+    dtype: int64
+    null_policy: never_null
+    leakage_sensitive: true
+    leakage_note: "trailing window partitioned by the account-counterparty pair"
+  - id: largest_pair_visit_count_30d
+    group: counterparty
+    role: intermediate
+    sentence: "How often this account repeated its single most-used counterparty last month."
+    kind: window_agg
+    agg: max
+    source: pair_visit_count_30d
+    where: always
+    as_of: row_event_ts
+    window: 30d
+    group_by: [entity]
+    dtype: int64
+    null_policy: never_null
+    leakage_sensitive: true
+    leakage_note: "maximum of a trailing per-pair count, itself trailing"
+  - id: top_counterparty_share_30d_bps
+    group: counterparty
+    sentence: "How much of last month's activity went to the one counterparty it used most."
+    kind: quotient_int
+    numerator: largest_pair_visit_count_30d
+    denominator: txn_count_in_30d
+    scale: 10_000
+    as_of: row_event_ts
+    window: 30d
+    group_by: [entity]
+    dtype: int64
+    null_policy: null_when_zero_denominator
+    leakage_sensitive: true
+    leakage_note: "ratio of two trailing aggregates"
+  - id: is_amount_first_ever
+    group: counterparty
+    role: intermediate
+    sentence: "Counts the first time this account has ever used that exact amount."
+    kind: first_seen_flag
+    subject: amount_minor
+    where: is_nonzero
+    as_of: row_event_ts
+    window: lifetime
+    group_by: [entity]
+    dtype: int64
+    null_policy: never_null
+    leakage_sensitive: true
+    leakage_note: "a first-ever marker looks only at the account's own earlier rows"
+  - id: amounts_first_seen_30d
+    group: counterparty
+    role: intermediate
+    sentence: "How many never-before-used amounts appeared last month."
+    kind: window_agg
+    agg: sum
+    source: is_amount_first_ever
+    where: always
+    as_of: row_event_ts
+    window: 30d
+    group_by: [entity]
+    dtype: int64
+    null_policy: never_null
+    leakage_sensitive: true
+    leakage_note: "sum of a backward first-ever flag over a trailing window"
+  - id: lifetime_distinct_amounts
+    group: counterparty
+    sentence: "How many different amounts this account has ever used, up to this transaction."
+    kind: cumulative_distinct
+    subject: amount_minor
+    where: is_nonzero
+    as_of: row_event_ts
+    window: lifetime
+    group_by: [entity]
+    dtype: int64
+    null_policy: never_null
+    leakage_sensitive: true
+    leakage_note: "distinct count over a trailing window"
+  - id: amount_repeat_count_30d
+    group: counterparty
+    role: intermediate
+    sentence: "How many of last month's receipts used an amount this account had used before."
+    kind: diff_int
+    a: nonzero_inflow_count_30d
+    b: amounts_first_seen_30d
+    as_of: row_event_ts
+    window: 30d
+    group_by: [entity]
+    dtype: int64
+    null_policy: never_null
+    leakage_sensitive: true
+    leakage_note: "difference of two trailing counts"
+  - id: amount_repetition_30d_bps
+    group: counterparty
+    sentence: "What share of last month's receipts repeated an amount this account had already used."
+    kind: quotient_int
+    numerator: amount_repeat_count_30d
+    denominator: nonzero_inflow_count_30d
+    scale: 10_000
+    as_of: row_event_ts
+    window: 30d
+    group_by: [entity]
+    dtype: int64
+    null_policy: null_when_zero_denominator
+    leakage_sensitive: true
+    leakage_note: "ratio of a trailing count to a trailing distinct count"
 
-  graph_global:
-    # Recomputed PER FOLD from that fold's edges only, never once over the full
-    # graph (spec 7.2).
-    - { name: pagerank,                   lookback_days: 30, desc: "How central this account is in the payment network" }
-    - { name: betweenness_approx,         lookback_days: 30, desc: "How often this account lies on others' shortest paths" }
-    - { name: eigenvector_centrality,     lookback_days: 30, desc: "Influence within densely connected groups" }
-    - { name: k_core_number,              lookback_days: 30, desc: "The tightest group this account belongs to" }
-    - { name: community_id,               lookback_days: 30, desc: "Which detected group this account belongs to" }
-    - { name: community_size,             lookback_days: 30, desc: "How many accounts share that group" }
-    - { name: intra_inter_community_ratio, lookback_days: 30, desc: "Share of value moving within the group rather than outside it" }
+  # =======================================================================
+  # temporal
+  # =======================================================================
+  # Hour and weekday features read local_hour / event_date_local. Gaps and windows read
+  # event_ts_utc. The two never answer the same question (03 C).
+  - id: gap_since_previous_event_s
+    group: temporal
+    role: intermediate
+    sentence: "Working value: seconds between this transaction and the account's previous one."
+    kind: row_value
+    value: gap_since_previous_event_s
+    as_of: row_event_ts
+    window: point_in_time
+    group_by: [entity]
+    dtype: int64
+    null_policy: null_without_prior_event
+    leakage_sensitive: true
+    leakage_note: "a previous event is by construction in the past; the kernel reads no further forward"
+  - id: dormancy_days_before_now
+    group: temporal
+    sentence: "How many days this account was silent immediately before this transaction."
+    kind: row_value
+    value: gap_since_previous_event_days
+    as_of: row_event_ts
+    window: point_in_time
+    group_by: [entity]
+    dtype: int64
+    null_policy: null_without_prior_event
+    leakage_sensitive: true
+    leakage_note: "difference of two past timestamps"
+  - id: interarrival_mean_30d_s
+    group: temporal
+    sentence: "The typical number of seconds between this account's transactions last month."
+    kind: window_agg
+    agg: mean_int
+    source: gap_since_previous_event_s
+    where: has_prior_event
+    as_of: row_event_ts
+    window: 30d
+    group_by: [entity]
+    dtype: int64
+    null_policy: null_when_window_empty
+    leakage_sensitive: true
+    leakage_note: "integer mean of backward gaps over a trailing window"
+  - id: interarrival_burstiness_30d
+    group: temporal
+    sentence: "Whether this account's transactions arrive in bursts or on a steady rhythm."
+    kind: float_stat
+    formula: burstiness
+    source: gap_since_previous_event_s
+    where: has_prior_event
+    as_of: row_event_ts
+    window: 30d
+    group_by: [entity]
+    dtype: float64
+    null_policy: null_when_indeterminate
+    leakage_sensitive: true
+    leakage_note: "ratio of two trailing statistics of backward gaps"
+    declared_score_because: "(sigma - mu) / (sigma + mu) is dimensionless; it describes shape, not money"
+  - id: active_days_30d
+    group: temporal
+    sentence: "How many separate local days this account first showed activity on during the previous month."
+    kind: distinct_in_window
+    subject: event_date_local
+    where: always
+    as_of: row_event_ts
+    window: 30d
+    group_by: [entity]
+    dtype: int64
+    null_policy: never_null
+    leakage_sensitive: true
+    leakage_note: "distinct local calendar days over a trailing window"
+  - id: txns_per_active_day_30d_bps
+    group: temporal
+    sentence: "How busy an active day looks for this account, in transactions per day."
+    kind: quotient_int
+    numerator: txn_count_in_30d
+    denominator: active_days_30d
+    scale: 10_000
+    as_of: row_event_ts
+    window: 30d
+    group_by: [entity]
+    dtype: int64
+    null_policy: null_when_zero_denominator
+    leakage_sensitive: true
+    leakage_note: "ratio of two trailing aggregates"
+  - id: is_overnight_hour
+    group: temporal
+    role: intermediate
+    sentence: "Marks a transaction that happened in the deployment timezone's quiet hours."
+    kind: row_flag
+    predicate: overnight_local_hour
+    as_of: row_event_ts
+    window: point_in_time
+    group_by: [entity]
+    dtype: bool
+    null_policy: never_null
+    leakage_sensitive: false
+    leakage_note: "reads local_hour, a field of the scored row, and never derives an hour from event_ts_utc"
+  - id: overnight_count_30d
+    group: temporal
+    role: intermediate
+    sentence: "How many of last month's transactions happened in the quiet hours."
+    kind: window_agg
+    agg: count
+    source: row_unit
+    where: is_overnight_hour
+    as_of: row_event_ts
+    window: 30d
+    group_by: [entity]
+    dtype: int64
+    null_policy: never_null
+    leakage_sensitive: true
+    leakage_note: "trailing count filtered on a row-local hour flag"
+  - id: overnight_share_30d_bps
+    group: temporal
+    sentence: "What share of this account's recent activity happened while almost nobody was awake."
+    kind: quotient_int
+    numerator: overnight_count_30d
+    denominator: txn_count_in_30d
+    scale: 10_000
+    as_of: row_event_ts
+    window: 30d
+    group_by: [entity]
+    dtype: int64
+    null_policy: null_when_zero_denominator
+    leakage_sensitive: true
+    leakage_note: "ratio of two trailing counts"
+  - id: is_weekend_local_date
+    group: temporal
+    role: intermediate
+    sentence: "Marks a transaction whose local calendar date was a Saturday or Sunday."
+    kind: row_flag
+    predicate: weekend_local_date
+    as_of: row_event_ts
+    window: point_in_time
+    group_by: [entity]
+    dtype: bool
+    null_policy: never_null
+    leakage_sensitive: false
+    leakage_note: "reads event_date_local, a field of the scored row"
+  - id: weekend_count_30d
+    group: temporal
+    role: intermediate
+    sentence: "How many of last month's transactions fell on a local weekend day."
+    kind: window_agg
+    agg: count
+    source: row_unit
+    where: is_weekend_local_date
+    as_of: row_event_ts
+    window: 30d
+    group_by: [entity]
+    dtype: int64
+    null_policy: never_null
+    leakage_sensitive: true
+    leakage_note: "trailing count filtered on the local calendar date"
+  - id: weekend_share_30d_bps
+    group: temporal
+    sentence: "What share of last month's transactions fell on a local weekend day."
+    kind: quotient_int
+    numerator: weekend_count_30d
+    denominator: txn_count_in_30d
+    scale: 10_000
+    as_of: row_event_ts
+    window: 30d
+    group_by: [entity]
+    dtype: int64
+    null_policy: null_when_zero_denominator
+    leakage_sensitive: true
+    leakage_note: "ratio of two trailing counts"
+  - id: local_hour_code
+    group: temporal
+    sentence: "The hour of day in the deployment timezone, which carries the daily rhythm of legitimate use."
+    kind: event_field
+    source: local_hour
+    categories: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23]
+    as_of: row_event_ts
+    window: point_in_time
+    group_by: [entity]
+    dtype: int32
+    null_policy: never_null
+    leakage_sensitive: false
+    leakage_note: "a field of the scored row, already projected into the deployment timezone at ingest"
+  - id: txn_type_code
+    group: temporal
+    sentence: "What kind of movement this was, from cash in at an agent to cash out at an agent."
+    kind: event_field
+    source: txn_type
+    categories: [CASH_IN, CASH_OUT, DEBIT, PAYMENT, REVERSAL, TRANSFER]
+    as_of: row_event_ts
+    window: point_in_time
+    group_by: [entity]
+    dtype: int32
+    null_policy: never_null
+    leakage_sensitive: false
+    leakage_note: "a field of the scored row"
+  - id: account_age_days
+    group: temporal
+    sentence: "How long this account has been observed before this transaction."
+    kind: cumulative
+    agg: age_days
+    source: event_ts_utc
+    as_of: row_event_ts
+    window: lifetime
+    group_by: [entity]
+    dtype: int64
+    null_policy: never_null
+    leakage_sensitive: true
+    leakage_note: "measured from the account's own first event, which is necessarily in the past"
 
-  graph_typology:
-    - { name: cycle_participation_count,  lookback_days: 30, desc: "How many circular flows this account sits in" }
-    - { name: max_cycle_retention,        lookback_days: 30, desc: "Largest share of money that returned around a loop" }
-    - { name: longest_chain_length,       lookback_days: 30, desc: "Longest sequence of shrinking payments through this account" }
-    - { name: max_fan_in_24h,             lookback_days: 30, desc: "Most distinct senders in any single day" }
-    - { name: max_fan_out_24h,            lookback_days: 30, desc: "Most distinct recipients in any single day" }
-    - { name: pass_through_ratio_1h,      lookback_days: 30, desc: "Share of money received then forwarded within an hour" }
+  # =======================================================================
+  # balance proxy
+  # =======================================================================
+  # PaySim's balance columns are documented as inconsistent with `amount`
+  # (contracts/raw_paysim.py). The disagreement is a FEATURE here, not a defect to
+  # repair: reconciling it would delete the signal (plan §8, 03 D).
+  - id: balance_delta_abs_minor
+    group: balance_proxy
+    role: intermediate
+    sentence: "Working value: how far the stated balance change disagrees with the stated amount."
+    kind: row_value
+    value: balance_delta_abs_minor
+    as_of: row_event_ts
+    window: point_in_time
+    group_by: [entity]
+    dtype: int64
+    null_policy: null_when_balance_absent
+    leakage_sensitive: false
+    leakage_note: "arithmetic on the scored row's own before and after balances"
+  - id: has_balance_delta
+    group: balance_proxy
+    role: intermediate
+    sentence: "Marks a transaction whose balances were reported at all."
+    kind: row_flag
+    predicate: has_balance_delta
+    as_of: row_event_ts
+    window: point_in_time
+    group_by: [entity]
+    dtype: bool
+    null_policy: never_null
+    leakage_sensitive: false
+    leakage_note: "a property of the scored row's own columns"
+  - id: is_balance_delta_mismatch
+    group: balance_proxy
+    role: intermediate
+    sentence: "Marks a transaction whose stated balances do not add up with the stated amount."
+    kind: row_flag
+    predicate: balance_delta_mismatch
+    as_of: row_event_ts
+    window: point_in_time
+    group_by: [entity]
+    dtype: bool
+    null_policy: null_when_balance_absent
+    leakage_sensitive: false
+    leakage_note: "a property of the scored row"
+  - id: balance_mismatch_count_30d
+    group: balance_proxy
+    role: intermediate
+    sentence: "How many times last month this account's own balances failed to add up."
+    kind: window_agg
+    agg: count
+    source: row_unit
+    where: is_balance_delta_mismatch
+    as_of: row_event_ts
+    window: 30d
+    group_by: [entity]
+    dtype: int64
+    null_policy: never_null
+    leakage_sensitive: true
+    leakage_note: "trailing count of a row-local flag"
+  - id: balance_mismatch_share_30d_bps
+    group: balance_proxy
+    sentence: "What share of this account's recent transactions carry a balance that does not reconcile."
+    kind: quotient_int
+    numerator: balance_mismatch_count_30d
+    denominator: txn_count_in_30d
+    scale: 10_000
+    as_of: row_event_ts
+    window: 30d
+    group_by: [entity]
+    dtype: int64
+    null_policy: null_when_zero_denominator
+    leakage_sensitive: true
+    leakage_note: "ratio of two trailing counts"
+  - id: balance_delta_total_30d_minor
+    group: balance_proxy
+    sentence: "How much of last month's stated balance movement failed to reconcile with the amounts, in minor units."
+    kind: window_agg
+    agg: sum
+    source: balance_delta_abs_minor
+    where: has_balance_delta
+    as_of: row_event_ts
+    window: 30d
+    group_by: [entity]
+    dtype: int64
+    null_policy: never_null
+    winsorise: true
+    leakage_sensitive: true
+    leakage_note: "maximum over a trailing window of row-local deltas"
+  - id: balance_after_mean_30d_minor
+    group: balance_proxy
+    sentence: "The balance this account was left at on average after a transaction, in whole minor units."
+    kind: window_agg
+    agg: mean_int
+    source: balance_after_minor
+    where: has_balance
+    as_of: row_event_ts
+    window: 30d
+    group_by: [entity]
+    dtype: int64
+    null_policy: null_when_window_empty
+    leakage_sensitive: true
+    leakage_note: "median of the account's own stated balance over a trailing window"
+  - id: is_zero_balance_after
+    group: balance_proxy
+    role: intermediate
+    sentence: "Marks a transaction that left the account empty."
+    kind: row_flag
+    predicate: zero_balance_after
+    as_of: row_event_ts
+    window: point_in_time
+    group_by: [entity]
+    dtype: bool
+    null_policy: null_when_balance_absent
+    leakage_sensitive: false
+    leakage_note: "a property of the scored row"
+  - id: drained_balance_count_30d
+    group: balance_proxy
+    sentence: "How many times last month this account was taken down to nothing."
+    kind: window_agg
+    agg: count
+    source: row_unit
+    where: is_zero_balance_after
+    as_of: row_event_ts
+    window: 30d
+    group_by: [entity]
+    dtype: int64
+    null_policy: never_null
+    leakage_sensitive: true
+    leakage_note: "trailing count of a row-local drain flag"
+  - id: drained_balance_share_30d_bps
+    group: balance_proxy
+    sentence: "How often this account's transactions empty it rather than leave a float behind."
+    kind: quotient_int
+    numerator: drained_balance_count_30d
+    denominator: txn_count_in_30d
+    scale: 10_000
+    as_of: row_event_ts
+    window: 30d
+    group_by: [entity]
+    dtype: int64
+    null_policy: null_when_zero_denominator
+    leakage_sensitive: true
+    leakage_note: "ratio of two trailing counts"
+  - id: since_last_drain_hours
+    group: balance_proxy
+    sentence: "How long it has been since this account was last emptied."
+    kind: recency
+    source: event_ts_utc
+    where: is_zero_balance_after
+    as_of: row_event_ts
+    window: lifetime
+    group_by: [entity]
+    dtype: int64
+    null_policy: null_without_prior_event
+    leakage_sensitive: true
+    leakage_note: "recency is measured strictly backwards from the scored row"
 
-  balance_proxy:
-    - { name: mean_balance_after_30d,     lookback_days: 30, desc: "Typical balance left after each transaction" }
-    - { name: zero_balance_after_rate_30d, lookback_days: 30, desc: "Share of transactions that emptied the account" }
-    - { name: drain_events_30d,           lookback_days: 30, desc: "Times the account was driven to near zero" }
-    - { name: inflow_to_zero_latency_h,   lookback_days: 30, desc: "Hours from receiving money to being emptied" }
-    # PaySim has known internal inconsistencies between amount and balance
-    # columns. The delta is computed as a FEATURE rather than corrected: the
-    # inconsistency is a signal, not an error (03 D: test_balance_delta_feature_present).
-    - { name: balance_delta_mismatch_rate_30d, lookback_days: 30, desc: "How often the stated balance disagrees with the stated amount" }
+  # =======================================================================
+  # exposure
+  # =======================================================================
+  # Plan §11 defines E_i, the money still interceptable AFTER the trigger. That is an
+  # outcome and the quant layer owns it; it must never enter the matrix. What lives
+  # here is the backward-looking extractability proxy, named so nobody confuses the
+  # two, and the fold-scoped downstream measure.
+  - id: extractable_share_24h_bps
+    group: exposure
+    sentence: "Of the money that arrived in the previous day, how much had already left again by this transaction."
+    kind: quotient_int
+    numerator: amount_out_24h_minor
+    denominator: amount_in_24h_minor
+    scale: 10_000
+    as_of: row_event_ts
+    window: 24h
+    group_by: [entity]
+    dtype: int64
+    null_policy: null_when_zero_denominator
+    leakage_sensitive: true
+    leakage_note: "ratio of two trailing one-day sums; the recovery window is read backwards"
+  - id: extract_velocity_bps
+    group: exposure
+    sentence: "How much of this account's monthly outflow leaves in a single day rather than over weeks."
+    kind: quotient_int
+    numerator: amount_out_24h_minor
+    denominator: amount_out_30d_minor
+    scale: 10_000
+    as_of: row_event_ts
+    window: 30d
+    group_by: [entity]
+    dtype: int64
+    null_policy: null_when_zero_denominator
+    leakage_sensitive: true
+    leakage_note: "ratio of a one-day trailing sum to a thirty-day trailing sum"
+  - id: downstream_outflow_24h_minor
+    group: exposure
+    sentence: "Money that left this account and the accounts it pays directly, inside the fold's network."
+    kind: graph_node
+    field: downstream_outflow_24h_minor
+    as_of: fold_scoped
+    window: fold_scoped
+    group_by: [entity]
+    dtype: int64
+    null_policy: null_when_unobserved
+    null_reason: "the fold's graph carried no downstream edge for this node, or none was supplied (DEV-011)"
+    winsorise: true
+    leakage_sensitive: true
+    leakage_note: "fold-scoped: the graph behind it is rebuilt from that fold's edges only"
 
-  exposure:
-    - { name: downstream_outflow_24h,     lookback_days: 1,  desc: "Value leaving this account and its direct contacts within a day" }
-    - { name: interceptable_share,        lookback_days: 1,  desc: "Share of that value still reachable in time to stop it" }
-    - { name: velocity_weighted_exposure, lookback_days: 1,  desc: "Exposure weighted by how fast the money moves" }
+  # =======================================================================
+  # graph local
+  # =======================================================================
+  # Supplied by P3a through a fold-sealed table and recomputed per fold. A null here is
+  # a documented state, not a gap to fill: on PaySim the network is absent altogether
+  # (DEV-011), and an imputed zero would assert the opposite of what was measured.
+  - id: graph_in_degree_30d
+    group: graph_local
+    sentence: "How many distinct accounts paid this one inside the fold's network."
+    kind: graph_node
+    field: in_degree
+    as_of: fold_scoped
+    window: fold_scoped
+    group_by: [entity]
+    dtype: int64
+    null_policy: null_when_unobserved
+    null_reason: "star-shaped corpus: no inbound edge exists to count (DEV-011)"
+    leakage_sensitive: true
+    leakage_note: "fold-scoped degree; edges after the fold cutoff would encode the test period"
+  - id: graph_out_degree_30d
+    group: graph_local
+    sentence: "How many distinct accounts this one paid inside the fold's network."
+    kind: graph_node
+    field: out_degree
+    as_of: fold_scoped
+    window: fold_scoped
+    group_by: [entity]
+    dtype: int64
+    null_policy: null_when_unobserved
+    null_reason: "external nodes never originate a payment, so out-degree is undefined rather than zero"
+    leakage_sensitive: true
+    leakage_note: "fold-scoped degree"
+  - id: graph_effective_fan_in_30d
+    group: graph_local
+    sentence: "How many ordinary accounts funnelled money into this one, with payment gateways excluded."
+    kind: graph_node
+    field: fan_in_effective
+    as_of: fold_scoped
+    window: fold_scoped
+    group_by: [entity]
+    dtype: int64
+    null_policy: null_when_unobserved
+    null_reason: "rails carry null by design: their fan-in is a customer base, not a pattern (plan §7)"
+    leakage_sensitive: true
+    leakage_note: "fold-scoped, and the rail typing that makes it meaningful is itself fold-scoped"
+  - id: graph_effective_fan_out_30d
+    group: graph_local
+    sentence: "How many ordinary accounts this one scattered money to, with payment gateways excluded."
+    kind: graph_node
+    field: fan_out_effective
+    as_of: fold_scoped
+    window: fold_scoped
+    group_by: [entity]
+    dtype: int64
+    null_policy: null_when_unobserved
+    null_reason: "external nodes originate nothing, and rails are excluded from fan scoring"
+    leakage_sensitive: true
+    leakage_note: "fold-scoped fan-out"
+  - id: graph_local_density_30d_bps
+    group: graph_local
+    sentence: "How much this account's counterparties also trade with each other, as a share."
+    kind: graph_node
+    field: local_density_bps
+    as_of: fold_scoped
+    window: fold_scoped
+    group_by: [entity]
+    dtype: int64
+    null_policy: null_when_unobserved
+    null_reason: "density needs two counterparties; below that it is undefined, not zero"
+    leakage_sensitive: true
+    leakage_note: "fold-scoped neighbourhood statistic"
+  - id: graph_self_transfer_count_30d
+    group: graph_local
+    sentence: "How many times this account moved money to itself, excluded from the network measures and kept visible here."
+    kind: graph_node
+    field: self_transfer_count
+    as_of: fold_scoped
+    window: fold_scoped
+    group_by: [entity]
+    dtype: int64
+    null_policy: null_when_unobserved
+    null_reason: "node absent from the fold's graph, which is not a count of zero"
+    leakage_sensitive: true
+    leakage_note: "fold-scoped count"
 
-  rule_derived:
-    # One severity column per rule R1 to R12, plus hit count and max severity.
-    - { name: rule_severity_R1,  lookback_days: 30, desc: "Strength of the rapid pass-through signal" }
-    - { name: rule_severity_R2,  lookback_days: 30, desc: "Strength of the gather signal" }
-    - { name: rule_severity_R3,  lookback_days: 30, desc: "Strength of the scatter signal" }
-    - { name: rule_severity_R4,  lookback_days: 30, desc: "Strength of the circular transfer signal" }
-    - { name: rule_severity_R5,  lookback_days: 30, desc: "Strength of the structuring signal" }
-    - { name: rule_severity_R6,  lookback_days: 30, desc: "Strength of the velocity break signal" }
-    - { name: rule_severity_R7,  lookback_days: 30, desc: "Strength of the dormant reactivation signal" }
-    - { name: rule_severity_R8,  lookback_days: 30, desc: "Strength of the unusual-hours signal" }
-    - { name: rule_severity_R9,  lookback_days: 30, desc: "Strength of the amount regime change signal" }
-    - { name: rule_severity_R10, lookback_days: 30, desc: "Strength of the rapid cash-out signal" }
-    - { name: rule_severity_R11, lookback_days: 30, desc: "Strength of the new counterparty surge signal" }
-    - { name: rule_severity_R12, lookback_days: 30, desc: "Strength of the layering chain signal" }
-    - { name: rule_hit_count,   lookback_days: 30, desc: "How many distinct typologies fired" }
-    - { name: rule_severity_max, lookback_days: 30, desc: "The strongest single typology signal" }
+  # =======================================================================
+  # graph global
+  # =======================================================================
+  - id: graph_pagerank
+    group: graph_global
+    sentence: "How central this account is in the fold's payment network."
+    kind: graph_node
+    field: pagerank
+    as_of: fold_scoped
+    window: fold_scoped
+    group_by: [entity]
+    dtype: float64
+    null_policy: null_when_unobserved
+    null_reason: "PageRank is undefined for a node the fold's graph does not contain"
+    leakage_sensitive: true
+    leakage_note: "recomputed per fold from that fold's edges; a full-corpus PageRank is exactly the leak this guard exists to stop"
+    declared_score_because: "centrality is a normalised float weight, not money"
+  - id: graph_betweenness_approx
+    group: graph_global
+    sentence: "How often this account sits on the path money takes between other accounts."
+    kind: graph_node
+    field: betweenness_approx
+    as_of: fold_scoped
+    window: fold_scoped
+    group_by: [entity]
+    dtype: float64
+    null_policy: null_when_unobserved
+    null_reason: "approximated over a fixed pivot sample; an account never reached has no value"
+    leakage_sensitive: true
+    leakage_note: "the pivot sample is drawn inside the fold, so no test-period shortest path can be counted"
+    declared_score_because: "a normalised path count, not money"
+  - id: graph_k_core_number
+    group: graph_global
+    sentence: "How deeply embedded this account is in a tightly connected group."
+    kind: graph_node
+    field: k_core_number
+    as_of: fold_scoped
+    window: fold_scoped
+    group_by: [entity]
+    dtype: int64
+    null_policy: null_when_unobserved
+    null_reason: "leaves are pruned by the core decomposition and report null rather than a false zero"
+    leakage_sensitive: true
+    leakage_note: "fold-scoped decomposition"
+  - id: graph_community_size
+    group: graph_global
+    sentence: "How many accounts the detected group this one belongs to contains."
+    kind: graph_node
+    field: community_size
+    as_of: fold_scoped
+    window: fold_scoped
+    group_by: [entity]
+    dtype: int64
+    null_policy: null_when_unobserved
+    null_reason: "communities are skipped when the fold's graph is too thin to partition (DEV-011)"
+    leakage_sensitive: true
+    leakage_note: "fold-scoped Leiden run with the fixed seed and canonical id order"
+  - id: graph_community_id
+    group: graph_global
+    sentence: "Which detected group this account belongs to, as a stable identifier."
+    kind: graph_node
+    field: community_id
+    as_of: fold_scoped
+    window: fold_scoped
+    group_by: [entity]
+    dtype: int64
+    null_policy: null_when_unobserved
+    null_reason: "no community was assigned to this node inside this fold"
+    leakage_sensitive: true
+    leakage_note: "remapped to a canonical order so the same account keeps the same label between runs"
 
-  identity:
-    # Documented, deliberate, and rendered differently in the explorer.
-    - { name: self_transfer_count_30d, lookback_days: 30, desc: "Times money was sent to the account's own self" }
-    - { name: account_age_days,       lookback_days: 30, desc: "How long this account has been observed" }
-    - { name: is_external,            lookback_days: 30, desc: "True when the account only ever appears as a counterparty" }
-    # is_rail is deliberately NOT a feature. It is a graph node type, rendered
-    # differently in the explorer and used to exclude fan scoring; feeding it to
-    # the model would let the model relearn the exclusion we already applied.
-    # Dropping it keeps the registry at 75, inside the 60-75 target.
+  # =======================================================================
+  # graph typology
+  # =======================================================================
+  - id: graph_cycle_participation_count
+    group: graph_typology
+    sentence: "How many circular money paths this account sits inside."
+    kind: graph_node
+    field: cycle_participation_count
+    as_of: fold_scoped
+    window: fold_scoped
+    group_by: [entity]
+    dtype: int64
+    null_policy: null_when_unobserved
+    null_reason: "the bounded cycle search returns nothing on a star-shaped corpus, which is a finding rather than a gap (DEV-011)"
+    leakage_sensitive: true
+    leakage_note: "cycles enumerated per fold from that fold's edges, time-respecting, reversals excluded"
+  - id: graph_max_cycle_retention_bps
+    group: graph_typology
+    sentence: "The largest share of money that came back round a loop through this account."
+    kind: graph_node
+    field: max_cycle_retention_bps
+    as_of: fold_scoped
+    window: fold_scoped
+    group_by: [entity]
+    dtype: int64
+    null_policy: null_when_unobserved
+    null_reason: "no value-retaining loop existed inside this fold's edges"
+    leakage_sensitive: true
+    leakage_note: "fold-scoped; retention below the configured floor is not counted as a cycle at all"
+  - id: graph_longest_chain_length
+    group: graph_typology
+    sentence: "How many hops the longest shrinking payment chain through this account reached."
+    kind: graph_node
+    field: longest_chain_length
+    as_of: fold_scoped
+    window: fold_scoped
+    group_by: [entity]
+    dtype: int64
+    null_policy: null_when_unobserved
+    null_reason: "no time-respecting chain of the minimum length existed in this fold"
+    leakage_sensitive: true
+    leakage_note: "fold-scoped path search with bounded depth and a per-component budget"
+  - id: graph_is_external
+    group: graph_typology
+    sentence: "Whether this account only ever appears as somebody else's counterparty."
+    kind: graph_node
+    field: is_external
+    as_of: fold_scoped
+    window: fold_scoped
+    group_by: [entity]
+    dtype: bool
+    null_policy: null_when_unobserved
+    null_reason: "node absent from the fold's graph"
+    leakage_sensitive: true
+    leakage_note: "fold-scoped node typing"
 
-# --- guards --------------------------------------------------------------
+  # =======================================================================
+  # rule derived
+  # =======================================================================
+  # One severity per typology rule R1-R12 plus two roll-ups. Severities are P3b's
+  # output, normalised to 0-1 by how far the observation exceeds threshold, and arrive
+  # fold-sealed so a threshold fitted on the test window cannot ride in behind them.
+  - id: rule_r1_pass_through_severity
+    group: rule_derived
+    sentence: "How strongly money received here was passed straight on again."
+    kind: rule_field
+    rule_id: R1
+    as_of: fold_scoped
+    window: fold_scoped
+    group_by: [entity]
+    dtype: float64
+    null_policy: null_when_no_rule_hit
+    null_reason: "the rule did not fire inside this fold"
+    leakage_sensitive: true
+    leakage_note: "fold-scoped severity; rule thresholds are fitted on the training window only"
+    declared_score_because: "severity is a dimensionless value in [0,1], not money"
+  - id: rule_r2_fan_in_severity
+    group: rule_derived
+    sentence: "How strongly many small payments gathered into this account."
+    kind: rule_field
+    rule_id: R2
+    as_of: fold_scoped
+    window: fold_scoped
+    group_by: [entity]
+    dtype: float64
+    null_policy: null_when_no_rule_hit
+    null_reason: "the rule did not fire inside this fold"
+    leakage_sensitive: true
+    leakage_note: "fold-scoped severity"
+    declared_score_because: "severity is dimensionless"
+  - id: rule_r3_fan_out_severity
+    group: rule_derived
+    sentence: "How strongly this account scattered incoming money out to many recipients."
+    kind: rule_field
+    rule_id: R3
+    as_of: fold_scoped
+    window: fold_scoped
+    group_by: [entity]
+    dtype: float64
+    null_policy: null_when_no_rule_hit
+    null_reason: "the rule did not fire inside this fold"
+    leakage_sensitive: true
+    leakage_note: "fold-scoped severity"
+    declared_score_because: "severity is dimensionless"
+  - id: rule_r4_cycle_severity
+    group: rule_derived
+    sentence: "How strongly this account sat inside a circular set of transfers."
+    kind: rule_field
+    rule_id: R4
+    as_of: fold_scoped
+    window: fold_scoped
+    group_by: [entity]
+    dtype: float64
+    null_policy: null_when_no_rule_hit
+    null_reason: "the rule did not fire inside this fold"
+    leakage_sensitive: true
+    leakage_note: "fold-scoped, and reversals are excluded from the cycles this rule reads"
+    declared_score_because: "severity is dimensionless"
+  - id: rule_r5_structuring_severity
+    group: rule_derived
+    sentence: "How strongly repeated amounts clustered just under a reporting threshold."
+    kind: rule_field
+    rule_id: R5
+    as_of: fold_scoped
+    window: fold_scoped
+    group_by: [entity]
+    dtype: float64
+    null_policy: null_when_no_rule_hit
+    null_reason: "the rule did not fire inside this fold"
+    leakage_sensitive: true
+    leakage_note: "the threshold is explicitly synthetic and fitted on the training window only"
+    declared_score_because: "severity is dimensionless"
+  - id: rule_r6_velocity_severity
+    group: rule_derived
+    sentence: "How far this account's transaction rate broke away from its own recent baseline."
+    kind: rule_field
+    rule_id: R6
+    as_of: fold_scoped
+    window: fold_scoped
+    group_by: [entity]
+    dtype: float64
+    null_policy: null_when_no_rule_hit
+    null_reason: "the rule did not fire inside this fold"
+    leakage_sensitive: true
+    leakage_note: "the account's own baseline is a trailing thirty-day window"
+    declared_score_because: "severity is dimensionless"
+  - id: rule_r7_dormant_severity
+    group: rule_derived
+    sentence: "How strongly a long-silent account suddenly came back to life."
+    kind: rule_field
+    rule_id: R7
+    as_of: fold_scoped
+    window: fold_scoped
+    group_by: [entity]
+    dtype: float64
+    null_policy: null_when_no_rule_hit
+    null_reason: "the rule did not fire inside this fold"
+    leakage_sensitive: true
+    leakage_note: "dormancy is measured backwards from the scored row"
+    declared_score_because: "severity is dimensionless"
+  - id: rule_r8_odd_hour_severity
+    group: rule_derived
+    sentence: "How far this account's activity shifted into historically quiet local hours."
+    kind: rule_field
+    rule_id: R8
+    as_of: fold_scoped
+    window: fold_scoped
+    group_by: [entity]
+    dtype: float64
+    null_policy: null_when_no_rule_hit
+    null_reason: "the rule did not fire inside this fold"
+    leakage_sensitive: true
+    leakage_note: "reads local_hour only; its historical share is a trailing window"
+    declared_score_because: "severity is dimensionless"
+  - id: rule_r9_regime_shift_severity
+    group: rule_derived
+    sentence: "How far this account's typical amount moved away from its own recent level."
+    kind: rule_field
+    rule_id: R9
+    as_of: fold_scoped
+    window: fold_scoped
+    group_by: [entity]
+    dtype: float64
+    null_policy: null_when_no_rule_hit
+    null_reason: "the rule did not fire inside this fold"
+    leakage_sensitive: true
+    leakage_note: "seven-day against thirty-day trailing medians"
+    declared_score_because: "severity is dimensionless"
+  - id: rule_r10_fast_cash_out_severity
+    group: rule_derived
+    sentence: "How much of the money in was pulled out as cash again within a few hours."
+    kind: rule_field
+    rule_id: R10
+    as_of: fold_scoped
+    window: fold_scoped
+    group_by: [entity]
+    dtype: float64
+    null_policy: null_when_no_rule_hit
+    null_reason: "the rule did not fire inside this fold"
+    leakage_sensitive: true
+    leakage_note: "the holding time is a window ending at the scored row"
+    declared_score_because: "severity is dimensionless"
+  - id: rule_r11_new_counterparty_severity
+    group: rule_derived
+    sentence: "How suddenly this account started dealing with strangers."
+    kind: rule_field
+    rule_id: R11
+    as_of: fold_scoped
+    window: fold_scoped
+    group_by: [entity]
+    dtype: float64
+    null_policy: null_when_no_rule_hit
+    null_reason: "the rule did not fire inside this fold"
+    leakage_sensitive: true
+    leakage_note: "first-seen flags are backward-looking by construction"
+    declared_score_because: "severity is dimensionless"
+  - id: rule_r12_chain_severity
+    group: rule_derived
+    sentence: "How strongly this account sat inside a layered chain of shrinking payments."
+    kind: rule_field
+    rule_id: R12
+    as_of: fold_scoped
+    window: fold_scoped
+    group_by: [entity]
+    dtype: float64
+    null_policy: null_when_no_rule_hit
+    null_reason: "the rule did not fire inside this fold"
+    leakage_sensitive: true
+    leakage_note: "time-respecting path search inside the fold's edges"
+    declared_score_because: "severity is dimensionless"
+  - id: rule_hit_count
+    group: rule_derived
+    sentence: "How many different typology signals fired on this account."
+    kind: rule_field
+    rule_id: COUNT
+    as_of: fold_scoped
+    window: fold_scoped
+    group_by: [entity]
+    dtype: int64
+    null_policy: null_when_no_rule_hit
+    null_reason: "no rule fired inside this fold"
+    leakage_sensitive: true
+    leakage_note: "count of fold-scoped hits; overlap groups keep double evidence from counting twice"
+  - id: rule_severity_max
+    group: rule_derived
+    sentence: "The single strongest typology signal on this account."
+    kind: rule_field
+    rule_id: MAX
+    as_of: fold_scoped
+    window: fold_scoped
+    group_by: [entity]
+    dtype: float64
+    null_policy: null_when_no_rule_hit
+    null_reason: "no rule fired inside this fold"
+    leakage_sensitive: true
+    leakage_note: "maximum of fold-scoped severities"
+    declared_score_because: "severity is dimensionless"
+
+# --- guards ---------------------------------------------------------------
 guards:
-  # label_fraud and anything derived from it NEVER enters the feature matrix. A
-  # test asserts no feature exceeds 0.98 absolute correlation with the label
-  # (spec 7.2).
+  # label_is_fraud / label_is_flagged / label_typology NEVER enter the feature
+  # matrix. The registry cannot name them as a source or a predicate (banned_sources
+  # below), the builder asserts they are absent from the output columns, and no
+  # feature may exceed this absolute correlation with the label on the dev slice
+  # (plan §8, spec §7.2).
   max_abs_correlation_with_label: 0.98
-  banned_inputs: [label_fraud, isFraud, isFlaggedFraud, typology, label_typology]
-  # LightGBM tolerates NaN, the scorecard does not, and the two silently diverge
-  # if it reaches the feature table. Fail the run with the column named
-  # (03 H: test_features_finite).
+  banned_sources:
+    - label_is_fraud
+    - label_is_flagged
+    - label_typology
+    - isFraud
+    - isFlaggedFraud
+    - typology
+  # LightGBM tolerates NaN, the scorecard does not, and the two silently diverge if a
+  # non-finite value reaches the matrix. Fail the run, naming the column (03 H).
   require_finite: true
-  # Winsorise at a configured percentile FOR FEATURES ONLY. Reported money
-  # figures always use raw values, and the winsorisation is stated
+  # Winsorise at a configured percentile FOR FEATURES ONLY, fitted on the training
+  # slice only. Reported money is always raw and the winsorisation is stated
   # (03 D: test_winsorise_features_not_reports).
   winsorise:
     enabled: true
     lower_percentile: 0.01
     upper_percentile: 0.99
-    applies_to: features_only
-  # A missing feature is an explicit missing bin with its own WOE, never a mean.
-  # Silent imputation with the mean invents evidence (03 H).
+    applies_to: declared_features_only
+    fit_scope: training_slice_only
+  # A missing feature is an explicit missing bin with its own WOE, never a mean, and a
+  # null renders as an em dash rather than a convincing zero (03 A rule 2).
   missing_value_policy: explicit_bin
-  # A missing count is null rendered as an em dash, never 0. Zeros propagate into
-  # money figures and lie convincingly (03 A rule 2).
   null_renders_as: "—"
+  # Reversals are typed, linked, kept visible and excluded from cycle detection: read
+  # as an ordinary transfer a reversal manufactures a cycle back to the originator.
+  reversal_txn_types: [REVERSAL]
+  reversal_excluded_from:
+    - graph_cycle_participation_count
+    - graph_max_cycle_retention_bps
+    - graph_longest_chain_length
+  # Zero-amount rows are balance probes: kept and flagged, excluded from value
+  # features by the predicates those features declare.
+  zero_amount_policy: keep_flag_exclude_from_value
+  # Quiet hours are a deployment-timezone statement, not an inference from data.
+  overnight_local_hours: [0, 1, 2, 3, 4, 5]
+  # A feature may not be excluded from the matrix and still be computed silently:
+  # intermediates are declared, hashed, and dropped at the boundary; outcomes are
+  # forward-looking by definition and are for the quant layer, never the model.
+  allowed_roles: [feature, intermediate, outcome]
+  role_definitions:
+    feature: "a model input; published in the matrix"
+    intermediate: "a declared input to other entries; computed, hashed, dropped at the boundary"
+    outcome: "reads rows after the cutoff (exposure E_i, plan §11); refused in the matrix"

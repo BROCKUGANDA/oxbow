@@ -264,7 +264,7 @@ def test_every_assumption_key_is_required_by_a_consumer(tmp_path: Path) -> None:
     makes that claim executable rather than aspirational. The exception is the
     individual entries under ``review_minutes_by_alert_class``, which are members of
     a mapping rather than required keys: which alert classes exist is the scorecard's
-    decision (plan §10 cuts bands A–E on validation), so insisting on one specific
+    decision (plan §10 cuts bands A-E on validation), so insisting on one specific
     set here would couple the economics file to a phase that has not landed yet. What
     *is* enforced is that the mapping is never empty and that every class in it clears
     the minutes floor, both tested separately below.

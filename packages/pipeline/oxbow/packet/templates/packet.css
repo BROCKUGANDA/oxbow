@@ -1,0 +1,415 @@
+/* OXBOW case packet — print stylesheet.
+
+   The screen design system lives in apps/web/src/design/tokens.css; this file is its
+   paper counterpart, and the values it repeats are taken from there verbatim rather
+   than re-invented:
+
+   - type: --font-sans / --font-mono (IBM Plex Sans / IBM Plex Mono), with
+     font-variant-numeric: tabular-nums on every numeric column so money and point
+     totals align digit-for-digit, which is the rule that stops a column "lying about
+     its own precision" (tokens.css, spec 12.6);
+   - bands: --color-band-a … --color-band-e in oklch. They are printed as decoration
+     only. DESIGN §3 rule 7 and §6 forbid risk encoded by colour alone, and a packet
+     must survive greyscale, colour-blind analysts and a laser printer, so the band
+     letter and the five-segment meter glyph render beside every band colour and are
+     the authoritative channel;
+   - --paper is the surface a read-only document sits on (§1 of DESIGN).
+
+   WeasyPrint supports the CSS Paged Media subset used here (@page, margin boxes,
+   counters, break-inside). Nothing in this file depends on a browser. */
+
+@page {
+  size: A4;
+  margin: 17mm 15mm 19mm 15mm;
+
+  @top-left {
+    content: "OXBOW case packet — advisory only, research prototype";
+    font-family: "IBM Plex Sans", ui-sans-serif, system-ui, "Segoe UI", sans-serif;
+    font-size: 7.5pt;
+    color: #4b5563;
+  }
+  @top-right {
+    content: string(caseid);
+    font-family: "IBM Plex Mono", ui-monospace, "Cascadia Mono", Menlo, monospace;
+    font-size: 7.5pt;
+    color: #4b5563;
+  }
+  @bottom-left {
+    content: "Monetary figures are model estimates under the assumptions in section 8.";
+    font-family: "IBM Plex Sans", ui-sans-serif, system-ui, "Segoe UI", sans-serif;
+    font-size: 7pt;
+    color: #4b5563;
+  }
+  @bottom-right {
+    content: "Page " counter(page) " of " counter(pages);
+    font-family: "IBM Plex Mono", ui-monospace, "Cascadia Mono", Menlo, monospace;
+    font-size: 7pt;
+    color: #4b5563;
+  }
+}
+
+@page :first {
+  margin-top: 14mm;
+}
+
+:root {
+  --paper: #fbfaf7;
+  --ink: #111820;
+  --ink-muted: #4b5563;
+  --hairline: #c9ced6;
+  --hairline-strong: #6b7280;
+  --flag: #7c2d12;
+  --band-a: oklch(0.78 0.075 235);
+  --band-b: oklch(0.78 0.095 195);
+  --band-c: oklch(0.78 0.115 155);
+  --band-d: oklch(0.78 0.135 95);
+  --band-e: oklch(0.78 0.155 40);
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+}
+
+body.packet {
+  background: var(--paper);
+  color: var(--ink);
+  font-family: "IBM Plex Sans", ui-sans-serif, system-ui, "Segoe UI", sans-serif;
+  font-size: 9pt;
+  line-height: 1.42;
+  font-variant-numeric: tabular-nums;
+}
+
+.mono {
+  font-family: "IBM Plex Mono", ui-monospace, "Cascadia Mono", Menlo, monospace;
+  font-size: 8.2pt;
+}
+
+.break {
+  word-break: break-all;
+  overflow-wrap: anywhere;
+}
+
+h1 {
+  font-size: 19pt;
+  line-height: 1.05;
+  letter-spacing: -0.02em;
+  margin: 0 0 2mm;
+}
+
+h2 {
+  font-size: 11.5pt;
+  margin: 7mm 0 2mm;
+  padding-bottom: 1.2mm;
+  border-bottom: 1.2pt solid var(--ink);
+  break-after: avoid;
+}
+
+h3 {
+  font-size: 9.8pt;
+  margin: 4.5mm 0 1.5mm;
+  break-after: avoid;
+}
+
+p {
+  margin: 0 0 2.2mm;
+}
+
+.eyebrow {
+  font-size: 7.5pt;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--ink-muted);
+  margin: 0 0 1.5mm;
+}
+
+.subject-line {
+  font-size: 10.5pt;
+  margin: 0 0 3mm;
+}
+
+.secondary {
+  font-size: 8pt;
+  color: var(--ink-muted);
+}
+
+/* ------------------------------------------------------------------ bands */
+
+.band {
+  display: inline-block;
+  min-width: 1.55em;
+  padding: 0 1.4mm;
+  border: 0.8pt solid var(--ink);
+  font-weight: 700;
+  text-align: center;
+}
+
+.band-A { background: var(--band-a); }
+.band-B { background: var(--band-b); }
+.band-C { background: var(--band-c); }
+.band-D { background: var(--band-d); }
+.band-E { background: var(--band-e); }
+
+.band-figure {
+  margin: 0 0 4mm;
+  padding: 2mm 2.5mm;
+  border-left: 2.4pt solid var(--ink);
+}
+
+.band-figure .meter {
+  vertical-align: middle;
+  margin-right: 2mm;
+}
+
+.meter-segment {
+  fill: none;
+  stroke: var(--ink);
+  stroke-width: 1;
+}
+
+.meter-segment.lit {
+  fill: var(--ink);
+}
+
+.meter-letter {
+  font-weight: 700;
+  font-size: 12pt;
+  margin-right: 2mm;
+}
+
+.meter-caption {
+  font-size: 7.5pt;
+  color: var(--ink-muted);
+}
+
+/* ------------------------------------------------------------- disclaimer */
+
+.disclaimer {
+  border: 1.4pt solid var(--ink);
+  padding: 3mm 3.5mm;
+  margin: 0 0 4.5mm;
+  break-inside: avoid;
+}
+
+.disclaimer h2 {
+  margin: 0 0 1.8mm;
+  border: none;
+  font-size: 10pt;
+  text-transform: none;
+  padding: 0;
+}
+
+.disclaimer-text {
+  font-size: 8.8pt;
+  margin: 0 0 1.8mm;
+}
+
+/* ------------------------------------------------------------------ facts */
+
+table {
+  border-collapse: collapse;
+  width: 100%;
+  font-size: 8.4pt;
+}
+
+table.facts th,
+table.facts td {
+  border: none;
+  border-bottom: 0.5pt solid var(--hairline);
+  padding: 1.4mm 2mm 1.4mm 0;
+  text-align: left;
+  vertical-align: top;
+}
+
+table.facts th {
+  width: 34%;
+  font-weight: 600;
+}
+
+table.facts td.basis,
+td.basis {
+  color: var(--ink-muted);
+  font-size: 7.6pt;
+  width: 38%;
+}
+
+tr.flag td,
+tr.flag th {
+  border-left: 2.2pt solid var(--flag);
+}
+
+/* tables of evidence and money */
+
+table.grid th,
+table.grid td {
+  border: 0.5pt solid var(--hairline);
+  padding: 1.3mm 1.8mm;
+  text-align: left;
+  vertical-align: top;
+}
+
+table.grid thead th {
+  background: #edeae3;
+  font-weight: 600;
+  font-size: 7.8pt;
+  letter-spacing: 0.02em;
+}
+
+table.grid tfoot th {
+  font-weight: 600;
+}
+
+table.grid caption,
+caption {
+  caption-side: top;
+  text-align: left;
+  font-size: 7.6pt;
+  color: var(--ink-muted);
+  padding-bottom: 1.2mm;
+}
+
+td.money {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.assumption-inline {
+  display: block;
+  font-size: 6.9pt;
+  color: var(--ink-muted);
+  white-space: normal;
+  text-align: left;
+}
+
+/* ---------------------------------------------------------------- decision */
+
+.decision-action {
+  font-size: 9.4pt;
+}
+
+blockquote.reason {
+  margin: 0 0 3mm;
+  padding: 2.4mm 3mm;
+  border-left: 2.4pt solid var(--ink);
+  background: #f2f0ea;
+  break-inside: avoid;
+}
+
+.reason-label {
+  font-size: 7.4pt;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--ink-muted);
+  margin: 0 0 1.4mm;
+}
+
+blockquote.reason p:last-child {
+  margin: 0;
+  font-size: 9.6pt;
+}
+
+/* ------------------------------------------------------------------- lists */
+
+ol.reason-codes,
+ul.provenance {
+  margin: 0 0 3mm;
+  padding-left: 5.5mm;
+}
+
+ol.reason-codes li,
+ul.provenance li {
+  margin-bottom: 1.2mm;
+}
+
+.named-gap {
+  border: 0.8pt dashed var(--hairline-strong);
+  padding: 2mm 2.5mm;
+  font-size: 8pt;
+  color: var(--ink-muted);
+  break-inside: avoid;
+}
+
+.source-line {
+  font-size: 8pt;
+  margin-bottom: 2.5mm;
+}
+
+/* ---------------------------------------------------------------- subgraph */
+
+figure.subgraph {
+  margin: 0 0 3mm;
+  break-inside: avoid;
+}
+
+figure.subgraph svg {
+  width: 100%;
+  height: auto;
+  border: 0.6pt solid var(--hairline);
+}
+
+figure.subgraph figcaption {
+  font-size: 7.6pt;
+  color: var(--ink-muted);
+  margin-top: 1.4mm;
+}
+
+table.per-currency {
+  margin-bottom: 2.5mm;
+}
+
+/* ------------------------------------------------------------- assumptions */
+
+pre.assumptions {
+  font-family: "IBM Plex Mono", ui-monospace, "Cascadia Mono", Menlo, monospace;
+  font-size: 7.4pt;
+  line-height: 1.36;
+  white-space: pre-wrap;
+  border: 0.8pt solid var(--hairline);
+  padding: 2.4mm 2.8mm;
+  margin: 0 0 2.5mm;
+  break-inside: avoid;
+}
+
+.integrity {
+  font-size: 8pt;
+  border-top: 0.6pt solid var(--hairline);
+  padding-top: 1.6mm;
+}
+
+footer.endnote {
+  margin-top: 6mm;
+  padding-top: 2mm;
+  border-top: 1.2pt solid var(--ink);
+  font-size: 7.4pt;
+  color: var(--ink-muted);
+  break-inside: avoid;
+}
+
+/* screen and print share this document; the only screen-only change is that the
+   page furniture disappears, so an on-screen preview of the artifact is the
+   artifact and not an approximation of it */
+@media screen {
+  body.packet {
+    max-width: 190mm;
+    margin: 0 auto;
+    padding: 8mm;
+  }
+}
+
+@media print {
+  body.packet {
+    background: none;
+  }
+
+  h2 {
+    break-after: avoid;
+  }
+
+  table.grid tr,
+  figure.subgraph,
+  blockquote.reason {
+    break-inside: avoid;
+  }
+}

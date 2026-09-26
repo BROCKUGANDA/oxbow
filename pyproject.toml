@@ -100,6 +100,28 @@ ignore = [
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = ["ARG", "S101"]
 "apps/api/alembic/**" = ["E402"]
+# apps/api/main.py bootstraps sys.path so the `api` package is importable under
+# `uvicorn main:app --app-dir apps/api`, and the bootstrap has to run before the
+# `api.*` imports it makes possible. Same documented pattern as the alembic entry
+# above and tests/golden/conftest.py (which carries an inline E402 for its own
+# bootstrap); a 14-line file-level noqa would bury the reason, which is in main.py's
+# own comment block.
+"apps/api/main.py" = ["E402"]
+# FastAPI binds route parameters BY NAME, so `run_id`/`account_key`/`score` cannot be
+# renamed to `_run_id` without changing the URL contract, and `principal`/`read_model`
+# /`container` exist in the signature precisely so the dependency runs -- `principal`
+# is the line where an auditor sees that an endpoint is authenticated and role-checked,
+# so hiding it behind an underscore would degrade the thing it guards. structlog
+# processors are called by keyword (`logger`, `method_name`) and Protocol conformers
+# must accept arguments they ignore. Same reason `tests/**` already ignores ARG above.
+"apps/api/**" = ["ARG"]
+# These nine classes ARE their status code: `status, code, title = 422, "unprocessable",
+# ...` renders an RFC 7807 problem document, and the names mirror HTTP semantics the way
+# FastAPI's own `NotFound`/`HTTPException` family does. Renaming them to `NotFoundError`
+# would make the mapping to the protocol less legible, not more correct. N818 stays armed
+# for every other exception in the repo -- including apps/api/deps.py's `ContainerClosed`,
+# which is a real lifecycle error and is annotated at its definition instead.
+"apps/api/problems.py" = ["N818"]
 
 [tool.ruff.lint.flake8-tidy-imports]
 ban-relative-imports = "parents"

@@ -21,6 +21,16 @@ refuses when a pair spans two (:func:`oxbow.graph.events.require_single_currency
 And a corpus with no network (DEV-011: PaySim's median account degree is 1.0) must
 produce a graph that *says* it has no network — which is why so much of this module
 is about what gets excluded, and why every exclusion is counted rather than dropped.
+
+Self-transfers are the third entry in that list, and the one with a corpus attached:
+a canonical row may have ``account_from == account_to`` (DEV-013 — 591,212 of IBM-
+AML's 5,078,345 rows are, mostly reinvestments). Rule 01 P3 asks for them to be kept
+as a feature while staying out of cycle and fan detection, so this module keeps them
+in every frame (events, pairs, flows keyed by currency) and keeps them out of every
+adjacency structure, in exactly one place — :func:`_adjacency` — which is also where
+the per-account degree is checked against the legs that walk (:func:`degree_measurement`
+and :func:`build_graph` must never disagree, and :func:`_check_degree_adjacency`
+makes that a build failure rather than a hope).
 """
 
 from __future__ import annotations
@@ -36,11 +46,12 @@ from oxbow.graph.build_frames import (
     build_multigraph,
     build_node_skeleton,
     pair_aggregates,
+    self_transfer_totals,
     split_currency_pairs,
 )
 from oxbow.graph.communities import detect_communities
 from oxbow.graph.cycles import enumerate_cycles
-from oxbow.graph.errors import GraphTooLargeError
+from oxbow.graph.errors import GraphError, GraphTooLargeError
 from oxbow.graph.events import (
     DERIVED_EDGE_ID_COLUMN,
     DERIVED_SELF_COLUMN,
@@ -92,6 +103,7 @@ class DegreeMeasurement:
 
     event_count: int
     self_transfer_count: int
+    self_transfer_value_minor: tuple[tuple[str, int], ...]
     node_count: int
     rail_count: int
     external_count: int
@@ -126,6 +138,10 @@ def build_graph(events: pl.DataFrame, cfg: PipelineConfig) -> AccountGraph:
     frame = ordered.frame
     skeleton = build_node_skeleton(frame)
     pairs = pair_aggregates(frame)
+    # One computation of "how many rows are relationships", used by the invariant
+    # check below and by the stats, so neither can drift from the other.
+    edge_count = int(frame.filter(~pl.col(DERIVED_SELF_COLUMN)).height)
+    self_value = self_transfer_totals(frame)
     rail_threshold = percentile_nearest_rank(
         skeleton.table["total_degree"], settings.rail_degree_percentile / 100.0
     )
@@ -143,6 +159,9 @@ def build_graph(events: pl.DataFrame, cfg: PipelineConfig) -> AccountGraph:
 
     out_edges, in_edges, undirected = _adjacency(frame, node_types)
     multigraph = build_multigraph(typed, out_edges)
+    # Degrees come from the frame, legs come from the adjacency, and self-transfers
+    # are the one row class where the two could part ways. They may not.
+    _check_degree_adjacency(typed, out_edges, in_edges, edge_count=edge_count)
 
     search = _run_cycle_search(
         out_edges=out_edges,
@@ -167,7 +186,8 @@ def build_graph(events: pl.DataFrame, cfg: PipelineConfig) -> AccountGraph:
     stats = GraphStats(
         event_count=frame.height,
         self_transfer_count=ordered.self_transfer_count,
-        edge_count=int(frame.filter(~pl.col(DERIVED_SELF_COLUMN)).height),
+        self_transfer_value_minor=self_value,
+        edge_count=edge_count,
         pair_count=int(pairs.height),
         node_count=complete.height,
         member_count=_count_type(node_types, NODE_TYPE_MEMBER),
@@ -214,6 +234,18 @@ def degree_measurement(events: pl.DataFrame, cfg: PipelineConfig) -> DegreeMeasu
 
     Same ordering, typing and singleton rules as :func:`build_graph` — only the
     traversal structures are absent, which is what lets it run over 6.3 M rows.
+
+    The degrees here are the same numbers the traversal path walks, and that is a
+    claim rather than a hope: both read ``total_degree`` from the one skeleton built
+    by :func:`oxbow.graph.build_frames.build_node_skeleton`, which sums non-self rows
+    only, and :func:`_check_degree_adjacency` fails every ``build_graph`` whose
+    indexed legs stop matching those counts. Self-transfers are the row class that
+    could split the two — they touch an account without giving it a counterparty — so
+    they are excluded from the degrees, from the rail threshold above them (an
+    account that reinvests into itself a thousand times is not a rail), and from the
+    singleton cut, while being counted here by row and by per-currency minor-unit
+    total, with the reason in
+    :data:`~oxbow.graph.model.SELF_TRANSFER_EXCLUDED_REASON`.
     """
     settings = load_graph_settings(cfg)
     ordered = require_events(events, settings.order_columns)
@@ -230,6 +262,7 @@ def degree_measurement(events: pl.DataFrame, cfg: PipelineConfig) -> DegreeMeasu
     return DegreeMeasurement(
         event_count=frame.height,
         self_transfer_count=ordered.self_transfer_count,
+        self_transfer_value_minor=self_transfer_totals(frame),
         node_count=table.height,
         rail_count=_count_type(node_types, NODE_TYPE_RAIL),
         external_count=_count_type(node_types, NODE_TYPE_EXTERNAL),
@@ -345,6 +378,25 @@ def _adjacency(
     older edge. ``in_edges`` stores the same events seen from the receiving side,
     with ``dst`` replaced by the sender, so a backward query reads like a forward
     one.
+
+    One rule decides the whole function, and it is the only place in this layer that
+    applies it: a self-transfer contributes no leg to any of the three structures.
+    ``account_from == account_to`` is tested before the leg is built, so it is
+    excluded identically whatever the account is typed as — rail, external or member
+    — and ``node_types`` is consulted here only to seed the neighbour map with every
+    known account. A→A is a movement between two balances of one customer, not a
+    counterparty, so it cannot close a loop, join a community, carry betweenness,
+    make an account its own downstream, or hold a place in the multigraph that
+    PageRank walks. The row is *not* dropped: it stays in ``events``, in ``pairs``
+    as a flagged self-pair, in the node table's ``self_transfer_count``, and in
+    :class:`~oxbow.graph.model.GraphStats` as a count and a per-currency total
+    (01 P3, DEV-013).
+
+    The invariant this keeps intact: a leg enters ``out_edges`` or ``in_edges``
+    exactly when the same row was counted in that account's degree by
+    :func:`oxbow.graph.build_frames.build_node_skeleton`, because both read the same
+    predicate on the same frame. :func:`_check_degree_adjacency` verifies it per
+    build rather than trusting it.
     """
     out: dict[str, list[EdgeLeg]] = {}
     incoming: dict[str, list[EdgeLeg]] = {}
@@ -363,6 +415,14 @@ def _adjacency(
     for txn_id, ts_us, src, dst, amount, currency, txn_type, edge_id, is_self in frame.select(
         columns
     ).iter_rows():
+        if bool(is_self):
+            # The one self-transfer rule, applied before a leg exists at all: an
+            # A -> A row adds nothing to `out`, nothing to `in`, nothing to the
+            # neighbour map, whatever A is typed as. Testing it here rather than
+            # after the leg is built is what keeps the rail / external / member
+            # cases identical — there is no ordering in which one of them could
+            # slip a self-edge into a traversal structure.
+            continue
         account_from = str(src)
         account_to = str(dst)
         leg = EdgeLeg(
@@ -375,10 +435,6 @@ def _adjacency(
             edge_id=int(edge_id),
         )
         out.setdefault(account_from, []).append(leg)
-        if bool(is_self):
-            # Retained as an edge and counted, but a self-transfer is not a
-            # relationship with anyone and can never close a loop.
-            continue
         incoming.setdefault(account_to, []).append(leg._replace(dst=account_from))
         neighbours.setdefault(account_from, set()).add(account_to)
         neighbours.setdefault(account_to, set()).add(account_from)
@@ -387,6 +443,71 @@ def _adjacency(
         {account: tuple(legs) for account, legs in incoming.items()},
         {account: frozenset(partners) for account, partners in neighbours.items()},
     )
+
+
+def _check_degree_adjacency(
+    nodes: pl.DataFrame,
+    out_edges: Mapping[str, tuple[EdgeLeg, ...]],
+    in_edges: Mapping[str, tuple[EdgeLeg, ...]],
+    *,
+    edge_count: int,
+) -> None:
+    """Fail the build if the degree table and the traversal adjacency disagree.
+
+    Two paths answer "how many relationships does this account have":
+    :func:`oxbow.graph.build_frames.build_node_skeleton` groups the frame (and is the
+    path :func:`degree_measurement` alone runs), while :func:`_adjacency` indexes the
+    same frame for walking. They share one predicate — non-self rows only — and
+    self-transfers are the only row class that could make them part ways, because a
+    self-transfer touches an account without giving it a counterparty. Should they
+    ever diverge, the day-3 gate's degree and the explorer's degree would describe
+    different graphs and no number in either artifact would say so.
+
+    Cost is O(nodes + legs) over a slice already bounded by
+    ``sampling.interactive_txn_target``, so it runs on every build rather than only
+    under test. It checks the interactive path against the shared skeleton, which is
+    the same table the offline path sums, so it pins both paths to one rule.
+    """
+    legs_by_account: dict[str, int] = {}
+    for origin, legs in out_edges.items():
+        legs_by_account[origin] = legs_by_account.get(origin, 0) + len(legs)
+    for destination, legs in in_edges.items():
+        legs_by_account[destination] = legs_by_account.get(destination, 0) + len(legs)
+
+    mismatched: list[tuple[str, int, int]] = []
+    for account, degree in nodes.select(["account", "total_degree"]).iter_rows():
+        key = str(account)
+        indexed = legs_by_account.pop(key, 0)
+        if indexed != int(degree):
+            mismatched.append((key, int(degree), indexed))
+    if mismatched:
+        shown = ", ".join(
+            f"{account}: degree {degree} but {indexed} indexed legs"
+            for account, degree, indexed in sorted(mismatched)[:5]
+        )
+        raise GraphError(
+            f"{len(mismatched)} accounts' degrees do not match the traversal adjacency "
+            f"({shown}). The frame-level count and the indexed legs agreed on different "
+            "row sets, which is how a gate number and a screen number quietly stop "
+            "describing one graph. Fix the shared self-transfer predicate; do not "
+            "reconcile the symptom here."
+        )
+    if legs_by_account:
+        orphans = sorted(legs_by_account)[:5]
+        raise GraphError(
+            f"the adjacency indexes {len(legs_by_account)} account(s) absent from the "
+            f"node table (e.g. {orphans}); a leg with no node row means the two paths "
+            "disagree about the population, not just about a count."
+        )
+    total_legs = sum(len(legs) for legs in out_edges.values()) + sum(
+        len(legs) for legs in in_edges.values()
+    )
+    if total_legs != 2 * edge_count:
+        raise GraphError(
+            f"the adjacency holds {total_legs} legs where the {edge_count} non-self "
+            "events predict exactly two each (one out, one in). Either a self-transfer "
+            "got indexed as a relationship or a relationship went missing."
+        )
 
 
 def _run_cycle_search(

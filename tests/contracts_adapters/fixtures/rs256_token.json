@@ -1,0 +1,10 @@
+{
+  "kid": "oxbow-rs256-fixture",
+  "alg": "RS256",
+  "kty": "RSA",
+  "n": "3GYDipXUbGCmBT1-SAQ9FvXPPcgAULC0CnRe1R8m1gW3LXlfL1pKV0on8iPvFS9l6cleM3R9Ip07KsgIjqFPINuaUEvnqUW7OBUJDRBytzZL9yDcXixlNbO6JzXnQKspEbDGW2N78aS8ApnE6LTXjpwNhZ643CJiX3v1EK50KQrj61bdP1gCIUf7GoMc9d57ObdsyV9qw2r_OQxIZxhg7DiAGdsHkP5YrQUjFyxetI_KuS1Exb3AmzXTw0Mk9zinaBXO_9FJBPBN-vtprPGDjTHVDE4B1k7Hga4fHxMzbtDnQl7MzUGzjlC-C_PeaCqN6zw5lY6CN_likmStMtY2JQ",
+  "e": "AQAB",
+  "signed_message": "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCIsImtpZCI6Im94Ym93LXJzMjU2LWZpeHR1cmUifQ.eyJpc3MiOiJodHRwOi8vbG9jYWxob3N0OjgwODEvcmVhbG1zL294Ym93Iiwic3ViIjoib3hib3ctdGVzdC1zdWJqZWN0IiwiYXVkIjoib3hib3ctd2ViIn0",
+  "signature": "SUCPwdm2P4w2-qnu5g1HR1KjZJ7W1LFG-dRdbzrHR3bxwKBSjo9oY11Z1GlCzyPjYeaFrwnF8uN_SvCUchnhOFFAgLUPUmRVJ_Fc53TEU8OzGglc3_h0IYz0hQEKeqFCV1nM4msfOXHTUw6qRxtHr4oFQ89fSkCU0GeRfuOrupFL3kT5_sb8tIyz2O4u4qYA54JKXW7sox73fqKLwyZWmfc6cPF_bo8eRoVrrwIhNDeCQpn3wu8d0pvRqn-kdvKHZvLYyPH29N7pxEij6NDZDYioTbY1GPerOSFsi4q1jjvzkYrRS4v0ty0IJcqdXmVpcUCpb60SLc2AyaksUOnExA",
+  "note": "Produced once with the  46.0.0 PKCS1v15+SHA256 signer as an independent oracle. apps/api/security.py verifies these bytes with stdlib-only RSA; if the verifier changes behaviour this fixture stops matching and the test fails. The private key was discarded."
+}

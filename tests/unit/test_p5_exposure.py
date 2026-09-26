@@ -185,7 +185,7 @@ def test_injected_neighbourhood_changes_the_cluster(cfg: Economics) -> None:
 
 def test_two_hops_reach_the_second_layer(cfg: Economics) -> None:
     """Radius is a parameter, and the configured default is one hop."""
-    edges = fixture_edges() + [edge("txn:8", "ACC-B", "ACC-E", 600_000, 6)]
+    edges = [*fixture_edges(), edge("txn:8", "ACC-B", "ACC-E", 600_000, 6)]
     one = exposure_at_risk(edges, "ACC-A", T0, 24, 1, cfg)
     two = exposure_at_risk(edges, "ACC-A", T0, 24, 2, cfg)
     assert "ACC-E" not in one.cluster

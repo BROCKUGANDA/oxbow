@@ -33,6 +33,13 @@ from every *aggregate* (communities, PageRank, local density, cycle search, the
 degree summary) because a leaf carries no network information. They stay in the
 node table, stay queryable in a neighbourhood, and stay scoreable by the tabular
 module. Excluding them from aggregates is not deleting them.
+
+Self-transfers — ``account_from == account_to``, a movement between two balances of
+one customer — are the same kind of decision taken one level down, and they are not
+singletons: an account can hold forty of them and still have no counterparty at all.
+They stay events, stay in the pair table as a flagged self-pair, and are counted per
+account and per currency; they contribute nothing to any traversal structure. See
+:data:`SELF_TRANSFER_EXCLUDED_REASON` for the sentence the reports quote.
 """
 
 from __future__ import annotations
@@ -81,6 +88,23 @@ FLOW_NULL_POLICY: Final[Mapping[str, tuple[str, ...]]] = {
 
 # The singleton rule, stated once: one incident non-self edge is a leaf.
 SINGLETON_DEGREE: Final[int] = 1
+
+# The self-transfer rule, stated once beside it. An event whose originator and
+# beneficiary are the same account moves value between two balances of one customer:
+# it is real money and a real event, and it names no counterparty. So it is kept and
+# counted — in the event frame, as a flagged self-pair in the aggregate table, per
+# account in ``self_transfer_count``, and per currency in ``GraphStats`` — while
+# contributing nothing to ``out_edges`` / ``in_edges`` / the neighbour map, and
+# therefore nothing to degree, cycles, communities, PageRank, local density,
+# betweenness or neighbourhood hops. Rule 01 P3 asks for exactly that split: excluded
+# from cycle and fan detection *while kept as a feature*.
+SELF_TRANSFER_EXCLUDED_REASON: Final[str] = (
+    "self-transfers (account_from == account_to) are retained as events, aggregated as "
+    "a flagged self-pair and counted per account and per currency, but excluded from "
+    "degree, cycles, communities, PageRank, local density, betweenness and "
+    "neighbourhood hops: A -> A moves value between two balances of one account and "
+    "names no counterparty (01 P3, DEV-013)"
+)
 
 
 class EdgeLeg(NamedTuple):
@@ -173,10 +197,17 @@ class GraphStats:
     stated cause is indistinguishable from a bug: on a star-shaped corpus the
     honest output is "no community was computed, because after singletons are
     excluded there are no edges left", and that sentence belongs in the artifact.
+
+    ``self_transfer_count`` and ``self_transfer_value_minor`` are the same idea
+    applied to the rows this layer excludes from traversal rather than refuses: a
+    report has to be able to say "11.6 % of this corpus's rows are self-transfers,
+    they were kept, counted and left out of the cycles and the degrees, and here is
+    how many and how much". On a corpus with none, both read as zero and empty.
     """
 
     event_count: int
     self_transfer_count: int
+    self_transfer_value_minor: tuple[tuple[str, int], ...]
     edge_count: int
     pair_count: int
     node_count: int
@@ -211,23 +242,42 @@ class GraphStats:
         payload = asdict(self)
         payload["currencies"] = list(self.currencies)
         payload["cycle_nodes"] = self.cycle_nodes
+        payload["self_transfer_value_minor"] = [
+            [str(currency), int(value)] for currency, value in self.self_transfer_value_minor
+        ]
         payload["top_degrees"] = [[str(key), int(count)] for key, count in self.top_degrees]
         payload["degree_all_nodes"] = asdict(self.degree_all_nodes)
         payload["degree_in_graph"] = asdict(self.degree_in_graph)
         payload["settings_fingerprint"] = dict(self.settings_fingerprint)
         return payload
 
+    @property
+    def self_transfer_exclusion_reason(self) -> str | None:
+        """Why the self-transfers are counted rather than used, or None if there
+        were none to exclude.
+
+        A property, not a field: the sentence is a rule of this layer and identical
+        on every corpus, so writing it into every manifest would change artifact
+        bytes for a corpus that gained no self-transfer rows. A report quotes it
+        when :attr:`self_transfer_count` is non-zero, which is the only condition
+        under which the exclusion did anything.
+        """
+        return SELF_TRANSFER_EXCLUDED_REASON if self.self_transfer_count else None
+
 
 @dataclass(frozen=True, slots=True)
 class AccountGraph:
     """The built graph: frames for the bulk path, structures for traversal.
 
-    ``out_edges`` / ``in_edges`` hold every parallel edge per ordered pair, in the
-    canonical total order — 40 transfers between one pair are 40 legs, never one
-    (P3a: a burst of 40 transfers is not one transfer). ``simple_neighbours`` is
-    the undirected distinct-counterparty view, which is what degree, density and
-    community use, because "who do they deal with" is a question about people, not
-    about message counts.
+    ``out_edges`` / ``in_edges`` hold every parallel edge per ordered *counterparty*
+    pair, in the canonical total order — 40 transfers between one pair are 40 legs,
+    never one (P3a: a burst of 40 transfers is not one transfer). Self-transfers are
+    not in them: an ``A -> A`` event is retained in ``events``, ``pairs`` and the
+    stats, and it enters no adjacency structure, so nothing that walks can mistake it
+    for a relationship (see :data:`SELF_TRANSFER_EXCLUDED_REASON`).
+    ``simple_neighbours`` is the undirected distinct-counterparty view, which is what
+    degree, density and community use, because "who do they deal with" is a question
+    about people, not about message counts.
     """
 
     settings: GraphSettings
@@ -335,6 +385,8 @@ class AccountGraph:
         ``exposure.downstream_hops`` is read through this: a rail in the middle of
         a chain is not a hop towards a person, so expanding through it would
         inflate an exposure estimate into the whole customer base of a merchant.
+        The walk reads ``out_edges``, which carries no self-transfer legs, so an
+        account is never its own downstream — ``A -> A`` reaches nobody but A.
         """
         self.node_row(account)
         reached: set[str] = set()
@@ -432,6 +484,7 @@ __all__ = [
     "NODE_TYPE_EXTERNAL",
     "NODE_TYPE_MEMBER",
     "NODE_TYPE_RAIL",
+    "SELF_TRANSFER_EXCLUDED_REASON",
     "SINGLETON_DEGREE",
     "AccountGraph",
     "Cycle",

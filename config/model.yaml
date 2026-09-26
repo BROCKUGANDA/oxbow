@@ -3,13 +3,17 @@
 # auditable reference; IsolationForest keeps the product honest about label
 # scarcity; fusion stays explainable because its coefficients are printable.
 #
-# Owner: P4b (models, calibration, fusion, SHAP).
+# Owner: P4b (models, calibration, fusion, SHAP). Filled for real in P4b: every key
+# is read by packages/pipeline/oxbow/models/config.py, which fails loud at load on a
+# missing or mistyped key. The declared floor and the declared budgets decide which
+# branch runs, so they are config, not code.
 
 seed: 1337
 
 # --- baseline 0: rules-only severity sum ---------------------------------
 # Proves the ML earns its place. Must be beaten on PR-AUC and precision at
-# budget, or the complexity is not justified.
+# budget, or the complexity is not justified. The rules layer's structured hits
+# arrive through an injected callable; models/ never imports rules/.
 baselines:
   rules_only:
     enabled: true
@@ -17,6 +21,10 @@ baselines:
   scorecard_only:
     enabled: true
     note: "The scorecard itself, doubling as the transparent reference"
+  # DEV-001: the two models ship together and disagree in public. The disagreement
+  # is a first-class artefact, so its size is declared rather than eyeballed.
+  agreement_matrix_bands: [A, B, C, D, E]
+  agreement_top_n_disagreements: 25
 
 # --- primary: LightGBM ---------------------------------------------------
 gbm:
@@ -25,6 +33,12 @@ gbm:
   # deterministic=true is what makes two runs produce identical models.
   deterministic: true
   force_row_wise: true
+  num_threads: 1
+  determinism_note: >-
+    lightgbm's deterministic flag only guarantees bitwise-identical histograms when
+    the split is row-wise AND single-threaded: a multi-threaded reduction reorders
+    float accumulation, so two runs on this box would differ and the artifact hash
+    comparison would be a coin toss. 12 logical cores are deliberately left unused.
   # From the train prior, never hand-set.
   scale_pos_weight: from_train_prior
   early_stopping_rounds: 100
@@ -41,6 +55,7 @@ gbm:
     reg_alpha: 0.1
     reg_lambda: 1.0
     max_bin: 255
+    seed: 1337
 
 # --- tuning --------------------------------------------------------------
 optuna:
@@ -53,9 +68,11 @@ optuna:
   # the untouched test fold.
   log_every_trial: true
   study_name: oxbow-gbm
-  # Selection happens on VALIDATION. The test fold is touched once, and that
-  # fact is timestamped in the MLflow run.
   direction: maximize
+  # Wall-clock cap per study. The budget is n_trials; this only stops a run on a
+  # laptop from finishing at 4 a.m. and it is recorded in the artefact as the reason
+  # fewer than n_trials ran (trials_requested vs trials_used).
+  timeout_seconds: 900.0
   search_space:
     learning_rate: { type: float, low: 0.01, high: 0.2, log: true }
     num_leaves: { type: int, low: 15, high: 127 }
@@ -75,6 +92,10 @@ anomaly:
   contamination: "auto"
   max_samples: "auto"
   random_state: 1337
+  # Fitted on the TRAIN feature matrix only and never on the labelled test fold:
+  # "unusual" must mean unusual relative to what the model was allowed to see, not
+  # unusual relative to the answer.
+  fit_on: train_features
   # Score normalised to 0-1 by VALIDATION percentile rank, never by a min-max
   # fitted on the same data it is scored on.
   normalisation: validation_percentile_rank
@@ -96,6 +117,10 @@ fusion:
     - cycle_flag
     - fan_flag
   regularisation_strength: 1.0
+  solver: SLSQP              # scipy.optimize method; deterministic from a zero start
+  max_iter: 500
+  tolerance: 1.0e-9
+  intercept: fitted          # free (unbounded); only the channel weights are >= 0
   # Coefficients rendered on the validation page: the fused score in one line.
   show_coefficients: true
 
@@ -110,10 +135,22 @@ calibration:
   # Below the floor, calibration is REFUSED and the UI says probabilities are
   # uncalibrated rather than showing a number it cannot stand behind.
   below_floor_action: refuse_and_label_uncalibrated
+  # THE FLOOR. Not declared by P0, so P4b declares it here: 50 positives spread over
+  # 10 reliability bins is 5 per bin, the point below which a measured "observed rate"
+  # is noise rather than a rate. Raising it costs coverage; lowering it buys nothing.
+  min_positives_for_calibration: 50
   # If positives are oversampled, either correct the intercept (King and Zeng) or
   # calibrate on a base-rate-preserving holdout. Say which, in the model card.
   oversampling_correction: king_zeng_intercept
   base_rate_preserving_holdout: true
+  # Train positives more than this multiple of the reference base rate and the
+  # correction fires. 1.5x is a choice, stated so a reviewer can argue with it.
+  oversampling_tolerance_multiple: 1.5
+  # The population base rate the intercept is corrected toward. null means: measure it
+  # on the validation slice, which is never oversampled. A real number here would come
+  # from data/DATASET_CARD.md for the corpus under test.
+  population_base_rate: null
+  reliability_bins: 10
   report: [brier_score, reliability_diagram, ece]
 
 # --- explainability ------------------------------------------------------
@@ -126,6 +163,15 @@ shap:
   # A degenerate tree yields an empty explanation. Fall back to the scorecard
   # points contribution and label the case scorecard-explained.
   on_degenerate_tree: fallback_to_points
+  # Sum of |SHAP values| below this is a flat explanation, i.e. the tree never
+  # split on anything. Declared so the fallback threshold is auditable rather than
+  # a magic number in code.
+  degenerate_max_abs_contribution: 1.0e-9
+  expected_value_column: shap_base_value
+  persist_columns:
+    - shap_json
+    - shap_base_value
+    - explanation_source
 
 # --- drift guard ---------------------------------------------------------
 drift:
@@ -143,3 +189,21 @@ mlflow:
   log_models: true
   log_shap: true
   log_fold_touch_timestamps: true
+  # The offline path. Compose may not be up and the demo must boot with nothing
+  # else running (02: null adapters are the default), so a local file store is the
+  # fallback and the payload records which tracking URI was actually used. Silent
+  # pretence of a server that was never reached is the failure avoided here.
+  local_store_dir: "data/mlflow"
+  registered_model_prefix: oxbow
+  offline_fallback_allowed: true
+
+# --- reporting -----------------------------------------------------------
+reporting:
+  # Where P4b writes its artefacts. out/ is the null-adapter output root: no
+  # database, no network, and a judge can open the files.
+  artifact_dir: "out/p4"
+  hash_artifacts: true
+  scored_output_filename: scored_rows.parquet
+  # The queue order. Ties break on account_key so the queue is identical between
+  # runs (03 H: test_tie_break_deterministic).
+  tie_break_score_column: p_fused

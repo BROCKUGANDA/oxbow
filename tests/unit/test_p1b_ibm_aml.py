@@ -1294,6 +1294,38 @@ def test_batch_slicing_is_deterministic(tmp_path: Path) -> None:
     assert [len(chunk) for chunk in by_two] == [2, 2, 2]
 
 
+def test_the_emitted_frame_does_not_depend_on_the_batch_size(tmp_path: Path) -> None:
+    """Re-slicing the same bytes at another ``batch_rows`` must not move a row.
+
+    ``txn_id`` is built from the file-relative ordinal, and the concatenated batches are
+    re-sorted on the total order before the frame is returned, so the aggregate is the same
+    frame at two, three or a hundred batches. ``batch_id`` is the one column allowed to
+    differ, because it is derived from a batch's own content (DEV-012) — and a batch id that
+    did not change with the batch would be the actual bug.
+    """
+    path = fixture_csv(tmp_path)
+    order = ["event_ts_utc", "txn_id"]
+    columns = [name for name in CANONICAL_P1B_COLUMNS if name != "batch_id"]
+    one_batch = ingest_file(path, batch_rows=100)
+    three_batches = ingest_file(path, batch_rows=2)
+    assert one_batch.events.height == three_batches.events.height == ROW_COUNT
+    assert (
+        one_batch.events.sort(order)
+        .select(columns)
+        .equals(three_batches.events.sort(order).select(columns))
+    )
+    assert one_batch.events["batch_id"].n_unique() == 1
+    assert three_batches.events["batch_id"].n_unique() == 3
+    # The aggregate is globally ordered, not merely batch-by-batch ordered: a per-batch
+    # sort concatenated in file order is the shape that lets two stages disagree about the
+    # same corpus, which is what the total order exists to prevent.
+    for events in (one_batch.events, three_batches.events):
+        assert events.select(order).equals(events.select(order).sort(order))
+    # The returned frame is globally ordered, not merely batch-by-batch ordered.
+    for events in (one_batch.events, three_batches.events):
+        assert events.select(order).equals(events.select(order).sort(order))
+
+
 def test_limit_bounds_the_rows_read(tmp_path: Path) -> None:
     result = ingest_file(fixture_csv(tmp_path), limit=2)
     assert result.rows_read == 2
@@ -1585,10 +1617,7 @@ def test_canonical_v1_keeps_the_self_transfers_this_corpus_is_full_of(
     )
     validated = assert_canonical_frame(events, persisted=False)
     assert validated.height == ROW_COUNT
-    assert (
-        validated.filter(pl.col("account_from") == pl.col("account_to")).height
-        == len(SELF_ROWS)
-    )
+    assert validated.filter(pl.col("account_from") == pl.col("account_to")).height == len(SELF_ROWS)
 
 
 def test_every_currency_name_the_contract_maps_is_unique_and_three_letter() -> None:

@@ -21,6 +21,12 @@ import yaml
 CONFIG_DIRNAME: Final = "config"
 PIPELINE_FILENAME: Final = "pipeline.yaml"
 
+# The name ``config/sources.yaml`` declares for the salt environment variable
+# (``deidentification.account_key.salt_var``). It is a constant here because a
+# stage that read the key out of YAML at run time would fail differently depending
+# on whether the config parsed, which is two failure modes where one is wanted.
+RUN_SALT_VAR: Final = "RUN_SALT"
+
 _REQUIRED_TOP_LEVEL: Final = ("seed", "deployment_timezone")
 
 
@@ -155,11 +161,68 @@ def require_run_salt() -> str:
     return salt
 
 
+DOTENV_FILENAME: Final = ".env"
+
+
+def read_dotenv(root: Path) -> dict[str, str]:
+    """Parse the repo's ``.env`` as KEY=VALUE, ignoring comments and blanks.
+
+    ``python-dotenv`` is not a dependency and none is being added for fifteen lines
+    of parsing (01 A rule 6). Quoted values are unquoted because
+    ``scripts/download_data.py`` and ``docker-compose.yml`` both accept either
+    spelling, so the two readers must agree on what ``KEY="value"`` means.
+    """
+    path = root / DOTENV_FILENAME
+    if not path.is_file():
+        return {}
+    values: dict[str, str] = {}
+    for line in path.read_text(encoding="utf-8").splitlines():
+        text = line.strip()
+        if not text or text.startswith("#") or "=" not in text:
+            continue
+        key, _, raw = text.partition("=")
+        values[key.strip()] = raw.strip().strip("\"'")
+    return values
+
+
+def resolve_run_salt(root: Path) -> str:
+    """The deployment's RUN_SALT: the environment first, then ``.env``.
+
+    ``.env`` is gitignored, so reading it is still "from the environment and never
+    from the repo" (01 A rule 8) — it is the same file ``docker compose`` reads for
+    the ``${RUN_SALT:?}`` substitutions in ``docker-compose.yml``.
+
+    The fallback matters because the salt is an *identity*, not a nonce: every
+    account key in the canonical table is HMAC-keyed by it, so a run that silently
+    picks up a different salt re-keys every account in the corpus. Two such runs
+    cannot be joined, ``make verify-determinism`` cannot compare their bytes, and
+    neither failure is visible in the output. An empty environment is therefore an
+    error to be named, never a licence to invent (03 A rule 1).
+    """
+    from_env = os.environ.get(RUN_SALT_VAR, "")
+    if from_env:
+        return from_env
+    from_file = read_dotenv(root).get(RUN_SALT_VAR, "")
+    if from_file:
+        return from_file
+    raise ConfigError(
+        f"{RUN_SALT_VAR} is set neither in the environment nor in {root / DOTENV_FILENAME}. "
+        "It must come from outside the repo (01 A rule 8); a generated stand-in would "
+        "re-hash every account key and make the two runs of verify-determinism incomparable."
+    )
+
+
 __all__ = [
+    "CONFIG_DIRNAME",
+    "DOTENV_FILENAME",
+    "PIPELINE_FILENAME",
+    "RUN_SALT_VAR",
     "ConfigError",
     "PipelineConfig",
     "find_repo_root",
     "load_pipeline_config",
     "load_yaml",
+    "read_dotenv",
     "require_run_salt",
+    "resolve_run_salt",
 ]

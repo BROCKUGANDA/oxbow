@@ -39,6 +39,69 @@ overlap_groups:
 # (03 C: test_odd_hour_uses_local_hour).
 uses_local_hour: [ODD_HOUR_SHIFT, DORMANT_REACTIVATION]
 
+# --- P3b additions ---------------------------------------------------------
+# Every knob §9 requires that the twelve stanzas above do not carry. Deliberately a
+# separate block rather than new keys inside rules[].params, so the pinned-parameter
+# table in tests/golden/expected.yaml keeps comparing §9's params verbatim. No
+# existing key above is renamed or revalued; nothing here defaults in code
+# (oxbow/rules/settings.py raises on a missing key).
+rule_engine:
+  # DEV-015: R4 as literally specified fires on none of the corpus's 54 labelled
+  # cycles. These two knobs expose the policy so a run can report what each setting
+  # excludes instead of reporting nothing, and the near-miss ledger names which one
+  # refused a given loop.
+  #   cycle_non_increasing: false, because §9's R4 text asks only for retention above a
+  #                               floor over three to six hops. The monotone requirement
+  #                               lives in R12 and in config/pipeline.yaml graph.cycles
+  #                               (where true does exclude "most blocks" of DEV-015's
+  #                               table). Setting this true makes R4 refuse every loop
+  #                               whose amounts grow along the ring; it is reported, not
+  #                               assumed.
+  #   cycle_currency_policy: same_currency excludes the 38/54 cross-currency labelled
+  #                               cycles. 'ignore_currency' is the alternative;
+  #                               'converted' is refused until config/economics.yaml
+  #                               declares reference rates, because an undocumented rate
+  #                               is the implicit-FX error 01 B forbids.
+  cycle_non_increasing: false
+  cycle_currency_policy: same_currency
+  # Bounded loop search for R4, mirroring R12's three-way budget. The graph layer's
+  # own engine keeps its budget in config/pipeline.yaml (DEV-G3); R4's policy budget
+  # is a rule concern and lives with the rule spec.
+  cycle_max_visits: 200_000
+  cycle_timeout_ms: 25_000
+  # Recurrence tolerance for the periodic-cycle down-weight: a lap gap is treated as
+  # the configured period when it is within this ratio of a whole multiple of it.
+  # 5% of 168h is +/-8.4h, which separates weekly payroll from an irregular loop
+  # without demanding timestamps that land on the hour.
+  periodic_tolerance_ratio: 0.05
+  # R5's salient threshold T. Neither corpus carries a real reporting threshold, so
+  # this value is an explicitly SYNTHETIC assumption (DEV-G1) and the UI labels it as
+  # one; it is pinned here rather than invented by the rule (03 G:
+  # test_structuring_threshold_is_configured). Setting threshold_source:
+  # histogram_mode on a corpus with no declared T falls back to this value's
+  # derivation, and the hit records which was used.
+  structuring_threshold_minor: 2_500_000
+  structuring_threshold_label: >
+    SYNTHETIC assumption: no real currency reporting threshold exists in either
+    corpus; 2,500,000 minor units is a declared stand-in, not a legal fact.
+  # R8's "recent" window. §9 defines the quiet-hours jump as recent-vs-historical but
+  # the stanza carries no window length, and anchoring the window on the account's own
+  # last observed activity is what keeps a corpus-wide anchor from scoring an account
+  # whose night shift ended three weeks ago.
+  odd_hour_recent_days: 7
+  # §9 guard, made executable: a permanently dead rule is removed from the panel
+  # rather than kept as decoration presented as capability. DEV-011 constrains this —
+  # on PaySim a graph-typology rule firing ~never is a CORRECT result, so removal
+  # always carries the named reason and the corpus condition that produced it, and
+  # never silently drops the rule's identity from the run report.
+  remove_dead_rules: true
+  # Off by default: a dead rule is a reported degradation, not a crash. Strict mode
+  # exists so a canary corpus that should light every rule can fail a build.
+  fail_on_dead_rule: false
+  # The near-miss ledger (DEV-015): loops that exist topologically and respect time
+  # but fail a value policy are recorded with the named reason that excluded them.
+  emit_cycle_near_misses: true
+
 rules:
   - id: R1
     name: RAPID_PASS_THROUGH

@@ -28,43 +28,43 @@ paysim:
     modulus_us: 86_400_000_000  # spread within the step
     salt: "oxbow-paysim-step-v1"
 
-# --- IBM-AML step expansion (P1b) ----------------------------------------
-# IBM-AML's `stepFrom`/`stepTo` are the generator's own day counters: step 0 is
-# the simulator's internal t=0 and has no calendar meaning. Expanding them to an
-# instant therefore needs a fixed epoch, exactly like PaySim's `step`.
-#
-# EPOCH CHOSEN: 2019-01-01T00:00:00Z, for four reasons.
-#  1. It is DISJOINT from PaySim's 2014 epoch, so no canonical instant can be
-#     attributed to the wrong corpus by timestamp range alone. DEV-004 put both
-#     corpora in one table precisely because ids collide; timestamps must not.
-#  2. It is the year this corpus was published, which makes the synthetic origin
-#     obvious to anyone reading a derived date: nobody mistakes 2019-03-11 for an
-#     observed transaction date on data generated in 2019.
-#  3. Every derived instant is comfortably in the past relative to this build, so
-#     the `future_timestamp_tolerance_hours` guard below stays a real guard
-#     instead of rejecting a corpus whose epoch happens to sit ahead of now().
-#  4. Stepping forward from a year start keeps the documented ~365-step range
-#     inside one calendar year, which is what walk-forward folds (P6) and the
-#     30-day embargo need to see a plausible window rather than a compressed one.
-#
-# UNVERIFIED AGAINST REAL BYTES as this is written: data/raw/ibmaml/ holds only a
-# partial archive. On arrival, `scripts/download_data.py --verify-only` re-confirms
-# the header and the hash, and the true step range must be read off the real file;
-# if it runs past 365 the derived dates extend, still deterministically.
+# --- IBM-AML ingest (P1b) -------------------------------------------------
+# There is NO step expansion here, and there must not be one. The previous block
+# declared an epoch, a step_hours and an intra-step offset salt for `stepFrom`/`stepTo`
+# day counters that this corpus does not have: DECISIONS DEV-013 records that the
+# fourteen-column contract those keys served belonged to a different IBM artefact.
+# `data/raw/ibmaml/HI-Small_Trans.csv` (475,664,283 bytes, 5,078,345 data rows, SHA-256
+# pinned in config/sources.yaml) carries real wall-clock minutes instead:
+#   2022-09-01 00:20,010,8000EBD30,010,8000EBD30,3697.34,US Dollar,3697.34,US Dollar,Reinvestment,0
+# so the timestamp is parsed, not expanded, and rows that share a minute are ordered by
+# `txn_id` under the same (event_ts_utc, txn_id) total order every other sort uses.
 ibmaml:
-  epoch_utc: "2019-01-01T00:00:00Z"
-  step_hours: 24
-  intra_step_offset:
-    method: hash_of_txn_id
-    # The modulus is the transaction's OWN stepFrom..stepTo window rather than a
-    # constant, so an event can never be placed after its own window closes. A
-    # same-day transaction therefore gets exactly one day (86_400_000_000 us),
-    # which is PaySim's modulus above: one rule, two corpora.
-    modulus: transaction_span
-    salt: "oxbow-ibmaml-step-v1"
-  # A window wider than this means the counters are not the documented day index,
-  # and the row is quarantined with `txn_span_exceeds_cap` for a human to read.
-  max_txn_span_days: 7
+  # ASSUMPTION, NOT A FACT. The `Timestamp` column carries minutes with no offset and no
+  # zone name, and the bundle ships no declaration of either. Nothing in the bytes says
+  # whether these are bank-local, UTC, or a generator's arbitrary clock. The instants are
+  # therefore read as being in the deployment zone, Africa/Kampala (UTC+3, no DST), so the
+  # local wall clock a reader sees in the file is the local wall clock the product shows,
+  # and event_ts_utc is three hours earlier than the printed minute.
+  #
+  # The consequence of being wrong is bounded and named: an hourly feature or an ODD_HOUR
+  # rule shifts by whole hours, and an operator's reading of "03:00 local" is exactly what
+  # a UTC reading would hide. It cannot corrupt an amount or a graph edge. If the corpus's
+  # provenance is ever documented as UTC, changing this one value moves every derived
+  # local_hour and event_date_local consistently.
+  source_timezone_assumption: "Africa/Kampala"
+  # The separator the bytes actually use, confirmed from the raw hex (0x2f at offsets 4
+  # and 7 of the first data row) rather than from how a terminal renders it. The reader
+  # also accepts the dash spelling, because scripts/build_ibm_typologies.py accepts both
+  # for the two files of one bundle and the row ordinal that keys the typology join is
+  # defined by which lines parse. A third shape fails the batch: silently accepting a
+  # format nobody looked at is how a join quietly returns zero rows and a run still goes
+  # green.
+  timestamp_format: "%Y/%m/%d %H:%M"
+  # label_typology is joined from this artifact, not read from a label column: the corpus
+  # has exactly one label (Is Laundering) and its eight typologies live in
+  # HI-Small_Patterns.txt as annotated attempt blocks. Built by
+  # `uv run python scripts/build_ibm_typologies.py`; 3,209 rows over 370 blocks.
+  typology_join_artifact: "data/processed/ibm_typologies.parquet"
 
 # --- rows / corruption guards (03 B) -------------------------------------
 ingest:
@@ -84,15 +84,15 @@ ingest:
   batch_rows: 100_000
   # The scope of `oxbow ingest` when `--source` is not given.
   #
-  # PaySim only, and the reason is measured rather than chosen: IBM-AML's declared
-  # raw contract (`contracts/raw_ibm_aml.py`) names fourteen columns belonging to a
-  # different IBM artefact, while `HI-Small_Trans.csv` on this host has eleven with
-  # `Account` repeated (DECISIONS DEV-013, STATE punch-list 1). A source whose
-  # contract does not match its bytes must be refused, not ingested and corrected
-  # downstream. `oxbow ingest --source ibmaml` therefore still runs the real path and
-  # fails loudly, and `--source all` reports PaySim green next to that refusal; the
-  # default scope is widened to both corpora in the same commit that corrects the
-  # contract, not before it.
+  # Still PaySim only, but the reason changed: the IBM-AML contract no longer
+  # mismatches its bytes (DEV-013's fourteen-column fiction was replaced with the
+  # eleven real columns on 2026-09-26, and `ingest --source ibmaml` now canonicalises
+  # the whole 5,078,345-row file with zero quarantined rows). What keeps IBM out of the
+  # default scope is a different, still-open disagreement: `ingest/run.py` asserts
+  # label provenance per source, and 5,075,136 of this corpus's rows legitimately carry
+  # no typology because only 3,209 transactions sit in an annotated attempt block. That
+  # is the CLI/contracts side to settle, so widening the default scope is its call and
+  # not this block's; the value is left as PaySim alone rather than changed silently.
   default_sources:
     - paysim
 

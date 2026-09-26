@@ -52,20 +52,29 @@ def test_cli_help_lists_all_four_verbs() -> None:
         assert verb in result.output, f"{verb} missing from --help output"
 
 
-def test_unimplemented_stage_exits_nonzero() -> None:
-    """A stage that is not built must not exit zero.
+def test_stage_verbs_do_the_work_or_refuse_loudly(tmp_path: Path) -> None:
+    """P0's discipline, restated now that the verbs are wired: never exit zero on nothing.
 
-    00 B: never report a result you did not observe. A verb that printed its
-    scope and then exited 0 would let a caller mistake an empty run for a real
-    one, which is exactly the silent failure 03 A rule 1 forbids.
+    The original clause — "a stage that is not built must not exit zero" — was asserted by
+    ``graph`` printing ``NOT IMPLEMENTED`` and exiting 2. That body has been replaced by the
+    real stage (P3a), so the same discipline is now asserted two ways that survive the
+    wiring: no verb may print a placeholder for a stage whose package has landed, and a
+    stage handed an unusable boundary must refuse with a non-zero code rather than report
+    success. 00 B: never report a result you did not observe.
     """
     from typer.testing import CliRunner
 
     from oxbow.cli import app
 
-    result = CliRunner().invoke(app, ["graph"])
-    assert result.exit_code == 2
-    assert "NOT IMPLEMENTED" in result.output
+    dry = CliRunner().invoke(app, ["graph", "--dry-run"])
+    assert dry.exit_code == 0, dry.output
+    assert "NOT IMPLEMENTED" not in dry.output, dry.output
+
+    refused = CliRunner().invoke(
+        app, ["graph", "--config-dir", str(tmp_path / "config")]
+    )
+    assert refused.exit_code == 2, refused.output
+    assert "REFUSED" in refused.output, refused.output
 
 
 # --- config boundary fails loud (03 A rule 1) ----------------------------

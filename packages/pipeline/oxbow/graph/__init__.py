@@ -9,8 +9,9 @@ The public surface, and what each piece is for:
 ``build_graph(events, cfg)``
     Canonical event v1 in, :class:`~oxbow.graph.model.AccountGraph` out. Parallel
     edges retained, rails and externals typed, singletons excluded from aggregates
-    and counted, communities found with a fixed seed, cycles enumerated inside a
-    hard budget.
+    and counted, self-transfers retained as events and excluded from every adjacency
+    structure and counted (by row and by per-currency value), communities found with
+    a fixed seed, cycles enumerated inside a hard budget.
 ``degree_measurement(events, cfg)``
     The same degree and typing maths without traversal structures — the only path
     that runs over a full corpus, and the one the day-3 gate prints from.
@@ -65,6 +66,7 @@ from oxbow.graph.model import (
     NODE_TYPE_EXTERNAL,
     NODE_TYPE_MEMBER,
     NODE_TYPE_RAIL,
+    SELF_TRANSFER_EXCLUDED_REASON,
     SINGLETON_DEGREE,
     AccountGraph,
     Cycle,
@@ -85,6 +87,7 @@ __all__ = [
     "NODE_TYPE_MEMBER",
     "NODE_TYPE_RAIL",
     "REQUIRED_EVENT_COLUMNS",
+    "SELF_TRANSFER_EXCLUDED_REASON",
     "SINGLETON_DEGREE",
     "TOP_DEGREES_REPORTED",
     "AccountGraph",

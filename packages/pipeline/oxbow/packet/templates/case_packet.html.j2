@@ -1,0 +1,337 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>OXBOW case packet — {{ case.case_id }} decision {{ decision.decision_seq }}</title>
+<meta name="author" content="OXBOW (research prototype)">
+<meta name="description" content="Append-only decision exhibit generated from persisted pipeline artifacts for a pinned run.">
+<meta name="keywords" content="OXBOW, case packet, decision exhibit, audit chain, research prototype">
+<meta name="generator" content="{{ packet_version }}; renderer oxbow.packet.render; typesetter WeasyPrint">
+<!-- oxbow:pdf-dates -->
+{{ stylesheet() }}
+</head>
+<body class="packet">
+
+{# ------------------------------------------------------------------ page one #}
+<header class="cover">
+  <p class="eyebrow">OXBOW &middot; financial-crime network intelligence &middot; case packet</p>
+  <h1>Case {{ case.case_id }}</h1>
+  <p class="subject-line">
+    Account <span class="mono">{{ case.account_key }}</span>
+    &middot; decision {{ decision.decision_seq }} of this case
+    &middot; band <strong class="band band-{{ score.band }}">{{ score.band }}</strong>
+  </p>
+
+  <div class="band-figure" role="img" aria-label="Risk band {{ score.band }} of A to E, {{ band_meter.lit }} of {{ band_meter.segments_total }} meter segments lit">
+    <svg class="meter" width="52" height="16" viewBox="0 0 52 16" aria-hidden="true">
+      {% for segment in band_meter.segments %}
+      <rect x="{{ segment.x }}" y="{{ segment.y }}" width="{{ segment.width }}" height="{{ segment.height }}"
+            class="meter-segment{{ ' lit' if segment.lit else '' }}"/>
+      {% endfor %}
+    </svg>
+    <span class="meter-letter">{{ score.band }}</span>
+    <span class="meter-caption">band letter and meter glyph, so the ranking survives greyscale and a laser printer</span>
+  </div>
+
+  {# The disclaimer is on page one of every packet, verbatim (plan §15). #}
+  <section class="disclaimer" id="disclaimer" aria-label="Disclaimer">
+    <h2>What this document is, and what it is not</h2>
+    <p class="disclaimer-text">{{ disclaimer }}</p>
+    <p class="secondary">
+      Account keys are salted one-way hashes produced at ingest; no raw identifier from
+      any corpus appears here, and none can be recovered from it. Any East-African
+      mobile-money framing in this document is illustrative scenario dressing over
+      permitted public data, not a claim about any real institution, market or regulator.
+      Every monetary figure in this packet is a model estimate under the assumptions
+      printed in section 8, and is not a measured outcome.
+    </p>
+  </section>
+
+  <table class="facts">
+    <caption>Cover facts — the identifiers a reader needs to check this document against the system that produced it</caption>
+    <tbody>
+      <tr><th scope="row">Run this case is pinned to</th><td class="mono">{{ bundle.run_id }}</td>
+          <td class="basis">the evidence, score, explanation and network below are this run's, as they stood at decision time</td></tr>
+      <tr><th scope="row">Current run at render context</th><td class="mono">{{ runs.head_run_id }}</td>
+          <td class="basis">from the run ledger; a newer run does not change this packet, which is why it is pinned</td></tr>
+      {% if case.decided_on_superseded_run %}
+      <tr class="flag"><th scope="row">decided_on_superseded_run</th><td class="mono">true</td>
+          <td class="basis">this decision was written against a run that had <em>already</em> been superseded. The stamp is the audit row's own field, recorded inside the decision transaction, and plan §15 keeps it on the cover forever</td></tr>
+      {% else %}
+      <tr><th scope="row">decided_on_superseded_run</th><td class="mono">false</td>
+          <td class="basis">the run was current when this decision was signed, per the audit row</td></tr>
+      {% endif %}
+      <tr><th scope="row">Model version</th><td class="mono">{{ score.model_version }}</td>
+          <td class="basis">stamped on the scored row that produced this case</td></tr>
+      <tr><th scope="row">Packet version</th><td class="mono">{{ packet_version }}</td>
+          <td class="basis">layout contract, not a data version</td></tr>
+      <tr><th scope="row">Decided at</th><td class="mono">{{ format_instant(decision.decided_at) }}</td>
+          <td class="basis">{{ zone.label }}; recorded instant, never the render clock</td></tr>
+      <tr><th scope="row">Decided by</th><td class="mono">{{ decision.actor_id }}</td>
+          <td class="basis">the acting principal's subject id</td></tr>
+      {% if decision.four_eyes_confirmed_by %}
+      <tr><th scope="row">Four-eyes confirmed by</th><td class="mono">{{ decision.four_eyes_confirmed_by }}</td>
+          <td class="basis">a second subject, required above four_eyes.threshold_exposure_minor</td></tr>
+      {% endif %}
+      <tr><th scope="row">Audit row covering this decision</th><td class="mono">seq={{ decision_row_seq }}</td>
+          <td class="basis">chain verified on export: {{ chain_rows_checked }} rows walked, head {{ chain_head_hash }}</td></tr>
+      <tr><th scope="row">Row digest / predecessor</th><td class="mono break">{{ decision_row_hash }}<br>prev {{ decision_row_prev_hash }}</td>
+          <td class="basis">the digest covers the reason text, the money, the model version and this stamp</td></tr>
+    </tbody>
+  </table>
+</header>
+
+{# ------------------------------------------------------------------ decision #}
+<section id="decision">
+  <h2>1. The decision</h2>
+  <p class="decision-action"><strong>{{ decision.action }}</strong> &mdash; recorded at
+    {{ format_instant(decision.decided_at) }} by <span class="mono">{{ decision.actor_id }}</span>.
+    A reversal is a new row referencing the original; both appear in section 7.</p>
+  <blockquote class="reason">
+    <p class="reason-label">Free-text reason, as written by the reviewer (covered by the digest at seq={{ decision_row_seq }})</p>
+    <p>{{ decision.reason }}</p>
+  </blockquote>
+</section>
+
+{# ------------------------------------------------------------------ evidence #}
+<section id="evidence">
+  <h2>2. Evidence</h2>
+  <p>{{ evidence.row_count }} canonical event(s) for
+    <span class="mono">{{ evidence.account_key }}</span>, from
+    <span class="mono">{{ evidence.source }}</span>, covering
+    {{ format_instant(evidence.window_start) }} to {{ format_instant(evidence.window_end) }}
+    ({{ zone.name }}). Ordered by the run's documented total order
+    <span class="mono">(event_ts_utc, txn_id)</span>.
+    {% if bundle.transaction_ids %}These are the transactions the decision named at
+    signing time; the packet prints exactly those.{% endif %}</p>
+  <table class="grid">
+    <thead>
+      <tr><th scope="col">Transaction</th><th scope="col">When</th><th scope="col">Type</th>
+          <th scope="col">Direction</th><th scope="col">Counterparty</th>
+          <th scope="col">Amount (major units, ISO code)</th></tr>
+    </thead>
+    <tbody>
+      {% for row in evidence.rows %}
+      <tr>
+        <td class="mono">{{ row.txn_id }}
+          <span class="assumption-inline">column pointer: {{ row.column_pointer }}</span></td>
+        <td class="mono">{{ format_instant(row.occurred_at) }}</td>
+        <td>{{ row.txn_type }}</td>
+        <td>{{ row.direction }}</td>
+        <td class="mono">{{ row.counterparty }}</td>
+        <td class="money">{{ row.money() | major_text(per_major) }}
+          <span class="assumption-inline">observed value in {{ row.currency }}; summed per currency, never converted (no implicit FX)</span></td>
+      </tr>
+      {% endfor %}
+    </tbody>
+    <tfoot>
+      {% for currency, total in evidence_totals %}
+      <tr><th scope="row" colspan="5">Total, {{ currency }} only</th>
+        <td class="money">{{ total | minor_to_major(currency, per_major) }}
+          <span class="assumption-inline">sum of the {{ currency }} rows above; an observation, not a priced estimate</span></td></tr>
+      {% endfor %}
+    </tfoot>
+  </table>
+</section>
+
+{# -------------------------------------------------------------------- score #}
+<section id="score">
+  <h2>3. Score, band and the two models' disagreement</h2>
+  <table class="grid">
+    <tbody>
+      <tr><th scope="row">Fused score</th><td class="mono">{{ '%.6f' | format(score.fused_score) }}</td>
+          <td class="basis">fusion of the WOE scorecard and the gradient-boosted model, calibrated</td></tr>
+      <tr><th scope="row">Band</th>
+          <td class="mono">{{ score.band }} (meter {{ band_meter.lit }}/{{ band_meter.segments_total }})</td>
+          <td class="basis">band letter and glyph render together; the colour is redundant decoration</td></tr>
+      <tr><th scope="row">Scorecard total</th><td class="mono">{{ score.scorecard_points }} points</td>
+          <td class="basis">integer points by construction, so the arithmetic is auditable by hand</td></tr>
+      <tr><th scope="row">Calibrated confidence</th>
+          <td class="mono">{{ '%.4f' | format(score.calibration.observed_rate) }} observed rate on n={{ score.calibration.n }}</td>
+          <td class="basis">band {{ score.calibration.band }}; n is what stops "high confidence" being an adjective</td></tr>
+      <tr><th scope="row">Rules fired</th>
+          <td class="mono">{% if score.rule_ids %}{{ score.rule_ids | join(', ') }}{% else %}none recorded on the scored row{% endif %}</td>
+          <td class="basis">typology indicators R1–R12 (plan §9)</td></tr>
+    </tbody>
+  </table>
+
+  <h3>3.1 Reason codes (adverse-action sentences)</h3>
+  {% if score.reason_codes %}
+  <ol class="reason-codes">
+    {% for code in score.reason_codes %}<li>{{ code }}</li>{% endfor %}
+  </ol>
+  {% else %}
+  <p class="named-gap">No reason-code sentence is carried on the scored row this case
+    was built from, so none is printed here. The absence is a fact about the run's
+    artifacts, not a judgement about the account.</p>
+  {% endif %}
+
+  <h3>3.2 Per-attribute point table</h3>
+  {% if scorecard_points %}
+  <table class="grid">
+    <thead><tr><th scope="col">Attribute</th><th scope="col">Bin</th><th scope="col">Points</th></tr></thead>
+    <tbody>
+      {% for point in scorecard_points %}
+      <tr><td class="mono">{{ point.feature }}</td><td>{{ point.bin_display }}</td>
+          <td class="mono">{{ '%+d' | format(point.points) }}</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="named-gap">The per-attribute point table is not available for run
+    <span class="mono">{{ bundle.run_id }}</span>: the scorecard-point handoff rows for
+    that run were not on disk when this packet was composed
+    (<span class="mono">out/warehouse/scorecard_point/run={{ bundle.run_id }}.jsonl</span>).
+    The reason-code sentences above are the digest-covered form and are printed in full;
+    this section names a gap rather than filling it.</p>
+  {% endif %}
+</section>
+
+{# ------------------------------------------------------------------- shap #}
+<section id="explanation">
+  <h2>4. Explanation</h2>
+  <p class="source-line">
+    Source: <span class="mono">{{ explanation.source }}</span>
+    {% if explanation.is_scorecard_explained %}
+      — <strong>scorecard-explained</strong>: the tree explanation was unavailable for
+      this run ({% if explanation.fallback_reason %}{{ explanation.fallback_reason }}{% else %}the ensemble split on no feature{% endif %}),
+      so the contributions below are scorecard points, not SHAP values. That is a
+      different explanation, not a missing one.
+    {% endif %}
+    <br>Read from: <span class="mono">{{ explanation.source_pointer }}</span>.
+    {{ explanation.note }}
+  </p>
+  <table class="grid">
+    <thead><tr><th scope="col">Feature</th><th scope="col">Contribution</th><th scope="col">Unit</th></tr></thead>
+    <tbody>
+      <tr><td class="mono">base value</td><td class="mono">{{ '%.6f' | format(explanation.base_value) }}</td>
+          <td>{{ explanation.base_unit }}</td></tr>
+      {% for row in explanation.rows %}
+      <tr><td class="mono">{{ row.feature }}</td><td class="mono">{{ '%+.6f' | format(row.contribution) }}</td>
+          <td>{{ row.unit }}{% if row.display_value %} — {{ row.display_value }}{% endif %}</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+
+{# ---------------------------------------------------------------- subgraph #}
+<section id="network">
+  <h2>5. Network neighbourhood</h2>
+  <figure class="subgraph">
+    {{ image.svg | safe }}
+    <figcaption>{{ image.caption }}</figcaption>
+  </figure>
+  <table class="grid per-currency">
+    <caption>Value basis of the drawn edges — the line beside every currency figure in the diagram</caption>
+    <tbody>
+      {% for line in value_basis %}<tr><td class="basis">{{ line }}</td></tr>{% endfor %}
+    </tbody>
+  </table>
+  <p class="secondary">The diagram is generated from the graph artifact by
+    <span class="mono">oxbow.packet.subgraph_image</span>: concentric hop rings, node type
+    by shape, value by stroke weight, events by the <span class="mono">Nx CUR</span> marks.
+    It is not a screenshot of the explorer, so it can be reproduced from the rows it depicts.
+    Rails (square nodes) are endpoints and are never traversed through, which is why a rail
+    in the middle of a path does not connect the accounts either side of it.</p>
+</section>
+
+{# ---------------------------------------------------------------- economics #}
+<section id="economics">
+  <h2>6. What reviewing this account is worth</h2>
+  <p>Every figure below is printed with the assumption line beside it (plan §11, §15).
+    Money is integer minor units carried through the whole pipeline and divided at
+    render time only, so the totals above and the figures here reconcile.</p>
+  <table class="grid money-table">
+    <thead><tr><th scope="col">Figure</th><th scope="col">Amount</th><th scope="col">Basis of this figure</th></tr></thead>
+    <tbody>
+      {% for line in money_lines %}
+      <tr>
+        <th scope="row">{{ line.label }}</th>
+        <td class="money">{{ line.render() }}</td>
+        <td class="basis">{{ line.basis }}
+          <span class="assumption-inline">Assumption keys: {{ assumption_keys }} — verbatim block in section 8</span></td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  <p class="secondary">Not shown as a band: <span class="mono">EV_i</span> is printed at
+    the recovery rate this decision was actually priced at
+    (r={{ economics_block.recovery_rate }}), because recomputing it would need
+    <span class="mono">p_i</span>, which the decision bundle does not carry. The
+    <span class="mono">E_i x r</span> row is the only figure restated over the band, and
+    it is a multiplication of a recorded exposure, not a re-run of the model.</p>
+</section>
+
+{# ----------------------------------------------------------------- timeline #}
+<section id="timeline">
+  <h2>7. Append-only decision log for this case</h2>
+  <p>Both a decision and any reversal of it appear, each with the digest that covers it.
+    Nothing in this table is an edit of an earlier row — mutation is what would destroy
+    the integrity claim this packet is built on.</p>
+  <table class="grid">
+    <thead><tr><th scope="col">seq</th><th scope="col">When ({{ zone.name }})</th><th scope="col">Action</th>
+      <th scope="col">Actor</th><th scope="col">Reason</th><th scope="col">Row digest</th></tr></thead>
+    <tbody>
+      {% for entry in timeline %}
+      <tr class="{{ 'flag' if entry.decided_on_superseded_run else '' }}">
+        <td class="mono">{{ entry.seq }}</td>
+        <td class="mono">{{ format_instant(entry.occurred_at) }}</td>
+        <td>{{ entry.action_verb }}{% if entry.reversal_of_seq is not none %} of seq {{ entry.reversal_of_seq }}{% endif %}</td>
+        <td class="mono">{{ entry.actor_id }}</td>
+        <td>{{ entry.reason }}</td>
+        <td class="mono break">{{ entry.row_hash }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  <p class="integrity">Chain verification on export: <strong>{{ chain_rows_checked }} rows
+    walked and every digest recomputed</strong>; head
+    <span class="mono break">{{ chain_head_hash }}</span>. The walk happened during this
+    render and the render carries no render-time clock: the document's own dates are the
+    recorded instants in the table above.</p>
+</section>
+
+{# ------------------------------------------------------------- assumptions #}
+<section id="assumptions">
+  <h2>8. Assumptions, verbatim</h2>
+  <p>Reprinted from <span class="mono">{{ assumptions.source_path }}</span> by
+    <span class="mono">oxbow.quant.economics.assumption_block()</span> — the same text the
+    product renders under a currency figure and the same text
+    <span class="mono">oxbow eval</span> publishes, so a figure cannot meet a shorter
+    version of its own assumptions in one surface than another.</p>
+  <pre class="assumptions">{{ assumptions.text }}</pre>
+  <p class="secondary">Keys named by every money line in this document:
+    <span class="mono">{{ assumption_keys }}</span>.
+    Changing a value in that file changes every figure in section 6; that is the point of
+    printing them together.</p>
+</section>
+
+{# -------------------------------------------------------------- provenance #}
+<section id="provenance">
+  <h2>9. Provenance</h2>
+  <ul class="provenance mono">
+    <li>decision bundle (spine of this document): the case-sink payload for
+        <span>{{ bundle.run_id }} / {{ case.case_id }} / decision {{ decision.decision_seq }}</span></li>
+    <li>evidence: {{ evidence.source }}</li>
+    <li>network drawing: {{ subgraph.source }}</li>
+    <li>explanation: {{ explanation.source_pointer }}</li>
+    <li>assumptions: {{ assumptions.source_path }}</li>
+    <li>run ledger: {{ runs.head_run_id }} as head of {{ runs.runs | length }} recorded run(s)</li>
+    <li>audit chain: {{ chain_rows_checked }} rows, covering digest at seq {{ decision_row_seq }}</li>
+    <li>rendering: {{ packet_version }}, typeset by WeasyPrint; fonts
+        <span>{{ fonts.sans }}</span> / <span>{{ fonts.mono }}</span></li>
+  </ul>
+  <p class="secondary">Every account identifier above is a salted one-way hash from
+    ingest (config/sources.yaml :: deidentification.account_key). Re-identification
+    requires the run salt, which is not in this document, not in the packet directory,
+    and not in the repository.</p>
+</section>
+
+<footer class="endnote">
+  <p>{{ disclaimer }}</p>
+  <p class="mono">packet {{ packet_version }} &middot; case {{ case.case_id }} &middot;
+    decision {{ decision.decision_seq }} &middot; run {{ bundle.run_id }} &middot;
+    audit seq {{ decision_row_seq }} &middot; {{ format_instant(decision.decided_at) }}</p>
+</footer>
+</body>
+</html>

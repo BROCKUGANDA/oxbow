@@ -24,7 +24,13 @@ services:
       POSTGRES_DB: ${POSTGRES_DB:-oxbow}
       # Deterministic collation, so ORDER BY does not depend on host locale.
       POSTGRES_INITDB_ARGS: "--locale=C --encoding=UTF8"
-    ports: ["${POSTGRES_PORT:-5432}:5432"]
+    # Host port 5433 by default, not 5432. Measured on this host: a native
+    # postgres.exe is bound to 0.0.0.0:5432 alongside the Docker proxy, so a host
+    # connection to 5432 answers from that server and reports
+    # `FATAL: role "oxbow" does not exist`. The container is healthy either way,
+    # which is the worst kind of failure: it looks like a bad password.
+    # Override with POSTGRES_PORT if the host port is free.
+    ports: ["${POSTGRES_PORT:-5433}:5432"]
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
@@ -142,8 +148,11 @@ services:
 
   echo:
     build:
-      context: ./apps/api
-      dockerfile: Dockerfile.echo
+      # Repository root, not apps/api: echo.py imports the signature scheme from
+      # packages/pipeline/oxbow/adapters/signing.py, which must be in the build
+      # context. Same convention as the `api` and `worker` services below.
+      context: .
+      dockerfile: apps/api/Dockerfile.echo
     <<: *restart
     # 02 H: a tiny FastAPI echo service that verifies the signature and records
     # deliveries. Signing, retries, idempotency and dead-lettering are exercised

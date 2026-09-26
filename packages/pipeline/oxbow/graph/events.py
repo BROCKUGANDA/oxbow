@@ -22,6 +22,14 @@ The checks that carry weight:
 * Amounts are never summed across ``currency``. Currency is a group key on every
   aggregate this layer emits, and the helper that flattens to one number raises
   when a pair holds more than one currency.
+* ``account_from == account_to`` is a **legitimate row**, not a contract violation
+  (DEV-013: 591,212 of IBM-AML's 5,078,345 rows are self-transfers, mostly
+  reinvestments). It is flagged here as ``is_self_transfer`` and stays a row: the
+  graph keeps it in the event frame and the aggregate table, counts it per account
+  and per currency, and excludes it from every adjacency structure in one place
+  (:func:`oxbow.graph.build._adjacency`), which is the "kept as a feature, not used
+  for cycle and fan detection" split rule 01 P3 asks for. Refusing it at *this*
+  boundary was the over-enforcement that made a whole corpus un-ingestable.
 """
 
 from __future__ import annotations

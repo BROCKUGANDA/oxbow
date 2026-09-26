@@ -517,3 +517,67 @@ now has to state how many self-edges it ignored.
 
 The rule mirrors what the plan already does for reversals: kept visible, excluded from
 cycle detection, and declared.
+
+## DEV-019 - DEV-015's table was right and its conclusion was arithmetic
+
+**Authority:** 00 §I.3 over DEV-015's prose, on measurement. DEV-015's *decision* stands;
+one sentence of its stated consequence does not, and the sentence is the one a later
+phase would have built on.
+
+### The collision
+
+DEV-015 measured the IBM-AML bundle's own 54 labelled `CYCLE` blocks and recorded a
+per-knob table: 38 cross-currency, 25 below the 0.6 retention floor, 45 with amounts
+growing along the ring, 14 shorter than three hops, 20 longer than six, 5 not
+time-increasing. Every one of those numbers reproduces from the bytes. From the table
+DEV-015 concluded:
+
+> R4 `CYCLE_MEMBER` as defined in plan §9 cannot fire on 70 % of the cycles the corpus
+> itself labels as cycles, and on the remaining 30 % it is blocked by the retention
+> floor, the non-increasing requirement, or the two-leg shape. [...] the headline network
+> rule would score zero on the labelled positive set.
+
+That conclusion is the **union** of the six columns, and it was never computed. The
+columns overlap heavily — 38 + 25 + 14 + 5 reads like 82 against a population of 54 only
+if you add them. Measured, the union is 51 of 54. Three cycles are refused by nothing at
+all: three single-currency Saudi Riyal rings of 3–4 hops, value retention 0.82–0.94,
+strictly increasing timestamps (two of the three also grow along the ring, so the
+non-increasing knob leaves two). Shipped R4 fires on three of the labelled positive set,
+not zero.
+
+The failure mode this entry exists to prevent is the one DEV-015 was written to prevent:
+a rule declared dead, and a detector therefore re-specified around a zero that the corpus
+never agreed to. It was one inference away from happening, and the difference between the
+two outcomes is a tally nobody ran.
+
+### The resolution
+
+DEV-015's decision is unchanged: the retention floor stays configurable, the currency
+rule stays a per-loop requirement, and `require_non_increasing` becomes a policy knob
+rather than a hard monotone constraint. Three single-currency rings scoring hits is
+exactly the behaviour a typology detector should have on a corpus of typologies, and it
+is the evidence the re-specification was argued from.
+
+What changes is that the claim is now asserted as a measurement instead of asserted as a
+sum. `tests/unit/test_p3b_r4_labelled_cycles.py` pins all six per-knob counts *and* the
+three survivors, measured through the same `build_loop` / `loop_reasons` pair the rule
+uses, so a change in any knob moves a number in a test rather than a sentence in this
+file. The counts are taken with `require_non_increasing` set, as §9 states the rule,
+because that is the configuration under which the "amounts grow" column exists at all;
+the headline is then taken with the shipped configuration, where the knob is off.
+
+Two smaller facts the same measurements settled, both of which had been read the other
+way:
+
+* `amount_increases_along_loop` is a first-class refusal **reason**, not only the
+  per-hit evidence field `rules/network.py` reads off an anchor. `loop_reasons` emits it
+  whenever `require_non_increasing` is set, and 45 is what it counts. A test that tallies
+  reasons with the knob off sees the key absent, not zero.
+* `non_increasing_breaches` counts consecutive legs and does not wrap from the last leg
+  back to the first. DEV-015's own quoted nine-hop ring therefore has three breaches, not
+  the four a reader gets counting round the circle — and the wrap is the one comparison
+  that runs against the direction of time, since the closing leg is the most recent and
+  the first leg the oldest.
+
+Neither of these changes a shipped default. Both are now visible in a test, which is where
+a claim about a corpus belongs.

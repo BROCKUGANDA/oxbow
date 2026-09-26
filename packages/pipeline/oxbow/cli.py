@@ -570,11 +570,12 @@ def _load_canonical_events(
                     "schema drift, not a detail."
                 )
             frames.append(frame)
-    # ``vertical_strict`` so a batch whose dtypes drifted fails here rather than being
-    # widened into a superset column. The polars stub list lags the runtime (1.32 accepts
-    # the value and raises on a genuine schema mismatch), hence the ignore on the argument
-    # only, not on the call.
-    events = pl.concat(frames, how="vertical_strict")  # type: ignore[arg-type]
+    # ``vertical`` is already the strict form: on polars 1.32 a batch whose dtype
+    # drifted raises SchemaError rather than being widened into a superset column
+    # (measured, not assumed -- the previous value here, "vertical_strict", is not a
+    # polars keyword at all, so the standalone `oxbow graph` verb died on any corpus
+    # with more than one landed batch). ``vertical_relaxed`` is the one that coerces.
+    events = pl.concat(frames, how="vertical")
     if events.height == 0:
         raise ArtifactError("the canonical table is empty")
     ctx.echo(

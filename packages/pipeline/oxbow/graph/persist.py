@@ -281,6 +281,7 @@ def stats_from_json(payload: dict[str, object]) -> GraphStats:
     wanted = {
         "event_count",
         "self_transfer_count",
+        "self_transfer_value_minor",
         "edge_count",
         "pair_count",
         "node_count",
@@ -315,6 +316,13 @@ def stats_from_json(payload: dict[str, object]) -> GraphStats:
     return GraphStats(
         event_count=_int(payload["event_count"]),
         self_transfer_count=_int(payload["self_transfer_count"]),
+        self_transfer_value_minor=tuple(
+            (
+                str(_items(pair, "self_transfer_value_minor entry")[0]),
+                _int(_items(pair, "self_transfer_value_minor entry")[1]),
+            )
+            for pair in _items(payload["self_transfer_value_minor"], "self_transfer_value_minor")
+        ),
         edge_count=_int(payload["edge_count"]),
         pair_count=_int(payload["pair_count"]),
         node_count=_int(payload["node_count"]),
