@@ -12,12 +12,12 @@ the position.
 | **P1a** | acquire PaySim, measure the graph thesis, log DEV-011 | **DONE** | `verify.py --phase P1a` 2/2 · PaySim + all three IBM members match their recorded SHA-256 against bytes on disk |
 | **P1b** | canonical v1, PaySim + IBM-AML adapters, quarantine, Parquet/DuckDB writers, dataset card | **DONE** | `verify.py --phase P1b` **3/3 PASS** — 28 contract tests; 200,000 canonical events with 0 quarantined and 0 silently coerced from PaySim *and* from IBM through its own adapter. The card deliverable closed by observation: `oxbow eval` ran twice and `data/DATASET_CARD.md`'s sha256 was identical before and after (`41e653ad922cfab1…`), with `[card] 106 passed, 0 failed, 2 skipped, 108 checks` |
 | **P3a** | time-stamped directed multigraph, rails, Leiden, cycles, subgraph cap | **DONE** | `verify.py --phase P3a` 2/2 — 80 tests (61 prior + `test_p3a_self_edges.py`'s 19), and two `oxbow graph` runs landing **5 byte-identical artifacts** with self-transfers admissible in the input |
-| **P2** | 60–75 features, feature-spec hash, leakage gate proven to bite, purged splits | in progress | 5 of 6 known failures are in `test_p2_splits.py`: expanding window not enforced, purge decorative, entity-disjoint share off target |
-| **P3b** | golden fixture, rules R1–R12 | in progress | `test_p3b_rules.py` + `test_p3b_golden_matrix.py`: **82 passed**; 4 remain in `test_p3b_r4_labelled_cycles.py` — see punch-list item 13, one of which is a mis-specified expectation rather than a measurement |
+| **P2** | 60–75 features, feature-spec hash, leakage gate proven to bite, purged splits | in progress | the six known `test_p2_splits.py` failures are closed and the leakage gate is proven to bite rather than to pass vacuously: 70 passed across `test_p2_features.py`, `test_p2_splits.py`, `test_p2_distinct_counts.py` and `test_leakage.py`. Two of those fixes were product defects, not test expectations — `_running_totals` summed over a frame-wide prefix, so a row's windowed sum of squares depended on rows *after* the cutoff and `FutureReadError` on 6.7e-6 of float cancellation (`features/kinds.py`), and the shipped `label_window_days: 1` made the purge mask redundant with the 30-day embargo (`backtest/splits.py`) |
+| **P3b** | golden fixture, rules R1–R12 | in progress | `test_p3b_rules.py` + `test_p3b_golden_matrix.py` + `test_p3b_r4_labelled_cycles.py`: **86 passed**; the four cycle failures are closed and punch-list item 13 is answered by measurement rather than left open |
 | **P4** | WOE scorecard, LightGBM, Isolation Forest, calibration, fusion, SHAP | code present, **not verified by the orchestrator** | agent-reported full-stack run at 620 s/fold with an `import mlflow` MemoryError; nothing audited here |
 | **P5** | EV allocation, greedy vs CP-SAT, Monte Carlo exposure, economics | **DONE** | `verify.py --phase P5` 1/1 (89 tests) |
 | **P6** | walk-forward backtest, ablation table, fairness, perturbation | in progress | `data/processed/eval.json` exists; its numbers have not been reproduced from a command here |
-| **P7** | FastAPI, SSE, RQ, ports/adapters, outbox, audit chain, OIDC | code present, **never executed** | ~20 modules in `apps/api/`, one integration test file, no route has been served |
+| **P7** | FastAPI, SSE, RQ, ports/adapters, outbox, audit chain, OIDC | partially executed | `tests/integration/test_p7_api.py` now exists and **really serves the app** (its own words: "before this file, nothing had ever imported apps/api"); 9 session-hygiene tests pass against real SQLAlchemy statements, and the read model's connection leak is fixed. **8 of its tests cannot run on this host right now** — see item 15 |
 | **P8** | seven screens, state craft, `/dev/states`, zero-CLS | code present, **never rendered** | `apps/web/src/app/` routes exist; no build/browser evidence, no test config |
 | **P9** | packet, generated docs, demo snapshot, limitations | in progress | `README`/`ARCHITECTURE`/`MODEL_CARD`/`ECONOMICS_CARD`/`LIMITATIONS` written by `make eval`, which also overwrote the authored dataset card (see below) |
 
@@ -198,18 +198,46 @@ Ordered by damage if any of it survives into a claimed-complete phase.
     passed, 1 skipped. `make test` has to be read on a quiet tree, and the green claim
     in §16 belongs to that run only.
 
-13. **`test_p3b_r4_labelled_cycles.py` has four failures, and one of them is a
-    mis-specified expectation, not a measurement.** The file expects a refusal-reason
-    aggregate key `amount_increases_along_loop = 45`, but the live anatomy dict reports
-    five keys (cross-currency 38, length-above 20, length-below 14, timestamps 5,
-    retention 25) which match DEV-015's recorded table exactly. `amount_increases_along_loop`
-    is not an aggregate reason code at all -- in `rules/network.py:127` it is a
-    per-hit evidence field read off one cycle anchor (`anchor.non_increasing_breaches`),
-    and 45 appears in no artifact in the repo. So either the rules layer needs a real
-    non-increasing *reason* aggregate that nobody has measured, or the test invented a
-    number. Unresolved deliberately: the self-edge amendment (DEV-018) changes which
-    anchors the enumerator sees, so any figure taken now would move again. Re-read this
-    item once `graph/build.py` settles.
+13. **RESOLVED — `test_p3b_r4_labelled_cycles.py` is green, and DEV-015's headline is
+    wrong by three cycles.** The four failures are closed, and the "either the rules
+    layer needs a real non-increasing reason aggregate, or the test invented a number"
+    question above has a third answer: the aggregate exists, and 45 is what it measures.
+    `loop_reasons` emits `REASON_AMOUNT_INCREASES` whenever `require_non_increasing` is
+    set (`rules/cycles.py:270`), so the reason code is a first-class refusal reason and
+    not only the per-hit evidence field at `rules/network.py:127`. The test counted it
+    with the *shipped* settings, where `config/rules.yaml` sets
+    `cycle_non_increasing: false`, so the key was absent from the dict rather than zero --
+    `counts.get(...)` returned `None`, which is the failure that read as "no such
+    aggregate". Measured with the knob on, exactly as plan §9 states the rule, the six
+    counts reproduce DEV-015's recorded table including 45.
+
+    Two of the four were test defects and one was a *claim* defect, which is the part
+    worth keeping:
+
+    * `non_increasing_breaches` counts consecutive legs only, not the wrap from the last
+      leg back to the first, so DEV-015's quoted 9-hop ring has 3 breaches rather than
+      the 4 a reader counting round the circle gets. Asserted with the arithmetic.
+    * The end-to-end test fed the corpus's first labelled ring, which is 10 hops. R4's
+      search horizon is `max_length + NEAR_MISS_DEPTH_SLACK` = 8, so the ring never became
+      a loop and the near-miss ledger came back **empty** -- which reads as "nothing
+      refused it" and is really "nothing looked at it". The test now picks a ring inside
+      the horizon, and the corpus-free fallback folds DEV-015's quoted ring to four hops
+      a day apart, because on a four-account fixture an R12 chain walk over the quoted
+      three-hour spacing flags half the accounts and trips the corpus-level hit-rate
+      ceiling before R4's ledger is read.
+    * DEV-015's sentence "cannot fire on them … score zero on the labelled positive set"
+      is **refuted**: the six counts are per-knob tallies that overlap, and their union
+      is 51 of 54, not 54. Three single-currency Saudi Riyal rings of 3-4 hops, retention
+      0.82-0.94, strictly increasing timestamps are refused by nothing, so shipped R4
+      fires on three of the 54 (two with the non-increasing knob on). The decision entry
+      is not amended: its *decision* re-specifies the knobs and assumed a zero to begin
+      with, and the tests now pin both the per-knob table and the three survivors so the
+      next reader cannot re-derive "score zero" by adding the columns together.
+
+    The `test_p2_distinct_counts.py` setup errors (`config/config/features.yaml`) were the
+    same class of mistake one layer over: the fixture passed the config *directory* to
+    `registry_from_repo`, whose parameter is a repository root -- the exact two-meanings
+    bug its own docstring warns about. 11 passed after the one-line fix.
 
 14. **The dataset card's own figures were wrong, and the artifacts corrected them.**
     Running the new card verifier (`oxbow dataset_card`, wired into `make eval` as a
@@ -222,6 +250,19 @@ Ordered by damage if any of it survives into a claimed-complete phase.
     step semantics feed the temporal-split rationale and
     `LIMITATIONS.md`'s "the corpus window is 18 days", so it needs a decision about
     which claim is authoritative before either number moves.
+
+15. **The Docker engine went away mid-session, and it is the only thing between P7 and
+    a verdict.** `docker info` fails on `npipe://./pipe/dockerDesktopLinuxEngine`, and
+    `.env` has no `DATABASE_URL` (which is why `verify-audit` independently reports
+    `SKIPPED postgres`). Port 5432 still answers a PostgreSQL SSLRequest with `N`, so a
+    listener is up while the VM behind it is not — which turns into
+    `psycopg.OperationalError: server closed the connection unexpectedly` inside the 8
+    database-backed tests rather than a clean "no database" message. The daemon was UP
+    earlier in this session, so this is a state change, not a missing prerequisite.
+    Docker Desktop's executable is not at the path I tried and only a client exists at
+    `~/bin/docker.exe`, so I did not start it myself; restarting the engine is the
+    user's action, after which `uv run pytest -q tests/integration` is the command that
+    says whether P7 holds.
 
 ## Verification ledger (run by the orchestrator, not reported by agents)
 
