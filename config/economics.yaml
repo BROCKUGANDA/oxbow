@@ -1,5 +1,5 @@
 # OXBOW economic assumptions - the single source for every money figure.
-# Spec 6.1: this file holds every economic assumption and is rendered verbatim in
+# Plan §11: this file holds every economic assumption and is rendered verbatim in
 # the UI. Any number the product asserts is a function of this file plus observed
 # data, and nothing else.
 #
@@ -8,89 +8,171 @@
 #
 # MONEY IS INTEGER MINOR UNITS. Every amount below is a count of minor units
 # (1 UGX = 100 minor). Float arithmetic on money is a defect, not a style choice
-# (01 B), so `amount_minor: int64` and a lint rule bans float money in the
-# pipeline package.
+# (DEV-005), so a key whose name ends in `_minor` must hold an integer;
+# `test_money_config_declares_no_float_amounts` in tests/unit/test_p0_toolchain.py
+# walks this file and enforces it.
+#
+# EVERY KEY HERE IS READ BY A NAMED CONSUMER, and `test_no_assumption_key_is_unowned`
+# fails if a key is added that no consumer reads or if a consumer stops reading one.
+# An unread assumption is worse than no assumption: it looks like a knob and does
+# nothing, and the next reader trusts it.
+#
+# ILLUSTRATIVE VALUES. These are the assumptions the product is honest about, not
+# measured outcomes from any institution (plan §15 disclaimer, §18 rejection
+# triggers). They exist to be argued with, and the UI shows them, not a summary.
 
+# --- currency identity ---------------------------------------------------
+# Consumer: quant/economics.py, which refuses to total money of another currency
+# and stamps this code on every rendered figure. `currency` is also the gate on
+# pricing: an exposure observed in EUR cannot be priced against UGX costs without
+# an FX step this product deliberately does not have.
 currency: UGX
+# Consumer: quant/money.py `to_major_text`, called only by the renderer. 100 makes
+# a minor unit a cent of UGX, so a rendered figure divides by a power of ten and
+# never needs rounding at render time.
 minor_units_per_major: 100
 
 # --- analyst cost --------------------------------------------------------
 # c_i in EV = p_i * E_i * r - c_i - (1 - p_i) * f
 analyst:
-  # Fully loaded cost of one analyst-hour, in minor units. Illustrative.
-  cost_per_hour_minor: 250_000
-  # Minimum expected review minutes, in config load. Zero is REJECTED at load,
-  # because EV density divides by minutes and a zero-minute alert would dominate
-  # the ranking forever (03 I: test_ev_density_no_zero_divide).
-  min_review_minutes: 5.0
+  # Consumer: quant/ev.py. Fully loaded cost of one analyst-hour in minor units:
+  # 900_000 minor = 9,000 UGX/hour. It is a multiple of 60 on purpose — the
+  # per-minute figure below is derived from it, and the loader rejects a value
+  # that does not divide exactly, so no EV in the product depends on a rounding
+  # rule for money.
+  cost_per_hour_minor: 900_000
+  # Consumer: quant/ev.py (c_i = this x review minutes), quant/allocate.py (the
+  # knapsack objective). 15_000 minor = 150 UGX/analyst-minute.
+  cost_per_minute_minor: 15_000
+  # Consumer: the benefit-per-analyst-hour figure on the P8 dashboard and the
+  # P6 backtest economic metrics. 40 hours = one analyst-period.
   hours_per_period: 40
+  # Consumer: quant/ev.py and config load. A floor, not a default. m_i is the
+  # denominator of EV density (EV_i / m_i), so a zero-minute alert would score an
+  # infinite density and dominate the queue forever. Zero is therefore REJECTED
+  # HERE, at load, and never reached as a divide-by-zero at runtime
+  # (plan §11: test_ev_density_no_zero_divide).
+  min_review_minutes: 5
 
-# --- review effort by risk band -----------------------------------------
-# Minutes are the operational reality of a triage desk: a band-A account is a
-# glance, a band-E account is an investigation.
-review_minutes_by_band:
+# --- review effort by alert class ---------------------------------------
+# Consumer: quant/ev.py, which maps an account's alert class to m_i. Minutes are
+# the operational reality of a triage desk: a class-A account is a glance, a
+# class-E account is an investigation. Classes are the scorecard bands A-E from
+# plan §10 (P4a), which is also what the queue renders on each card.
+# Each value must be >= analyst.min_review_minutes; the loader enforces it.
+review_minutes_by_alert_class:
   A: 5
   B: 12
   C: 25
   D: 60
   E: 120
 
-# --- recovery rate (spec 3.2) --------------------------------------------
+# --- recovery rate (plan §11) --------------------------------------------
 # r is the share of exposure a timely investigation actually prevents.
-# IT IS AN ASSUMPTION, not a measurement. Default 0.35, and every headline figure
-# carries a sensitivity band over {0.20, 0.35, 0.50}. Never present a single
-# money number without its r band; that one habit is the difference between
-# "credible" and "made up".
+# IT IS AN ASSUMPTION, not a measurement. Every headline figure carries the
+# sensitivity band; `quant/economics.py` builds a money figure only over the
+# band, so a caller cannot obtain a single currency number without it.
 recovery:
+  # Consumer: quant/ev.py (the default r) and the renderer (which states it).
   rate: 0.35
+  # Consumer: the renderer, which always emits exactly these three values
+  # (plan §11: test_recovery_rate_bounds — "the band always renders three
+  # values"). The middle entry must equal `rate`.
   sensitivity_band: [0.20, 0.35, 0.50]
-  # Config validation constrains r to an open interval. Zero or one makes every
-  # figure degenerate (03 I: test_recovery_rate_bounds).
+  # Consumer: config validation. Open interval: r = 0 makes every exposure worth
+  # nothing and r = 1 claims a perfect seizure, and both make the ranking
+  # degenerate rather than merely optimistic.
   bounds_exclusive: [0.0, 1.0]
 
-# --- recovery window -----------------------------------------------------
-# Exposure is measured over this window after the first triggering event.
-window_hours: 24
+# --- exposure at risk (plan §11, spec §3.2) -------------------------------
+# Consumer: quant/exposure.py. E_i is the value still interceptable: funds that
+# flow OUT of i and its `downstream_hops`-hop downstream within `window_hours` of
+# the first triggering event, capped at inflow observed in the same window. The
+# cap is part of the definition, not a knob, so it has no key here.
+# These two keys are duplicated in config/pipeline.yaml, which is where the graph
+# layer reads them; the loader CROSS-CHECKS the two files and fails loud on
+# disagreement, because two records of one fact that drift is the defect.
+exposure:
+  window_hours: 24
+  downstream_hops: 1
 
-# --- friction cost -------------------------------------------------------
-# f: the cost of wrongly touching a legitimate customer. This term exists
-# precisely to price that harm, and small-value and newly-active accounts are
-# the realistic over-flagging risk. Illustrative, in minor units.
-friction_cost_minor: 50_000
+# --- friction cost --------------------------------------------------------
+# f: the cost of wrongly touching a legitimate customer. Consumer: quant/ev.py,
+# where it enters EV as (1 - p_i) * f, i.e. only in the world where the account is
+# clean. This term is what stops the queue degenerating into "review everything":
+# 2_500_000 minor = 25,000 UGX per wrongly-frozen customer, covering recontact,
+# goodwill and churn. Illustrative, and the reason low-probability accounts stay
+# below the cutoff line.
+friction_cost_minor: 2_500_000
 
 # --- capacity ------------------------------------------------------------
-# The review budget for one period. This is the constraint the whole module
-# optimises under: selecting which accounts to review given B analyst-minutes is
-# a 0/1 knapsack.
+# The review budget for one period: selecting which accounts to review given B
+# analyst-minutes is a 0/1 knapsack.
 capacity:
+  # Consumer: quant/allocate.py default B and quant/frontier.py operating point.
+  # 12_000 minutes = 200 analyst-hours = five analysts over a 40-hour period.
+  # Zero is a VALID value, not a config error: it is the documented "no capacity
+  # at all" case that must return the forgone value rather than crash
+  # (plan §11: test_zero_capacity_returns_forgone_value).
   review_minutes_per_period: 12_000
-  # Accounts reviewed at the default capacity, for the demo. The capacity cutoff
-  # line in the alert queue is drawn at this rank.
+  # Consumer: the P8 alert queue, which draws the capacity cutoff line at this
+  # rank. Plan §17 lists that line as never-cut.
   default_alerts_reviewed: 200
   sweep:
-    # The efficient frontier sweeps B across its plausible range.
-    min_minutes: 2_000
+    # Consumer: quant/frontier.py. The sweep starts at zero so the frontier shows
+    # the documented no-capacity end of the curve instead of an arbitrary floor.
+    min_minutes: 0
     max_minutes: 30_000
     points: 31
 
-# --- Monte Carlo (spec 6.6) ----------------------------------------------
-# Network exposure by propagation: each outgoing edge transmits with probability
-# proportional to its value share. The single most persuasive number in the
-# product, and it costs about eighty lines plus numba.
+# --- solvers (plan §11) ---------------------------------------------------
+# Consumer: quant/allocate.py for all four.
+solver:
+  # The greedy-by-EV-density path must answer inside this budget; the slider
+  # re-runs allocation over a cached array and the 200 ms figure is the gate
+  # measurement, asserted by test_greedy_latency_within_config_budget.
+  greedy_budget_ms: 200
+  # Hard deadline for the exact CP-SAT solve. Exceeding it is a documented
+  # outcome: the result comes back labelled as the greedy fallback, because a
+  # time-limited CP-SAT incumbent has no dual bound and therefore no honest
+  # optimality gap (plan §11: test_solver_timeout_falls_back).
+  cpsat_deadline_ms: 5_000
+  # 1 is forced, not preferred: OR-Tools portfolio solving makes the returned
+  # incumbent depend on worker race timing, so `make verify-determinism` could
+  # not compare two runs. The loader rejects any other value.
+  cpsat_workers: 1
+  # Consumer: the P5 gate and the policy page — "the simple policy is within X% of
+  # optimal" is the finding, and the tolerance is a stated threshold rather than
+  # a number in an assert.
+  agreement_tolerance_ratio: 0.02
+
+# --- Monte Carlo (spec §6.6) ----------------------------------------------
+# Consumer: quant/monte_carlo.py. Network exposure by propagation: each outgoing
+# edge transmits with probability proportional to its value share. Stated as an
+# interval with its assumption line, never as a point estimate.
 monte_carlo:
   runs: 10_000
   max_depth: 4
+  # Must equal `seed` in config/pipeline.yaml; the loader cross-checks, because a
+  # second seed source is how an interval stops being reproducible.
   seed: 1337
-  interval: [0.05, 0.95]     # the 90% interval rendered on the case page
+  # The 90 % interval rendered on the case page: lower and upper quantiles of the
+  # simulated distribution. The loader requires exactly 0.90 of width — a different
+  # width is a different claim, and the copy on the case page says "90 %".
+  interval: [0.05, 0.95]
 
-# --- four-eyes threshold (02 F) ------------------------------------------
-# Any decision above this exposure value requires a second `reviewer`
-# confirmation before the outbox row is written.
+# --- four-eyes threshold (02 F) -------------------------------------------
+# Consumer: the apps/api decision router (P7), which requires a second `reviewer`
+# confirmation before writing the outbox row above this exposure. Read by P5 only
+# to validate it against `currency`; it is declared here because it is an
+# economic threshold denominated in the same minor units as everything else.
 four_eyes:
-  threshold_exposure_minor: 5_000_000
+  threshold_exposure_minor: 50_000_000
 
-# --- tail risk (spec 6.5) ------------------------------------------------
-# The residual is the risk: the loss distribution over UNREVIEWED accounts.
+# --- tail risk (spec §6.5) -------------------------------------------------
+# Consumer: the P6 backtest (VaR / expected shortfall over the residual,
+# unreviewed exposure). Held here because both are economic parameters and P6
+# must not carry its own copy of the confidence levels the UI quotes.
 tail_risk:
   var_alpha: 0.95
   es_alpha: 0.975
