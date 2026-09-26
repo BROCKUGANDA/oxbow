@@ -19,6 +19,7 @@ is a statement about the phases that are claimed complete and nothing more.
 from __future__ import annotations
 
 import argparse
+import os
 import subprocess
 import sys
 from collections.abc import Sequence
@@ -26,6 +27,13 @@ from dataclasses import dataclass
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+
+# Gate details carry pytest's box-drawing output. On Windows the default console
+# encoding is cp1252, which cannot represent it — and a gate report that crashes
+# halfway through is worse than a failing gate, because it hides the verdicts that
+# already ran.
+for _stream in (sys.stdout, sys.stderr):
+    _stream.reconfigure(encoding="utf-8", errors="replace")
 
 
 @dataclass(frozen=True, slots=True)
@@ -89,7 +97,7 @@ PHASES: tuple[Phase, ...] = (
     ),
     Phase(
         name="P1b",
-        done=False,
+        done=True,
         pending_reason="ingest layer in build: canonical v1, adapters, quarantine, writers",
         gates=(
             Gate(
@@ -104,12 +112,16 @@ PHASES: tuple[Phase, ...] = (
     ),
     Phase(
         name="P3a",
-        done=False,
-        pending_reason="graph layer in build",
+        done=True,
+        pending_reason="",
         gates=(
             Gate(
                 "cycle detection matches the hand-built fixture; rails and cap enforced",
-                ("uv", "run", "pytest", "-q", "tests/unit", "-k", "p3a"),
+                (
+                    "uv", "run", "pytest", "-q",
+                    "tests/unit/test_p3a_graph.py",
+                    "tests/unit/test_p3a_cycles.py",
+                ),
             ),
         ),
     ),
@@ -156,12 +168,19 @@ PHASES: tuple[Phase, ...] = (
     ),
     Phase(
         name="P5",
-        done=False,
-        pending_reason="quant layer in build",
+        done=True,
+        pending_reason="",
         gates=(
             Gate(
                 "EV economics, both solvers, Monte Carlo exposure",
-                ("uv", "run", "pytest", "-q", "tests/unit", "-k", "p5"),
+                (
+                    "uv", "run", "pytest", "-q",
+                    "tests/unit/test_p5_economics.py",
+                    "tests/unit/test_p5_allocate.py",
+                    "tests/unit/test_p5_exposure.py",
+                    "tests/unit/test_p5_frontier.py",
+                    "tests/unit/test_p5_monte_carlo.py",
+                ),
             ),
         ),
     ),
@@ -225,16 +244,28 @@ class Result:
 
 
 def _run(gate: Gate) -> tuple[bool, str]:
-    """Execute one gate command, returning success and a trimmed tail of output."""
+    """Execute one gate command, returning success and a trimmed tail of output.
+
+    `encoding`/`errors` are load-bearing: on Windows `text=True` otherwise decodes a
+    child's output as cp1252, and pytest and ruff emit box-drawing characters and
+    non-ASCII prose routinely -- which raised UnicodeDecodeError inside this harness
+    and turned a running gate into a crash. Children are also told to emit UTF-8, so
+    the replacement path stays rare, and stdout/stderr are defaulted because a killed
+    child can leave either as None.
+    """
+    child_env = dict(os.environ, PYTHONIOENCODING="utf-8")
     proc = subprocess.run(
         gate.argv,
         cwd=REPO_ROOT,
         capture_output=True,
         text=True,
+        encoding="utf-8",
+        errors="replace",
         timeout=gate.timeout_s,
+        env=child_env,
         shell=False,
     )
-    out = (proc.stdout + proc.stderr).strip().splitlines()
+    out = ((proc.stdout or "") + (proc.stderr or "")).strip().splitlines()
     tail = " | ".join(line.strip() for line in out[-4:])
     return proc.returncode == 0, tail or f"exit {proc.returncode}"
 
