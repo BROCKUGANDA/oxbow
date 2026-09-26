@@ -52,6 +52,11 @@ the path named; it is never counted as a pass.
 | Verdict | `STAR_SHAPED_TRIGGER_DAY4_FALLBACK` | `data/graph_measurement.json#/verdict` · measured |
 | Licence | **CC BY-SA 4.0** | `config/sources.yaml#/sources/0/license` · declared in config/ |
 | Citation | E. A. Lopez-Rojas, A. Elmir, S. Axelsson, "PaySim: A financial mobile money simulator for fraud detection," 28th European Modeling and Simulation Symposium (EMSS), Larnaca, Cyprus, 2016 | `config/sources.yaml#/sources/0/citation` · declared in config/ |
+| Label caveat | isFraud covers a NARROW behaviour: an agent takes over an account and drains it via TRANSFER then CASH-OUT. isFlaggedFraud is a crude threshold, not ground truth. This must be stated before a judge finds it. | `config/sources.yaml#/sources/0/label_caveat` · declared in config/ |
+| Synthetic fields | step, oldBalanceOrig, newBalanceOrig, oldBalanceDest, newBalanceDest | `config/sources.yaml#/sources/0/synthetic_fields` · declared in config/ |
+| Known bias 1 | Simulated, not observed transactions; absolute amounts are not real. | `config/sources.yaml#/sources/0/known_biases/0` · declared in config/ |
+| Known bias 2 | Fraud prevalence is a simulator parameter, not a measured rate. | `config/sources.yaml#/sources/0/known_biases/1` · declared in config/ |
+| Known bias 3 | Balance columns are known to be internally inconsistent with amount. | `config/sources.yaml#/sources/0/known_biases/2` · declared in config/ |
 
 **Licence obligation.** Share-alike: any derivative dataset we publish — the canonical
 event table, feature extracts, any released sample — inherits CC BY-SA 4.0 with
@@ -104,7 +109,7 @@ DEV-011. Verdict: `STAR_SHAPED_TRIGGER_DAY4_FALLBACK`.
 | --- | --- | --- |
 | Source | `https://www.kaggle.com/datasets/ealtman2019/ibm-transactions-for-anti-money-laundering-aml` | `config/sources.yaml#/sources/1/source_url` · declared in config/ |
 | Size of what the slug serves | 8,176,169,418 bytes as reported by Kaggle (`datasets/list`) | `DECISIONS.md` DEV-013 · recorded in DECISIONS.md, no artifact holds it |
-| Acquired | the **HI-Small** scenario bundle only, ~510 MB, of six bundles (HI/LI × Small/Medium/Large) | `config/sources.yaml#/sources/1/acquisition_scope` · declared in config/, sizes measured per DEV-013 and DEV-016 |
+| Acquired | the **HI-Small** scenario bundle only, ~510 MB of the ~8.18 GB the slug serves, from six bundles (HI/LI × Small/Medium/Large) | `config/sources.yaml#/sources/1/acquisition_scope` · declared in config/, sizes measured per DEV-013 and DEV-016 |
 | `HI-Small_Trans.csv` | 475,664,283 bytes, SHA-256 `b19d39f515523373f991b689c07e11e7b0b95c17a2c27a87d91584ae16c5b040` | `config/sources.yaml#/sources/1/files/0`, `os.stat` on `data/raw/ibmaml/HI-Small_Trans.csv` · measured |
 | `HI-Small_accounts.csv` | 34,053,187 bytes, SHA-256 `786808526e33cfc441212dd6fccda7edfc24172149bed59c6ef59b186836b014` | `config/sources.yaml#/sources/1/files/1`, `os.stat` on that path · measured |
 | `HI-Small_Patterns.txt` | 323,844 bytes, SHA-256 `2c546b5ce6009e73851f0139af053cf845f08bf92f3bc82fe1eb937dec2ef39b` | `config/sources.yaml#/sources/1/files/2`, re-hashed from the bytes by `make eval` · measured |
@@ -122,8 +127,15 @@ DEV-011. Verdict: `STAR_SHAPED_TRIGGER_DAY4_FALLBACK`.
 | Currencies | 15, by name rather than ISO-4217 code: US Dollar, Euro, Swiss Franc, Yuan, Shekel, Rupee, UK Pound, Ruble, Yen, Bitcoin, Canadian Dollar, Australian Dollar, Mexican Peso, Saudi Riyal, Brazil Real | `data/ibm_graph_measurement.json#/n_currencies`, `#/currencies` · measured |
 | Payment formats | Cheque 1,864,331 · Credit Card 1,323,324 · ACH 600,797 · Cash 490,891 · Reinvestment 481,056 · Wire 171,855 · Bitcoin 146,091 | `data/ibm_graph_measurement.json#/payment_formats` · measured |
 | Measured | 2026-09-26 by `scripts/measure_ibm_graph.py` | `data/ibm_graph_measurement.json#/measured_at_utc` · measured |
+| Timestamp assumption | instants are read in `Africa/Kampala`, the deployment zone, because the file declares no zone of its own | `config/pipeline.yaml#/ibmaml/source_timezone_assumption` · declared in config/ |
 | Licence | **CDLA-Sharing-1.0** (the repository code is Apache-2.0; the data is not) | `config/sources.yaml#/sources/1/license` · declared in config/ |
 | Citation | ealtman2019, *IBM Transactions for Anti-Money Laundering*, Kaggle | `config/sources.yaml#/sources/1/citation` · declared in config/ |
+| Label caveat | Is Laundering is a curated research annotation, not a prosecuted case, and it is the corpus's ONLY label column: 5,177 of 5,078,345 rows. Typology membership is not a label at all — it comes from the annotated attempt blocks in HI-Small_Patterns.txt, which cover just 3,209 of those 5,177 positives, so 1,968 laundering rows carry no typology and a row with no typology is unlabeled rather than clean. No threshold-flag concept exists here, so label_is_flagged is 0 with the meaning "no equivalent", never "checked and cleared". | `config/sources.yaml#/sources/1/label_caveat` · declared in config/, counts measured per DEV-014 |
+| Known bias 1 | Synthetic injection over a simulated base; the injected patterns are designed, not observed. | `config/sources.yaml#/sources/1/known_biases/0` · declared in config/ |
+| Known bias 2 | 11.642% of rows are self-transfers. They are carried by ingest and excluded at the graph layer, not treated as errors. | `config/sources.yaml#/sources/1/known_biases/1` · declared in config/ |
+| Known bias 3 | Minute-precision timestamps with no declared zone: instants are read in the zone named by config/pipeline.yaml ibmaml.source_timezone_assumption, which is an assumption. | `config/sources.yaml#/sources/1/known_biases/2` · declared in config/ |
+| Known bias 4 | Amount Paid and Amount Received differ on 72,158 rows; canonical v1 has one amount slot, so the spread is dropped. | `config/sources.yaml#/sources/1/known_biases/3` · declared in config/ |
+| Known bias 5 | Typology labels are not balanced across categories (716 GATHER-SCATTER down to 191 RANDOM). | `config/sources.yaml#/sources/1/known_biases/4` · declared in config/ |
 
 **Licence obligation.** Share-alike on derived data: the canonical event table, the
 feature tables and any published sample inherit CDLA-Sharing-1.0
@@ -244,7 +256,7 @@ subcorpus** while full-corpus metrics are computed offline.
 | Split boundaries, `train_end` | 0.30 · 0.45 · 0.60 · 0.75 · 0.90 | `config/splits.yaml#/walk_forward/folds` · declared in config/ |
 | Split boundaries, `test_end` | 0.45 · 0.60 · 0.75 · 0.90 · 1.00 | `config/splits.yaml#/walk_forward/folds` · declared in config/ |
 | Validation slice | 0.15 of each training period, after the embargo | `config/splits.yaml#/validation/fraction_of_train` · declared in config/ |
-| Entity-disjoint control | `account_holdout`, holdout fraction 0.20, reported as a robustness check | `config/splits.yaml#/entity_disjoint/method`, `#/holdout_fraction`, `#/report_as` · declared in config/ |
+| Entity-disjoint control | `account_holdout`, holdout fraction 0.20, reported as `robustness_check` | `config/splits.yaml#/entity_disjoint/method`, `#/holdout_fraction`, `#/report_as` · declared in config/ |
 
 **Connected, and it must stay that way.** Selection is by whole component
 (keep an account's edges only if both endpoints survive, or seed from a component and

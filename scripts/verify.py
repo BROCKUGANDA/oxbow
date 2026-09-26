@@ -97,13 +97,8 @@ PHASES: tuple[Phase, ...] = (
     ),
     Phase(
         name="P1b",
-        done=False,
-        pending_reason=(
-            "all three gates pass on the current tree; the phase stays open on one "
-            "outstanding observation -- `oxbow eval` must be seen to leave "
-            "data/DATASET_CARD.md untouched, not merely declared to (oxbow.dataset_card "
-            "now verifies it, punch list 2a)"
-        ),
+        done=True,
+        pending_reason="",
         gates=(
             Gate(
                 "Pandera contracts, quarantine and determinism",
@@ -134,7 +129,20 @@ PHASES: tuple[Phase, ...] = (
                     "uv", "run", "pytest", "-q",
                     "tests/unit/test_p3a_graph.py",
                     "tests/unit/test_p3a_cycles.py",
+                    "tests/unit/test_p3a_self_edges.py",
                 ),
+            ),
+            # DEV-018: canonical events may now carry self-transfers, so the graph has to
+            # be reproducible with them present. Compared against the tree the stage
+            # actually writes -- see --artifacts in scripts/verify_determinism.py.
+            Gate(
+                "two graph runs over the same bytes land identical artifacts",
+                (
+                    "uv", "run", "python", "scripts/verify_determinism.py",
+                    "--command", "uv run oxbow graph",
+                    "--artifacts", "out/graph",
+                ),
+                timeout_s=2400,
             ),
         ),
     ),

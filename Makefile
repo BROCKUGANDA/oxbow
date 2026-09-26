@@ -100,7 +100,7 @@ pipeline: ## All four stages, streaming stage events over SSE
 	$(OXBOW) pipeline --stream
 
 .PHONY: eval
-eval: ## Regenerate every metric, curve, frontier and ablation row in the docs
+eval: ## Regenerate every metric, curve, frontier and ablation row; verifies data/DATASET_CARD.md
 	$(OXBOW) eval
 
 .PHONY: packet

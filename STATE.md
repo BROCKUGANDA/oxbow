@@ -10,8 +10,8 @@ the position.
 | --- | --- | --- | --- |
 | **P0** | toolchain, tree, config, CLI verbs, design tokens, 12 glyphs, CI | **DONE** | `verify.py --phase P0` 2/2 · `9582638` |
 | **P1a** | acquire PaySim, measure the graph thesis, log DEV-011 | **DONE** | `verify.py --phase P1a` 2/2 · PaySim + all three IBM members match their recorded SHA-256 against bytes on disk |
-| **P1b** | canonical v1, PaySim + IBM-AML adapters, quarantine, Parquet/DuckDB writers, dataset card | in progress — 1 of 2 gates failing | `verify.py --phase P1b`: the ingest gate passes (200,000 canonical events, 0 quarantined, 0 silently coerced; the same holds for an explicit `--source ibmaml` run), and 26 of 27 contract tests pass — the failure is `test_counterparty_reuse_reported`, i.e. punch-list item 2a, not the ingest layer |
-| **P3a** | time-stamped directed multigraph, rails, Leiden, cycles, subgraph cap | **DONE, one amendment open** | `verify.py --phase P3a` 1/1 (61 tests) · DEV-018 needs the graph to exclude self-edges it can now receive |
+| **P1b** | canonical v1, PaySim + IBM-AML adapters, quarantine, Parquet/DuckDB writers, dataset card | **DONE** | `verify.py --phase P1b` **3/3 PASS** — 28 contract tests; 200,000 canonical events with 0 quarantined and 0 silently coerced from PaySim *and* from IBM through its own adapter. The card deliverable closed by observation: `oxbow eval` ran twice and `data/DATASET_CARD.md`'s sha256 was identical before and after (`41e653ad922cfab1…`), with `[card] 106 passed, 0 failed, 2 skipped, 108 checks` |
+| **P3a** | time-stamped directed multigraph, rails, Leiden, cycles, subgraph cap | **DONE** | `verify.py --phase P3a` 2/2 — 80 tests (61 prior + `test_p3a_self_edges.py`'s 19), and two `oxbow graph` runs landing **5 byte-identical artifacts** with self-transfers admissible in the input |
 | **P2** | 60–75 features, feature-spec hash, leakage gate proven to bite, purged splits | in progress | 5 of 6 known failures are in `test_p2_splits.py`: expanding window not enforced, purge decorative, entity-disjoint share off target |
 | **P3b** | golden fixture, rules R1–R12 | in progress | `test_p3b_rules.py` + `test_p3b_golden_matrix.py`: **82 passed**; 4 remain in `test_p3b_r4_labelled_cycles.py` — see punch-list item 13, one of which is a mis-specified expectation rather than a measurement |
 | **P4** | WOE scorecard, LightGBM, Isolation Forest, calibration, fusion, SHAP | code present, **not verified by the orchestrator** | agent-reported full-stack run at 620 s/fold with an `import mlflow` MemoryError; nothing audited here |
@@ -210,6 +210,18 @@ Ordered by damage if any of it survives into a claimed-complete phase.
     number. Unresolved deliberately: the self-edge amendment (DEV-018) changes which
     anchors the enumerator sees, so any figure taken now would move again. Re-read this
     item once `graph/build.py` settles.
+
+14. **The dataset card's own figures were wrong, and the artifacts corrected them.**
+    Running the new card verifier (`oxbow dataset_card`, wired into `make eval` as a
+    verify-not-write step) found three: degree p90/p99 is **53 / 116**, not the 51 / 119
+    the authored card carried; the IBM currency-name list I wrote included six names
+    that do not occur in the file (Indian Rupee, Congo Franc, Malaysian, Romanian Leu,
+    Turkish Lira, Vietnamese Dong) and now lists the 15 measured; and **PaySim's `step`
+    column runs 1–743, not 0–30**, against a config that models the corpus as 30
+    synthetic days. The first two are fixed. The third is unresolved and load-bearing:
+    step semantics feed the temporal-split rationale and
+    `LIMITATIONS.md`'s "the corpus window is 18 days", so it needs a decision about
+    which claim is authoritative before either number moves.
 
 ## Verification ledger (run by the orchestrator, not reported by agents)
 
