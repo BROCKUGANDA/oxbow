@@ -493,7 +493,9 @@ def _code_from_schema_error(text: str) -> tuple[str, tuple[str, ...]]:
     return "canonical_check_failed", ()
 
 
-def assert_label_provenance(frame: pl.DataFrame, *, source_carries_typology: bool) -> None:
+def assert_label_provenance(
+    frame: pl.DataFrame, *, source_carries_typology: bool, slice_requested: bool = False
+) -> None:
     """Assert every canonical row declares where its labels came from.
 
     Three separate failures are being prevented, which is why the message names
@@ -540,13 +542,15 @@ def assert_label_provenance(frame: pl.DataFrame, *, source_carries_typology: boo
                 "label_typology; an annotation that lost its name is not a typology",
                 column="label_typology",
             )
-        if null_count == frame.height:
+        if null_count == frame.height and not slice_requested:
             raise CanonicalContractError(
                 f"{ERR_LABEL_PROVENANCE}: this source ships a typology taxonomy and none "
                 f"of the {frame.height} canonical row(s) joined to it. One null per row "
                 "is expected — DEV-014 measured 3,209 annotated rows out of 5,078,345 — "
                 "but a frame with zero annotations is a broken join, not an unlabelled "
-                "corpus",
+                "corpus. If this run read a `--limit` slice, pass slice_requested=True: a "
+                "slice from the head of the file can legitimately contain no "
+                "annotations, and that is reported rather than refused.",
                 column="label_typology",
             )
     elif null_count != frame.height:

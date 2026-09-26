@@ -479,6 +479,11 @@ def test_typology_bearing_source_allows_background_rows_but_not_a_dead_join(
     with pytest.raises(CanonicalContractError, match="none of the|zero"):
         assert_label_provenance(events, source_carries_typology=True)
 
+    # A `--limit` slice from the head of IBM is a real shape, not a bug: the
+    # annotations are 0.063% of the corpus, so a small slice can hold none of them.
+    # The escape hatch is the caller's declaration that a slice was requested, which
+    # keeps the refusal live for a full run -- the case a broken join looks like.
+    assert_label_provenance(events, source_carries_typology=True, slice_requested=True)
     lost_name = mostly_background.with_columns(
         pl.when(pl.col("label_typology") == "FAN-OUT")
         .then(pl.lit("   "))

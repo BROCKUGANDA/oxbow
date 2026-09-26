@@ -32,6 +32,7 @@ import importlib.util
 import json
 import sys
 import time
+from datetime import UTC, datetime
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -466,6 +467,23 @@ def _read_lineage(root: Path, *, sources: Sequence[str]) -> list[CorpusLineage]:
     return lineages
 
 
+def _parse_instant(text: str) -> datetime:
+    """The manifest's ``ingested_at`` as a UTC instant, or a refusal naming the text.
+
+    DEV-012 keeps ``run_id`` and ``ingested_at`` out of the Parquet bytes so two runs of
+    one corpus are byte-comparable, which means a stage that needs the contract's full
+    column list re-attaches them from the manifest. Parsing is not optional: a str reaching
+    a Datetime column is a polars error several minutes into a run.
+    """
+    try:
+        return datetime.fromisoformat(text.replace("Z", "+00:00")).astimezone(UTC)
+    except ValueError as exc:
+        raise ArtifactError(
+            f"run manifest ingested_at {text!r} is not an ISO-8601 instant; the sidecar "
+            "column cannot be reconstructed"
+        ) from exc
+
+
 def _load_canonical_events(
     ctx: StageContext, *, sources: Sequence[str], with_sidecar: bool
 ) -> pl.DataFrame:
@@ -531,7 +549,7 @@ def _load_canonical_events(
                     pl.lit(lineage.run_id, dtype=pl.String).alias("run_id"),
                     pl.Series(
                         "ingested_at",
-                        [lineage.ingested_at] * frame.height,
+                        [_parse_instant(lineage.ingested_at)] * frame.height,
                         dtype=pl.Datetime("us", "UTC"),
                     ),
                 ).select(list(CANONICAL_COLUMNS))
@@ -804,6 +822,11 @@ def run_ingest_stage(
             f"{state.window_start.isoformat() if state.window_start else 'none'} .. "
             f"{state.window_end.isoformat() if state.window_end else 'none'}"
         )
+        for note in state.notes:
+            # A slice that holds none of the corpus's typology annotations is not a
+            # failure, but it is a fact about every number this run can support, so it
+            # goes to stderr where an operator scrolling a green run still meets it.
+            ctx.echo(f"[ingest] NOTE: {note}", err=True)
         for view in state.views:
             ctx.echo(
                 f"[ingest] {state.source.source_id}: duckdb view {view['view']}"
@@ -1110,9 +1133,9 @@ def run_backtest_stage(
         payload = out_dir / ("baseline_results.json" if baselines_only else "ablation_results.json")
         handle.rows = _count_backtest_rows(payload)
         handle.detail = (
-            f"provenance=fake_harness: the harness, {len(argv)} flag(s), all folds, the "
-            f"ablation rows and the leakage control ran for real and wrote {payload}; the "
-            "figures verify the harness and are NOT a corpus result"
+            "provenance=fake_harness: the harness, every fold, the ablation rows and the "
+            f"leakage control ran for real and wrote {payload}; every figure in it verifies "
+            "the harness and is NOT a corpus result"
         )
         ctx.echo(f"[backtest] artifact: {payload} ({_count(handle.rows)} fold-policy rows)")
         return EXIT_OK if code == 0 else EXIT_FAILED
@@ -1513,8 +1536,11 @@ def verify_audit_cmd(
     The gate lives in ``scripts/verify_audit.py`` — the same pure arithmetic the packet
     uses on export (:func:`oxbow.audit.chain.verify_chain`) — and this verb calls it so
     ``make verify-audit`` and ``oxbow verify-audit`` can never disagree about what
-    "verified" means. A chain that cannot be reached is reported SKIPPED with its reason
-    and is never counted as a pass; a missing file chain exits non-zero.
+    "verified" means. The script's own vocabulary is kept and printed verbatim: a chain
+    that cannot be reached is SKIPPED with its reason and never counted as a pass, so a
+    host where no decision has been recorded reports SKIPPED for all three chains and a
+    zero that says so out loud. A broken link -- an edited row, a deleted row, a
+    re-linked chain -- is a non-zero exit naming the sequence number.
     """
     argv: list[str] = []
     if audit_dir is not None:

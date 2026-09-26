@@ -157,6 +157,12 @@ class SourceRun:
     label_counts: dict[str, int] = field(default_factory=dict)
     base_rates: dict[str, str] = field(default_factory=dict)
     typology_nulls: int = 0
+    notes: list[str] = field(default_factory=list)
+    # Set when the operator asked for a slice (`--limit`). The label-provenance
+    # guard treats a zero-annotation frame differently under a slice: a head slice
+    # of IBM can genuinely hold none of the 3,209 annotated rows, and refusing it
+    # would make every smoke run fail, so the fact is reported instead.
+    row_limit: int | None = None
     window_start: datetime | None = None
     window_end: datetime | None = None
     batches: list[dict[str, object]] = field(default_factory=list)
@@ -331,10 +337,23 @@ def _fold_batch(state: SourceRun, result: IngestResult, writer: BatchWriter | No
             state.window_start = result.window_start
         if result.window_end is not None:
             state.window_end = result.window_end
+        carries_typologies = state.source.source_id in TYPOLOGY_BEARING_SOURCES
         assert_label_provenance(
             projection,
-            source_carries_typology=state.source.source_id in TYPOLOGY_BEARING_SOURCES,
+            source_carries_typology=carries_typologies,
+            slice_requested=state.row_limit is not None,
         )
+        if (
+            carries_typologies
+            and state.row_limit is not None
+            and int(sums["typology_nulls"] or 0) == projection.height
+        ):
+            state.notes.append(
+                f"{state.source.source_id}: this --limit {state.row_limit} slice carries "
+                "no typology annotations at all, so no per-typology recall can be "
+                "computed from it; DEV-014 measured the annotations at 3,209 rows in "
+                "5,078,345, which is 0.063% of the corpus"
+            )
         assert_balance_provenance(projection)
         if writer is not None:
             state.batches.append(
@@ -399,6 +418,7 @@ def run_paysim(
         raise SourceDeclarationError("config/pipeline.yaml paysim.intra_step_offset is missing")
     path = raw_file_for(source, root)
     state.raw_path = path.as_posix()
+    state.row_limit = limit
     epoch = datetime.fromisoformat(str(block["epoch_utc"]).replace("Z", "+00:00")).astimezone(UTC)
     ingest_block = _section(config, "ingest")
     callback = (lambda result: _fold_batch(state, result, writer)) if writer is not None else None
@@ -460,6 +480,7 @@ def run_ibm_aml(
     block = _section(config, "ibmaml")
     path = raw_file_for(source, root)
     state.raw_path = path.as_posix()
+    state.row_limit = limit
     deployment_tz = str(config["deployment_timezone"])
     result = ingest_ibm_aml(
         path,

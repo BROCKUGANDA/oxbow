@@ -125,24 +125,34 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     command: tuple[str, ...] = tuple(args.command.split())
-    salt = os.environ.get("RUN_SALT", "")
-    if not salt:
+    # Resolved through the pipeline's own resolver rather than a local
+    # `os.environ.get`: the CLI falls back to `.env`, so a gate that only read the
+    # environment would refuse to run in exactly the shells where `make ingest`
+    # works. One resolution path is also the point -- two ways to find the salt is
+    # how a check ends up comparing two runs that were keyed differently.
+    sys.path.insert(0, str(REPO_ROOT / "packages" / "pipeline"))
+    from oxbow.config import ConfigError, resolve_run_salt
+
+    try:
+        salt = resolve_run_salt(REPO_ROOT)
+    except (ConfigError, FileNotFoundError) as exc:
         raise SystemExit(
-            "RUN_SALT must be set and identical across both runs — account keys are "
+            f"{exc}\nRUN_SALT must be identical across both runs -- account keys are "
             "salted, so a differing salt changes the bytes legitimately (01 §A rule 8)."
-        )
+        ) from exc
+    child_env = dict(os.environ, RUN_SALT=salt, PYTHONIOENCODING="utf-8")
 
     with tempfile.TemporaryDirectory(prefix="oxbow-determinism-") as tmp:
         root = Path(tmp)
         first: dict[str, str] = {}
         if not args.reuse:
             print(f"$ {' '.join(command)}  (run 1)")
-            run_stage(command, dict(os.environ))
+            run_stage(command, child_env)
             first = snapshot_to(root / "run1")
         else:
             first = digests(INTERIM)
         print(f"$ {' '.join(command)}  (run 2)")
-        run_stage(command, dict(os.environ))
+        run_stage(command, child_env)
         second = snapshot_to(root / "run2")
 
     if not first:
