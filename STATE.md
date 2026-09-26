@@ -144,21 +144,31 @@ Ordered by damage if any of it survives into a claimed-complete phase.
     (Separately confirmed *not* a defect: `features/registry.py:216`'s "lorem ipsum"
     is an entry in a banned-substring list for feature descriptions — a guard, not a
     placeholder.) §19's marker grep over all `.py`/`.ts`/`.tsx` returns no other hits.
-13. **Repo-wide `make lint` is red: 208 ruff errors** concentrated in the packages
-    live agents are still writing, plus `make verify`'s P1a IBM gate. Architecture
-    contracts are green (import-linter: 4 kept, 0 broken over 197 files / 925
-    dependencies). Whole-suite status as measured: **405 passed, 6 failed**, all six
-    inside `tests/contracts/test_p1b_canonical_ingest.py` — the file the P1b agent is
-    editing right now, so that is in-flight work rather than decay.
-14. **Audit digest is delimiter-ambiguous.** `audit/chain.py::compute_row_hash`
-    concatenates `HASH_VERSION | seq | occurred_at | actor_id | subject | action |
-    canonical_json(payload) | prev_hash` with `"|"`. The payload's canonical JSON can
-    contain `"|"` inside string values, and so can `subject`/`action`, so two different
-    field splits can produce byte-identical hash material. It is not a practical
-    forgery (seq and prev-hash anchor the chain), but it weakens the exact property
-    plan §15 claims — tamper evidence with a named sequence number. Fix: digest a
-    canonical JSON **array** of the fields, where escaping removes the ambiguity, and
-    keep `HASH_VERSION` as the first element so old chains stay verifiable.
+13. **CLOSED — `make lint` debt, measured rather than remembered.** The earlier
+    figure in this slot ("208 ruff errors", with "405 passed, 6 failed" for the suite)
+    is superseded and was kept here only as a record of how stale a lint claim goes: as
+    of this session `ruff format --check` is green repo-wide (254 files), `ruff check`
+    is down to 46 errors (15 unused test-fixture arguments, 7 docstring style, 6
+    `isinstance` tuple form), and `mypy` carries 304 errors in 64 files led by
+    `scoring/model.py` (87). Whole-suite measurement is now 789 passed / 8 failed / 1
+    skipped, with the eight all PostgreSQL-dependent. The engine has since come back
+    and `postgres`/`redis` report healthy, but that is the prerequisite, not the result:
+    whether those eight pass is only known when `uv run pytest -q tests/integration`
+    says so, and it has not been re-run at the time of writing. `make lint` remains red
+    -- on `mypy` and those 46, no longer on formatting.
+14. **CLOSED — the audit digest is no longer delimiter-ambiguous.** It used to join
+    `HASH_VERSION | seq | occurred_at | actor_id | subject | action | canonical_json
+    (payload) | prev_hash` with `"|"`, and since `subject`, `action` and payload string
+    values can each contain a pipe, two different field splits could produce identical
+    hash material -- weakening exactly the tamper-evidence property plan 15 claims.
+    `compute_row_hash` now digests a canonical JSON **array** with quoted element
+    boundaries (`_canonical_array`, `audit/chain.py:84`) and `HASH_VERSION` still first,
+    so no field value can imitate a boundary. Proven by
+    `test_audit_chain.py::test_adversarial_delimiters_in_any_field_still_separate_the_digest`,
+    which constructs the split-shifting payloads and compares against the retired
+    pipe-join to show the old scheme collided where the new one does not; 11 tests pass
+    in that file.
+
 8. Money parsing exists in four places (`ingest/canonical.py` expression + text forms,
    `ingest/paysim.py`, `ingest/ibm_aml.py`, `quant/money.py`). Not wrong yet, but it is
    where a cent-level divergence will appear first.
