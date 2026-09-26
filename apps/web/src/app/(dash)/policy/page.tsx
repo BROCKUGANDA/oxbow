@@ -27,6 +27,7 @@ import { ErrorPane } from '@/design/primitives/ErrorPane';
 import { Pane } from '@/components/Pane';
 import { LineChart, MultiLineChart } from '@/components/charts/charts';
 import { MoneyFigure } from '@/components/ui/MoneyFigure';
+import { Assumptions } from '@/components/ui/provenance';
 import { MarkArc } from '@/components/ui/MarkArc';
 import { ROUTES, type Allocation } from '@/lib/api/contract';
 import { useListResource, useResource } from '@/lib/api/hooks';
@@ -174,8 +175,12 @@ export default function PolicyPage(): ReactElement {
               ) : null}
             </div>
 
+            {/* Two of the four sliders are money — an analyst hour priced in currency and
+                a friction cost in currency — so the pane that sets them states the keys the
+                answers are computed from, exactly where the number is being chosen. */}
+            <Assumptions assumptions={assumptions} source={defaults.data.source} />
             <p style={{ ...T_MICRO, color: 'var(--color-ink-faint)' }}>
-              every value on this page is the server’s answer to these four numbers · source {defaults.data.source} ·
+              every value on this page is the server’s answer to these four numbers ·
               nothing here is precomputed
             </p>
           </div>

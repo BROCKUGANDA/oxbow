@@ -30,7 +30,7 @@ import { Shimmer } from '@/design/primitives/Shimmer';
 import { Icon } from '@/design/icons/Icon';
 import { Pane } from '@/components/Pane';
 import { BandBadge } from '@/components/ui/BandBadge';
-import { AccountChip } from '@/components/ui/provenance';
+import { AccountChip, Assumptions } from '@/components/ui/provenance';
 import { TYPOLOGY_META, glyphFor } from '@/components/typology';
 import { ROUTES, type GraphEdge, type GraphNode, type Subgraph } from '@/lib/api/contract';
 import { useListResource, useRuntime } from '@/lib/api/hooks';
@@ -55,6 +55,10 @@ type Overlay = 'cycles' | 'velocity' | 'fans' | 'communities' | 'flagged';
  *  is the only reason the claim "the skeleton matches the resolved geometry" is true
  *  rather than merely intended — a second literal would drift the moment one moved. */
 const CANVAS_HEIGHT = 'min(62vh, 640px)';
+
+/** The hop ceiling the subgraph route documents, mirrored here the way the node cap is
+ *  mirrored: it is the number the "re-run wider" actions name, so it is one constant. */
+const MAX_HOPS = 4;
 
 const OVERLAYS: readonly { id: Overlay; label: string; glyph: 'cycle' | 'velocity-spike' | 'fan-in' | 'chain' | 'hash-link' }[] = [
   { id: 'cycles', label: 'cycles', glyph: 'cycle' },
@@ -132,7 +136,7 @@ function NetworkExplorer(): ReactElement {
   const params = useSearchParams();
   const runtime = useRuntime();
   const root = params.get('account') ?? '';
-  const hops = Math.min(Math.max(Number(params.get('hops') ?? '2'), 1), 4);
+  const hops = Math.min(Math.max(Number(params.get('hops') ?? '2'), 1), MAX_HOPS);
   const minAmount = Number(params.get('min_minor') ?? '0');
   const stress = Number(params.get('nodes') ?? '0');
 
@@ -187,6 +191,19 @@ function NetworkExplorer(): ReactElement {
   }
 
   const empty = visible !== null && visible.edges.length === 0;
+  /* The cycle overlay's own empty state, and the one this product is judged on.
+   *
+   * `overlays.cycles` is the server's count of cycle members in the subgraph it just
+   * returned, so "zero" is a measurement rather than an absence: accounts were drawn,
+   * edges between them were drawn, and none of it closed a loop inside the window and
+   * the time order the filter enforces. That is the DEV-011 result for at least one of
+   * the two corpora, so the explorer has to be able to say it out loud instead of
+   * showing a canvas of faded nodes and calling it a graph.
+   *
+   * Only while the overlay is actually requested, and only when something was drawn —
+   * with nothing drawn at all the honest state is the window one, and it says so. */
+  const cyclesRequested = active.includes('cycles');
+  const noCyclesSurvived = !empty && cyclesRequested && data.overlays.cycles === 0;
 
   return (
     <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) 320px', gap: 'var(--spacing-pane-gap)', padding: 'var(--spacing-pane-gap)', alignItems: 'start' }}>
@@ -215,9 +232,35 @@ function NetworkExplorer(): ReactElement {
                 edgesAtCurrentHops={data.edges.length}
                 edgesAtWiderWindow={null}
                 currentHops={hops}
-                maxHops={4}
+                maxHops={MAX_HOPS}
                 onWidenHops={(next) => publish({ hops: String(next) })}
                 onWidenDates={() => undefined}
+              />
+            </div>
+          ) : noCyclesSurvived ? (
+            /* The panel sits in the canvas's own box, at the canvas's own height, so the
+             * scrubber, the overlay row and the rail do not move when it appears. */
+            <div
+              style={{
+                height: CANVAS_HEIGHT,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                padding: 'var(--spacing-pane-gap)',
+                background: 'var(--color-canvas-sunken)',
+                borderRadius: 'var(--radius-cell)',
+              }}
+            >
+              <EmptyState
+                kind="no-cycles"
+                accountsDrawn={visible?.nodes.length ?? 0}
+                edgesDrawn={visible?.edges.length ?? 0}
+                windowFrom={formatDate(data.window.from, runtime.data?.deployment_timezone ?? '')}
+                windowTo={formatDate(data.window.to, runtime.data?.deployment_timezone ?? '')}
+                currentHops={hops}
+                maxHops={MAX_HOPS}
+                onWidenHops={(next) => publish({ hops: String(next) })}
+                onShowAllEdges={() => setActive((current) => current.filter((entry) => entry !== 'cycles'))}
               />
             </div>
           ) : (
@@ -296,7 +339,7 @@ function NetworkExplorer(): ReactElement {
               <input
                 type="range"
                 min={1}
-                max={4}
+                max={MAX_HOPS}
                 value={hops}
                 onChange={(event) => publish({ hops: event.target.value })}
                 style={{ accentColor: 'var(--color-evidence)' }}
@@ -341,7 +384,13 @@ function NetworkExplorer(): ReactElement {
           <OverlayCounts subgraph={data} />
         </Pane>
 
-        {selected !== null ? <NodeDetail node={findNode(visible?.nodes ?? [], selected)} edges={selectEdges(visible?.edges ?? [], selected)} /> : null}
+        {selected !== null ? (
+          <NodeDetail
+            node={findNode(visible?.nodes ?? [], selected)}
+            edges={selectEdges(visible?.edges ?? [], selected)}
+            assumptions={graph.meta?.assumptions ?? []}
+          />
+        ) : null}
       </div>
     </div>
   );
@@ -377,9 +426,17 @@ function OverlayCounts({ subgraph }: { subgraph: Subgraph }): ReactElement {
   );
 }
 
-function NodeDetail({ node, edges }: { node: GraphNode | null; edges: GraphEdge[] }): ReactElement {
+function NodeDetail({ node, edges, assumptions }: { node: GraphNode | null; edges: GraphEdge[]; assumptions: readonly { key: string; value: string | number; source: string; note: string | null }[] }): ReactElement {
   if (node === null) return <span />;
-  const total = edges.reduce((sum, edge) => sum + edge.total.minor, 0);
+  /* One currency or none: summing minor units across two currencies would be a number
+     about nothing, so the total is only formed when every drawn edge prices in the same
+     code, and the code itself comes off the edges rather than being typed here. */
+  const first = edges[0]?.total ?? null;
+  const shared = first !== null && edges.every((edge) => edge.total.currency === first.currency);
+  const total =
+    first === null || !shared
+      ? null
+      : { minor: edges.reduce((sum, edge) => sum + edge.total.minor, 0), decimals: first.decimals, currency: first.currency };
   return (
     <Pane id="node" title="Selected node" operation="Reading the selected node" meta={null} skeleton={{ columns: [{ key: 'n', width: '100%' }], rows: 3 }}>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
@@ -405,7 +462,16 @@ function NodeDetail({ node, edges }: { node: GraphNode | null; edges: GraphEdge[
             exposure {compactFromMinor(node.exposure.minor, node.exposure.decimals)} {node.exposure.currency}
           </p>
         ) : null}
-        <p style={{ ...T_MICRO, color: 'var(--color-ink-faint)' }}>{count(edges.length)} drawn edges · {compactFromMinor(total, 2)} minor moved</p>
+        <p style={{ ...T_MICRO, color: 'var(--color-ink-faint)' }}>
+          {count(edges.length)} drawn edges ·{' '}
+          {total === null
+            ? 'no value moved along a drawn edge in this view'
+            : `${compactFromMinor(total.minor, total.decimals)} ${total.currency} moved along them`}
+        </p>
+        {/* An amount without a currency code is not a number anyone can check, and an
+            amount with one still owes its assumptions: this total is a sum of edge
+            amounts the run measured, priced on the keys below. */}
+        <Assumptions assumptions={assumptions} />
         {edges.some((edge) => edge.typology !== null) ? (
           <p style={{ ...T_MICRO, color: 'var(--color-ink-muted)' }}>
             typologies on these edges:{' '}

@@ -129,6 +129,75 @@ export const subgraph: Subgraph = {
   overlays: overlays(demo.edges, demo.nodes),
 };
 
+/* ------------------------------------------------------- traversal slicing -- */
+
+/**
+ * The subgraph a `(root, hops)` query returns, sliced from the demo neighbourhood.
+ *
+ * The real route traverses; the double has to, or every control on the explorer that
+ * publishes `hops` or `account` into the query string is a dead slider in dev and the
+ * states behind it are unreachable. Distances are recomputed from the root, edges are
+ * the ones actually walked, and an unknown account answers with an empty subgraph —
+ * which is what a graph with no such vertex returns, not an error.
+ */
+export function traversedSubgraph(account: string, hops: number): Subgraph {
+  // Named rather than `window`: this module runs in the browser too, and shadowing that
+  // global inside a fixture is a trap for the next person to edit it.
+  const drawnWindow = { from: new Date(START).toISOString(), to: new Date(START + 28 * DAY_MS).toISOString() };
+
+  // No root named is the whole demo neighbourhood, exactly as the default route draws it.
+  if (account === '') return { ...subgraph, hops };
+
+  const start = demo.nodes.find((node) => node.key === account);
+  if (start === undefined) {
+    return {
+      nodes: [],
+      edges: [],
+      truncated: false,
+      cap: 1_500,
+      collapsed_communities: [],
+      window: drawnWindow,
+      hops,
+      edges_by_bucket: [],
+      overlays: { cycles: 0, high_velocity_hops: 0, fan_stars: 0, dense_communities: 0, flagged: 0 },
+    };
+  }
+
+  const depth = new Map<string, number>([[start.key, 0]]);
+  const walked = new Set<string>();
+  for (let hop = 1; hop <= hops; hop += 1) {
+    for (const edge of demo.edges) {
+      if (edge.source === edge.target) continue;
+      const from = depth.get(edge.source);
+      if (from === undefined || from !== hop - 1 || walked.has(edge.id)) continue;
+      walked.add(edge.id);
+      if (!depth.has(edge.target)) depth.set(edge.target, hop);
+    }
+  }
+
+  const edges = demo.edges.filter((edge) => walked.has(edge.id));
+  /* Cycle membership is a property of the RUN, published per node: the detector worked
+     over the whole window, not over this ball. It is carried through the slice
+     unaltered, so `overlays.cycles` below counts the members this query actually
+     returned rather than a number invented for the hop budget. */
+  const nodes = demo.nodes
+    .filter((node) => depth.has(node.key))
+    .map((node) => ({ ...node, hops: depth.get(node.key) ?? 0 }));
+
+  return {
+    nodes,
+    edges,
+    truncated: false,
+    cap: 1_500,
+    collapsed_communities: [],
+    window: drawnWindow,
+    hops,
+    edges_by_bucket: buckets(edges),
+    overlays: overlays(edges, nodes),
+  };
+}
+
+
 /** The 1,500-node cap variant, with two community meta-nodes carrying their true size. */
 export function stressSubgraph(target = 1_500): Subgraph {
   const built = stress(target);

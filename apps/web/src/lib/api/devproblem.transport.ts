@@ -95,7 +95,26 @@ export function send(request: TransportRequest): Promise<TransportResponse> {
         // A 2xx whose `data` is missing every field the route declares.
         body: { data: { expected_loss_avoided: { value: {} } }, meta: {} },
       });
+    case 'no-assumptions':
+      /* A response that satisfies the envelope and the payload and strips exactly one
+         thing: the assumptions block. The currency chokepoint refuses to render without
+         it, so this is the case that proves the refusal is real — and on a screen whose
+         money sits outside a pane, it is also the only way to reach tier 3, the
+         route-level boundary, in a browser. */
+      return fixtureSend(request).then((response) => ({
+        ...response,
+        body: stripAssumptions(response.body),
+      }));
     default:
       return fixtureSend(request);
   }
+}
+
+/** Narrows an unknown response body to its envelope and empties `meta.assumptions`. */
+function stripAssumptions(body: unknown): unknown {
+  if (typeof body !== 'object' || body === null) return body;
+  const envelope = body as Record<string, unknown>;
+  const meta = envelope.meta;
+  if (typeof meta !== 'object' || meta === null) return body;
+  return { ...envelope, meta: { ...(meta as Record<string, unknown>), assumptions: [] } };
 }

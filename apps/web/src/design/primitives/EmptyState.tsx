@@ -573,7 +573,7 @@ function NoCycles(props: NoCyclesState): ReactElement {
     <EmptyStateFrame>
       <Glyph name="cycle" title="No cycles" />
       <div style={{ marginTop: 10 }}>
-        <Headline>No cycle survived the filters over this window</Headline>
+        <Headline>No cycle survived the time-respecting filter over this window</Headline>
         <Body>
           The explorer drew <Count value={props.accountsDrawn} /> accounts and{' '}
           <Count value={props.edgesDrawn} /> edges between {props.windowFrom} and {props.windowTo}, and every

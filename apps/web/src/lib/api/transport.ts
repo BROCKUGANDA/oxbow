@@ -186,6 +186,24 @@ export function asContractFailure(error: ContractViolation, path: string, status
   };
 }
 
+/**
+ * Forwards a `?fail=` from the *page* URL onto the API request, in the failure-injection
+ * mode only.
+ *
+ * `/alerts?fail=500` and `/policy?fail=503-solver` are how the error tiers and the
+ * degraded path become reachable in a browser — `devproblem.transport.ts` reads the
+ * parameter off the request it is handed, and the state gallery's own copy already points
+ * at those URLs. Nothing about this reaches a normal build: `resolveMode` refuses the
+ * `problem` mode in production, and the caller checks the ambient mode before applying
+ * it, so a real request to P7 never carries a demo parameter.
+ */
+export function withInjectedFailure(path: string): string {
+  if (typeof window === 'undefined') return path;
+  const injected = new URLSearchParams(window.location.search).get('fail');
+  if (injected === null || injected.length === 0 || path.includes('fail=')) return path;
+  return `${path}${path.includes('?') ? '&' : '?'}fail=${encodeURIComponent(injected)}`;
+}
+
 let cached: Transport | null = null;
 
 /**

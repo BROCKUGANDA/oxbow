@@ -19,6 +19,7 @@
 
 'use client';
 
+import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
 import { Suspense, type ReactElement, ReactNode } from 'react';
 
@@ -173,7 +174,7 @@ function Gallery(): ReactElement {
       </Section>
 
       {/* ------------------------------------------------- 5. four empties -- */}
-      <Section id="empty" title="Four empty states, none of which says “no data”">
+      <Section id="empty" title="Five empty states, none of which says “no data”">
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: 16 }}>
           <EmptyState
             kind="filters-excluded"
@@ -193,6 +194,17 @@ function Gallery(): ReactElement {
             maxHops={4}
             onWidenHops={() => undefined}
             onWidenDates={() => undefined}
+          />
+          <EmptyState
+            kind="no-cycles"
+            accountsDrawn={212}
+            edgesDrawn={388}
+            windowFrom="2026-09-01"
+            windowTo="2026-09-29"
+            currentHops={1}
+            maxHops={4}
+            onWidenHops={() => undefined}
+            onShowAllEdges={() => undefined}
           />
           <EmptyState
             kind="no-disagreement"
@@ -216,7 +228,16 @@ function Gallery(): ReactElement {
             </p>
           </div>
           <div>
-            <p style={{ ...T_MICRO, color: 'var(--color-ink-faint)', marginBottom: 4 }}>tier 2 · pane-level, retrying in place</p>
+            <p style={{ ...T_MICRO, color: 'var(--color-ink-faint)', marginBottom: 4 }}>
+              tier 2 · pane-level, retrying in place ·{' '}
+              <Link href="/policy?fail=503-solver" style={{ textDecoration: 'underline' }}>
+                /policy?fail=503-solver
+              </Link>{' '}
+              ·{' '}
+              <Link href="/alerts?fail=500" style={{ textDecoration: 'underline' }}>
+                /alerts?fail=500
+              </Link>
+            </p>
             <ErrorPane
               paneId="gallery-pane"
               operation="Loading the network graph"
@@ -226,18 +247,35 @@ function Gallery(): ReactElement {
             />
           </div>
           <div>
-            <p style={{ ...T_MICRO, color: 'var(--color-ink-faint)', marginBottom: 4 }}>tier 3 · route-level error.tsx · see /alerts?fail=500</p>
-            <p style={{ ...T_MICRO, color: 'var(--color-ink-muted)', margin: 0 }}>
-              A segment failure renders the same ErrorPane with <code style={T_MONO}>siblingsIntact=false</code>; the
-              header and the footer survive because they are above the boundary.
+            <p style={{ ...T_MICRO, color: 'var(--color-ink-faint)', marginBottom: 4 }}>
+              tier 3 · route-level error.tsx ·{' '}
+              <Link href="/dashboard?fail=no-assumptions" style={{ textDecoration: 'underline' }}>
+                /dashboard?fail=no-assumptions
+              </Link>{' '}
+              ·{' '}
+              <Link href="/alerts?fail=502" style={{ textDecoration: 'underline' }}>
+                /alerts?fail=502
+              </Link>
+            </p>
+            <p style={{ ...T_MICRO, color: 'var(--color-ink-muted)', margin: 0, maxWidth: '76ch' }}>
+              Reached by asking the failure transport for a response that is a well-formed envelope with the
+              assumptions block emptied: the currency chokepoint refuses to render it, the refusal escapes every pane
+              boundary on that screen, and the segment boundary catches it. A segment failure renders the same ErrorPane
+              with <code style={T_MONO}>siblingsIntact=false</code>; the header and the footer survive because they are
+              above the boundary.
             </p>
           </div>
           <div>
-            <p style={{ ...T_MICRO, color: 'var(--color-ink-faint)', marginBottom: 4 }}>tier 4 · global-error.tsx</p>
+            <p style={{ ...T_MICRO, color: 'var(--color-ink-faint)', marginBottom: 4 }}>
+              tier 4 · global-error.tsx · rendered by OXBOW_GLOBAL_ERROR_PROBE=1
+            </p>
             <p style={{ ...T_MICRO, color: 'var(--color-ink-muted)', margin: 0, maxWidth: '72ch' }}>
               The boundary above the shell re-declares html and body and imports nothing from the design system, because
               if the shell is what failed, a surface built from the shell is what just failed. It is styled with the
-              token values inlined for exactly that reason.
+              token values inlined for exactly that reason. Next mounts it only when the root layout itself fails,
+              which is not a state a URL can ask for, so <code style={T_MONO}>app/layout.tsx</code> carries a
+              server-environment probe that throws on purpose; the screenshot of this tier is taken with that variable
+              set and nothing else changes.
             </p>
           </div>
           <div>

@@ -201,6 +201,15 @@ Ordered by damage if any of it survives into a claimed-complete phase.
     seeder and a pinned snapshot are the work; the hosted read-only demo stays blocked
     on the licensing decision already recorded in `BACKLOG.md` (00 §I.4), which is a
     human call, not a task to absorb.
+    **Deliberately not written yet, as of this session.** A seeder's two jobs are to
+    snapshot a warehouse that holds scored rows, backtest folds and one landed
+    reviewer decision, and to prove the stack reaches healthy within a budget on restore.
+    The first job has nothing to snapshot until P4/P6 land (the score stage still stops
+    before a model is trained, so `out/` holds features and rules only), and writing it
+    against an empty database would produce a `make demo` that boots a blank UI -- a
+    green target with no evidence behind it, which is the thing this file has been
+    cataloguing all session. Its ordering is therefore: P4 scorer -> P6 folds -> a
+    decision landed through the API -> then this, with the 90 s budget measured for real.
 
 12. **A full-suite number taken while workers are editing is not a verdict.** The one
     snapshot captured concurrently reported 114 failed / 538 passed / 34 errors,

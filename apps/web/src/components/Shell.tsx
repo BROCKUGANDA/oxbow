@@ -22,6 +22,7 @@ import { Suspense, useEffect, type ReactElement, type ReactNode } from 'react';
 import { Icon } from '../design/icons/Icon';
 import { ProvenanceBadge } from './ui/provenance';
 import { useRuntime } from '../lib/api/hooks';
+import { transportMode } from '../lib/api/transport';
 import { DISCLAIMER, SCENARIO_NOTE } from '../lib/copy';
 import { GAP, T_LABEL, T_MICRO } from './ui/sx';
 import { useShell } from './AppProviders';
@@ -42,6 +43,14 @@ export function Shell({ children }: { children: ReactNode }): ReactElement {
   const meta = runtime.meta;
 
   const provenance = meta?.provenance ?? null;
+  /* The banner is decided by the transport the build selected, which is known on the
+     first render, and not by a response field that arrives ~4s later. Deriving it from
+     `meta.provenance` alone made the banner appear after every pane had already painted
+     and pushed the whole page down — the single largest layout shift measured on this
+     app (0.39 on the queue, 0.34 on the explorer). The response still gets the last
+     word: `isFixture(provenance)` keeps the banner up if a payload ever arrives stamped
+     as fixture bytes over the real transport. */
+  const fixtureTransport = transportMode() !== 'api';
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', minHeight: '100vh', background: 'var(--color-canvas)' }}>
@@ -158,7 +167,7 @@ export function Shell({ children }: { children: ReactNode }): ReactElement {
         </div>
       </header>
 
-      {isFixture(provenance) ? (
+      {fixtureTransport || isFixture(provenance) ? (
         <div
           role="status"
           data-fixture-banner

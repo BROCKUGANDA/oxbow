@@ -44,9 +44,17 @@
   --color-hairline-inset: oklch(0.1 0.01 250 / 0.4);
 
   /* -------------------------------------------------------------------- text */
+  /* `faint` is the lightest colour this product puts *text* at, and it is floored at
+     WCAG AA (4.5:1) against the lightest surface it is ever used on — `--color-elev-2`,
+     the active-chip fill. At oklch(0.56 …) it measured 3.49:1 there and 3.85:1 on
+     `--color-canvas-raised`, which axe reported as a serious violation on every screen
+     that renders an assumption line, so the token was wrong, not the screens.
+     0.64 measures 4.83:1 on elev-2, 5.33:1 on raised, 5.91:1 on sunken. The hierarchy
+     ink > muted > faint > disabled is preserved: `disabled` is exempt from 1.4.3
+     because it marks text the user is not meant to read. */
   --color-ink: oklch(0.96 0.006 250);
   --color-ink-muted: oklch(0.74 0.01 250);
-  --color-ink-faint: oklch(0.56 0.012 250);
+  --color-ink-faint: oklch(0.64 0.012 250);
   --color-ink-disabled: oklch(0.42 0.012 250);
   --color-ink-inverse: oklch(0.17 0.012 250);
 
@@ -176,7 +184,9 @@
 
   --color-ink: oklch(0.22 0.012 250);
   --color-ink-muted: oklch(0.44 0.012 250);
-  --color-ink-faint: oklch(0.58 0.012 250);
+  /* Mirrors the dark-canvas rule: `faint` stays an AA-passing text colour on the
+     lightest paper too (4.83:1 on `--color-paper-sunken`, 5.19:1 on paper). */
+  --color-ink-faint: oklch(0.52 0.012 250);
   --color-ink-disabled: oklch(0.68 0.01 250);
   --color-ink-inverse: oklch(0.98 0.004 90);
 

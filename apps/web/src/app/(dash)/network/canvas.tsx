@@ -181,7 +181,10 @@ function styles(monoStack: string): cytoscape.StylesheetJson {
     {
       selector: '.highlight',
       style: {
-        'line-width': 3,
+        /* `width`, not `line-width`: Cytoscape rejects the latter outright — it logged
+           "The style property `line-width: 3` is invalid" on every load and dropped the
+           whole rule, so the highlighted edges were never thicker, only more opaque. */
+        width: 3,
         'line-opacity': 1,
         'overlay-color': EVIDENCE_COLOUR,
         'overlay-opacity': 0.12,

@@ -24,7 +24,7 @@ export const tokens = {
   hairline_strong: 'oklch(0.86 0.01 250 / 0.16)',
   ink: 'oklch(0.96 0.006 250)',
   ink_disabled: 'oklch(0.42 0.012 250)',
-  ink_faint: 'oklch(0.56 0.012 250)',
+  ink_faint: 'oklch(0.64 0.012 250)',
   ink_inverse: 'oklch(0.17 0.012 250)',
   ink_muted: 'oklch(0.74 0.01 250)',
   paper: 'oklch(0.98 0.004 90)',
@@ -66,7 +66,7 @@ export const tokens = {
   hairline_strong: 'oklch(0.2 0.01 90 / 0.24)',
   ink: 'oklch(0.22 0.012 250)',
   ink_disabled: 'oklch(0.68 0.01 250)',
-  ink_faint: 'oklch(0.58 0.012 250)',
+  ink_faint: 'oklch(0.52 0.012 250)',
   ink_inverse: 'oklch(0.98 0.004 90)',
   ink_muted: 'oklch(0.44 0.012 250)',
   state_done: 'oklch(0.52 0.12 150)',
@@ -137,7 +137,7 @@ export const CANVAS_RAISED = 'oklch(0.205 0.014 250)' as const;
 export const HAIRLINE = 'oklch(0.86 0.01 250 / 0.08)' as const;
 export const INK = 'oklch(0.96 0.006 250)' as const;
 export const INK_MUTED = 'oklch(0.74 0.01 250)' as const;
-export const INK_FAINT = 'oklch(0.56 0.012 250)' as const;
+export const INK_FAINT = 'oklch(0.64 0.012 250)' as const;
 
 export const DURATIONS = {
   BASE: '220ms',

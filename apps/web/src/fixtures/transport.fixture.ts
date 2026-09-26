@@ -15,7 +15,7 @@ import { datasetCard, datasetCardPaysim, runtime, stageEvents, validation } from
 import { dashboard } from './dashboard.fixture';
 import { allocate, policyDefaults, type AllocateParams } from './policy.fixture';
 import { disagreement, disagreementEmpty, drift, scorecard } from './scorecard.fixture';
-import { stressSubgraph, subgraph } from './graph.fixture';
+import { stressSubgraph, traversedSubgraph } from './graph.fixture';
 
 function json(status: number, body: unknown): TransportResponse {
   return { status, contentType: 'application/json', body, retryAfterMs: null };
@@ -117,7 +117,14 @@ export function send(request: TransportRequest): Promise<TransportResponse> {
   }
   if (route === '/api/graph/subgraph') {
     const nodes = numberParam(params, 'nodes', 0);
-    return Promise.resolve(json(200, envelope(nodes > 0 ? stressSubgraph(nodes) : subgraph)));
+    if (nodes > 0) return Promise.resolve(json(200, envelope(stressSubgraph(nodes))));
+    // The double traverses, because the explorer publishes `account` and `hops` into
+    // the query and the states behind them have to be reachable in dev. Ignoring them
+    // left the hop slider inert and made the empty-window and no-cycles states
+    // unaddressable anywhere except the gallery.
+    return Promise.resolve(
+      json(200, envelope(traversedSubgraph(params.get('account') ?? '', numberParam(params, 'hops', 2)))),
+    );
   }
   if (route === '/api/alerts') {
     const limit = numberParam(params, 'limit', 40);

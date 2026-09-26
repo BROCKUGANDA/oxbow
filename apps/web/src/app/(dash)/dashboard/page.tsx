@@ -19,10 +19,12 @@
 'use client';
 
 import Link from 'next/link';
-import type { ReactElement } from 'react';
+import type { CSSProperties, ReactElement } from 'react';
 
 import { Icon } from '@/design/icons/Icon';
 import { EmptyState } from '@/design/primitives/EmptyState';
+import { ErrorPane } from '@/design/primitives/ErrorPane';
+import { Shimmer } from '@/design/primitives/Shimmer';
 import { TYPOLOGY_META, glyphFor } from '@/components/typology';
 import { Pane } from '@/components/Pane';
 import { MultiLineChart } from '@/components/charts/charts';
@@ -32,17 +34,69 @@ import { BandBadge } from '@/components/ui/BandBadge';
 import { PIPELINE_COMMAND, RUNTIME_ESTIMATE_FALLBACK } from '@/lib/copy';
 import { ROUTES } from '@/lib/api/contract';
 import { useResource } from '@/lib/api/hooks';
+import { failureDetail, failureRunId, failureTitle } from '@/lib/api/problem';
 import { compactFromMinor, count, moneyAxisFormatter } from '@/lib/format/money';
 import { GAP_TIGHT, PANEL_SUNKEN, T_LABEL, T_MICRO } from '@/components/ui/sx';
 
-/** The KPI strip's skeleton geometry: three money figures, each with a band line. */
-const STRIP_COLUMNS = [
-  { key: 'loss', width: 'minmax(0, 1fr)' },
-  { key: 'hour', width: 'minmax(0, 1fr)' },
-  { key: 'residual', width: 'minmax(0, 1fr)' },
-  { key: 'alerts', width: 'minmax(0, 1fr)' },
-  { key: 'networks', width: 'minmax(0, 1fr)' },
-];
+/** The strip's geometry, measured on the resolved page at the desktop breakpoint:
+ *  five cells in one `auto-fit minmax(220px,1fr)` row, 123px tall. The pending strip
+ *  reserves exactly this box — the same grid template, the same row height — because a
+ *  KPI strip that appears 123px taller than its own skeleton moves everything below it,
+ *  which is the 0.39 CLS this page measured before the geometry was matched. */
+const STRIP_CELLS = ['loss', 'hour', 'residual', 'alerts', 'networks'] as const;
+const STRIP_ROW_HEIGHT = 123;
+/** The model-quality row is 75px tall resolved, and the chips are static labels, so the
+ *  skeleton is the same three boxes at the same height. */
+const CHIP_ROW_HEIGHT = 75;
+/* Reserved pane bodies, measured on the resolved page at 1440px: the curve pane is
+ * 316px of chart plus its assumption line, the feed is six 32px rows plus its own.
+ * `Pane` applies these in both states, which is why the numbers can be approximate
+ * without costing anything — the box is the box either way. */
+const CURVE_BODY = 316;
+const PATTERNS_BODY = 262;
+
+/* The three containers below are declared once and used by the pending tree and the
+ * resolved tree alike. That is the point: a skeleton cannot match geometry it does not
+ * share, and two copies of a grid template is how a page starts disagreeing with itself. */
+const PAGE: CSSProperties = {
+  padding: 'var(--spacing-pane-gap)',
+  display: 'flex',
+  flexDirection: 'column',
+  gap: 'var(--spacing-pane-gap)',
+};
+const STRIP_GRID: CSSProperties = {
+  display: 'grid',
+  gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))',
+  gap: 'var(--spacing-pane-gap)',
+};
+const FIGURE_GRID: CSSProperties = {
+  display: 'grid',
+  gridTemplateColumns: 'minmax(0, 2fr) minmax(0, 1fr)',
+  gap: 'var(--spacing-pane-gap)',
+};
+
+/* ONE source for the pane skeletons, used by both the pending and the resolved tree.
+ * The heights below are the measured content heights of the panes they stand in for. */
+const PANE_CURVE = { columns: [{ key: 'curve', width: '100%' }], rows: 1, rowHeight: 315 };
+const PANE_BANDS = {
+  columns: [
+    { key: 'band', width: '40%' },
+    { key: 'share', width: '60%' },
+  ],
+  rows: 5,
+  rowHeight: 32,
+};
+const PANE_PATTERNS = {
+  columns: [
+    { key: 'rule', width: '44px' },
+    { key: 'account', width: '140px' },
+    { key: 'observed', width: 'minmax(0, 1fr)' },
+    { key: 'exposure', width: '140px', align: 'end' as const },
+    { key: 'seen', width: '190px', align: 'end' as const },
+  ],
+  rows: 6,
+  rowHeight: 32,
+};
 
 export default function DashboardPage(): ReactElement {
   const dashboard = useResource('dashboard', ROUTES.dashboard.path, ROUTES.dashboard.data);
@@ -50,11 +104,51 @@ export default function DashboardPage(): ReactElement {
   const timeZone = runtime.data?.deployment_timezone ?? 'UTC';
   const assumptions = dashboard.meta?.assumptions ?? [];
 
+  /* The pending tree is the resolved tree with its data cells replaced by matched-geometry
+   * shimmers: same wrapper, same gaps, same pane specs, so nothing below moves on resolve. */
   if (dashboard.data === null) {
     return (
-      <div style={{ padding: 'var(--spacing-pane-gap)', display: 'flex', flexDirection: 'column', gap: 12 }}>
-        <Pane id="dashboard-strip" title="Command strip" operation="Loading the command strip" skeleton={{ columns: STRIP_COLUMNS, rows: 1, rowHeight: 96 }}>
-          <Pending state={dashboard} />
+      <div style={PAGE}>
+        {/* A failed primary payload is an error, not an eternal skeleton: the strip says
+            what broke, prints the run_id, and retries itself while the rest of the page
+            keeps whatever the other routes returned. */}
+        {dashboard.failure !== null ? (
+          <ErrorPane
+            paneId="dashboard-strip"
+            operation="Loading the command strip"
+            error={{
+              title: failureTitle(dashboard.failure),
+              detail: failureDetail(dashboard.failure) ?? undefined,
+              run_id: failureRunId(dashboard.failure) ?? undefined,
+            }}
+            onRetry={() => void dashboard.refetch()}
+            attempt={dashboard.attempts}
+            retrying={dashboard.isFetching}
+          />
+        ) : null}
+        <section aria-hidden="true" aria-label="Period economics, loading" style={{ ...STRIP_GRID, minHeight: STRIP_ROW_HEIGHT }}>
+          {STRIP_CELLS.map((key) => (
+            <Shimmer key={key} width="100%" height={STRIP_ROW_HEIGHT} radius="var(--radius-panel)" />
+          ))}
+        </section>
+
+        <section aria-hidden="true" aria-label="Model quality, loading" style={{ display: 'flex', gap: 8, flexWrap: 'wrap', minHeight: CHIP_ROW_HEIGHT }}>
+          {['PR-AUC', 'Precision at budget', 'Brier'].map((label) => (
+            <Shimmer key={label} width={220} height={CHIP_ROW_HEIGHT} radius="var(--radius-control)" />
+          ))}
+        </section>
+
+        <div style={FIGURE_GRID}>
+          <Pane id="curve" title="Cumulative benefit by policy" operation="Loading the cumulative benefit curve" skeleton={PANE_CURVE} reserveHeight={CURVE_BODY}>
+            <span />
+          </Pane>
+          <Pane id="bands" title="Band distribution" operation="Loading the band distribution" skeleton={PANE_BANDS} reserveHeight={CURVE_BODY}>
+            <span />
+          </Pane>
+        </div>
+
+        <Pane id="patterns" title="Latest patterns" operation="Loading the pattern feed" skeleton={PANE_PATTERNS} reserveHeight={PATTERNS_BODY}>
+          <span />
         </Pane>
       </div>
     );
@@ -65,9 +159,9 @@ export default function DashboardPage(): ReactElement {
   const noRunYet = data.alerts_generated === 0 && data.latest_patterns.length === 0;
 
   return (
-    <div style={{ padding: 'var(--spacing-pane-gap)', display: 'flex', flexDirection: 'column', gap: 'var(--spacing-pane-gap)' }}>
+    <div style={PAGE}>
       {/* ---- the currency strip ---------------------------------------- */}
-      <section data-strip aria-label="Period economics" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 'var(--spacing-pane-gap)' }}>
+      <section data-strip aria-label="Period economics" style={STRIP_GRID}>
         <MoneyFigure
           figure={data.expected_loss_avoided}
           assumptions={assumptions}
@@ -129,13 +223,14 @@ export default function DashboardPage(): ReactElement {
       ) : null}
 
       {/* ---- the curve, the distribution, the feed ---------------------- */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 2fr) minmax(0, 1fr)', gap: 'var(--spacing-pane-gap)' }}>
+      <div style={FIGURE_GRID}>
         <Pane
           id="curve"
           title="Cumulative benefit by policy"
           operation="Loading the cumulative benefit curve"
           meta={dashboard.meta}
-          skeleton={{ columns: [{ key: 'curve', width: '100%' }], rows: 1, rowHeight: 300 }}
+          skeleton={PANE_CURVE}
+          reserveHeight={CURVE_BODY}
         >
           <MultiLineChart
             series={data.cumulative_benefit.series}
@@ -151,7 +246,8 @@ export default function DashboardPage(): ReactElement {
           title="Band distribution"
           operation="Loading the band distribution"
           meta={dashboard.meta}
-          skeleton={{ columns: [{ key: 'band', width: '40%' }, { key: 'share', width: '60%' }], rows: 5, rowHeight: 32 }}
+          skeleton={PANE_BANDS}
+          reserveHeight={CURVE_BODY}
         >
           <ul style={{ listStyle: 'none', margin: 0, padding: 0 }}>
             {data.band_distribution.map((bucket) => (
@@ -185,16 +281,8 @@ export default function DashboardPage(): ReactElement {
         title="Latest patterns"
         operation="Loading the pattern feed"
         meta={dashboard.meta}
-        skeleton={{
-          columns: [
-            { key: 'rule', width: '44px' },
-            { key: 'account', width: '140px' },
-            { key: 'observed', width: 'minmax(0, 1fr)' },
-            { key: 'exposure', width: '140px', align: 'end' },
-            { key: 'seen', width: '190px', align: 'end' },
-          ],
-          rows: 6,
-        }}
+        skeleton={PANE_PATTERNS}
+        reserveHeight={PATTERNS_BODY}
       >
         {data.latest_patterns.length === 0 ? (
           <p style={{ ...T_LABEL, color: 'var(--color-ink-muted)', maxWidth: '64ch' }}>
@@ -225,6 +313,10 @@ export default function DashboardPage(): ReactElement {
             ))}
           </ul>
         )}
+        {/* The feed's exposure column is money, so the pane names the keys that money
+            is a function of — plan §11's clause applies to a figure in a table cell as
+            much as to one in a KPI strip. */}
+        <Assumptions assumptions={assumptions} source={data.economics_source} />
       </Pane>
     </div>
   );
@@ -259,11 +351,4 @@ function Chip({ label, metric, lowerIsBetter = false }: { label: string; metric:
   );
 }
 
-function Pending({ state }: { state: { isPending: boolean; failure: unknown } }): ReactElement {
-  return (
-    <p style={{ ...T_MICRO, color: 'var(--color-ink-faint)' }}>
-      {state.failure !== null ? 'The command strip failed to load; the rest of the page is unaffected.' : 'Loading the period economics.'}
-    </p>
-  );
-}
 

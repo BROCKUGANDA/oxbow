@@ -23,7 +23,7 @@
 import { QueryClient, type QueryKey } from '@tanstack/react-query';
 import { ContractViolation, decodeOrThrow, type Decoder } from '../codec';
 import { ListMetaDecoder, type ListMeta } from './contract';
-import { assertOk, asContractFailure, getTransport } from './transport';
+import { assertOk, asContractFailure, getTransport, withInjectedFailure } from './transport';
 import { ApiError, isRetryable, type ApiFailure } from './problem';
 
 /** The only success shape the client knows: the envelope's two keys, typed. */
@@ -98,14 +98,17 @@ export async function request<T>(
   init: { method?: 'GET' | 'POST'; body?: unknown; signal?: AbortSignal } = {},
 ): Promise<Payload<T>> {
   const transport = await getTransport();
+  /* The only place the page's own query string can influence an API request, and only
+     in the dev failure-injection mode — see `withInjectedFailure`. */
+  const requestPath = transport.mode === 'problem' ? withInjectedFailure(path) : path;
   const response = await transport.send({
-    path,
+    path: requestPath,
     method: init.method ?? 'GET',
     body: init.body,
     signal: init.signal,
   });
-  const ok = assertOk(response, path);
-  return unwrap(ok, decoder, path);
+  const ok = assertOk(response, requestPath);
+  return unwrap(ok, decoder, requestPath);
 }
 
 /* ---------------------------------------------------------------- retry ---- */

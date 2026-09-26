@@ -43,6 +43,17 @@ export type PaneProps = {
   /** Matched-geometry skeleton spec. Required: a pane with no skeleton is a pane
    *  that shifts when it resolves. */
   skeleton?: { columns: readonly SkeletonColumn[]; rows: number; rowHeight?: number };
+  /**
+   * Reserved body height in px, applied in BOTH the pending and the resolved state.
+   *
+   * A skeleton can only promise the geometry the content will actually take, and for a
+   * pane whose height depends on how much data arrived (a chart at its real height, a
+   * feed plus its assumption line) that promise is a guess. Reserving the box on the
+   * container makes the promise structural: the region is that tall whether it is
+   * holding a skeleton or the answer, so resolution cannot move anything below it.
+   * This is what plan §16's "reserved geometry" clause means in pixels.
+   */
+  reserveHeight?: number;
   /** The narrowest width at which this pane keeps its column layout. */
   minChildWidth?: number;
   padded?: boolean;
@@ -56,6 +67,7 @@ export function Pane({
   meta = null,
   actions = null,
   skeleton,
+  reserveHeight,
   padded = true,
 }: PaneProps): ReactElement {
   return (
@@ -86,7 +98,7 @@ export function Pane({
         <span style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 8 }}>{actions}</span>
       </header>
 
-      <div style={{ flex: 1, minWidth: 0, padding: padded ? '12px' : 0 }}>
+      <div style={{ flex: 1, minWidth: 0, padding: padded ? '12px' : 0, ...(reserveHeight === undefined ? {} : { minHeight: reserveHeight }) }}>
         <ErrorBoundary
           fallbackRender={({ error, resetErrorBoundary }) => (
             <PaneFailure id={id} operation={operation} error={error} onRetry={resetErrorBoundary} />

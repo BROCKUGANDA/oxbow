@@ -274,7 +274,11 @@ function StageRow({ stage, now, reducedMotion, onRetryStage }: StageRowProps): R
           style={{
             fontFamily: 'var(--font-sans)',
             fontSize: '0.6875rem',
-            color: STATUS_COLOUR[stage.status],
+            /* The word carries the state; the dot above carries the colour. Inking the
+               word with STATUS_COLOUR put `queued` at 2.3:1 and `skipped` at 3.0:1 on
+               this panel — text at those ratios is a WCAG 1.4.3 failure, and the state
+               was already spelled out, so the colour was never the only channel. */
+            color: 'var(--color-ink-muted)',
           }}
         >
           {STATUS_LABEL[stage.status]}

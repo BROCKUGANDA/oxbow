@@ -84,6 +84,7 @@ export function Shimmer({
 function Sweep(): ReactElement {
   return (
     <div
+      data-shimmer-sweep
       style={{
         position: 'absolute',
         inset: 0,

@@ -53,6 +53,19 @@ export const viewport: Viewport = {
 };
 
 export default function RootLayout({ children }: { children: ReactNode }): ReactElement {
+  /* Tier 4 of the error ladder is `global-error.tsx`, and Next mounts it for exactly one
+   * class of failure: one thrown above the root error boundary, which in this app means
+   * thrown *here*, in the layout every route renders through. Without a trigger the
+   * fourth tier is a component nobody has ever seen painted, so the state gallery's
+   * claim that the ladder is complete would be an assertion.
+   *
+   * `OXBOW_GLOBAL_ERROR_PROBE=1` is that trigger — a server-side environment variable,
+   * unreadable from a URL and never set outside a deliberate run of the browser checks.
+   * It is checked before anything renders, because the point is to fail the shell. */
+  if (process.env.OXBOW_GLOBAL_ERROR_PROBE === '1') {
+    throw new Error('global-error probe: the root layout was asked to fail (OXBOW_GLOBAL_ERROR_PROBE=1)');
+  }
+
   return (
     <html
       lang="en"

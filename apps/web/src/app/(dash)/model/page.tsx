@@ -21,19 +21,176 @@
 
 'use client';
 
-import { Fragment, type ReactElement } from 'react';
+import { Fragment, type CSSProperties, type ReactElement } from 'react';
 
 import { Icon } from '@/design/icons/Icon';
 import { Pane } from '@/components/Pane';
+import { ErrorPane } from '@/design/primitives/ErrorPane';
 import { BarWithLine, LineChart, minimumSeriesNote, ChartFrame } from '@/components/charts/charts';
 import { Assumptions, Hairline, RunIdChip, Timestamp } from '@/components/ui/provenance';
 import { BandBadge } from '@/components/ui/BandBadge';
 import { glyphFor } from '@/components/typology';
-import { ROUTES, type Validation } from '@/lib/api/contract';
-import { useResource } from '@/lib/api/hooks';
+import { ROUTES, type AssumptionLine, type Validation } from '@/lib/api/contract';
+import { useResource, type QueryState } from '@/lib/api/hooks';
+import { failureDetail, failureRunId, failureTitle } from '@/lib/api/problem';
 import { compactFromMinor, count, percent, ratio } from '@/lib/format/money';
 import { formatDate } from '@/lib/format/time';
 import { GAP_TIGHT, HAIRLINE_BOTTOM, PANEL_SUNKEN, T_LABEL, T_MICRO, T_MONO } from '@/components/ui/sx';
+
+/* ---------------------------------------------------------------- geometry --
+
+   ONE table of this page's pane geometry, read by the resolved tree and by its
+   skeleton alike. `body` is the measured content height of that pane at the desktop
+   breakpoint, and `Pane` applies it as a reserved min-height in both states, so the
+   pending tree and the answered tree are the same height by construction rather than
+   by a skeleton guessing at a layout it cannot see. The version that returned a
+   two-pane stub and then swapped in thirteen panes measured 0.53 CLS — the largest
+   shift in the app — because everything below the fold arrived with the answer. */
+type PaneGeometry = {
+  title: string;
+  operation: string;
+  columns: { key: string; width: string }[];
+  rows: number;
+  rowHeight?: number;
+  body: number;
+};
+
+type PaneKey = 'dataset' | 'folds' | 'baselines' | 'pr' | 'reliability' | 'confusion' | 'typologies' | 'ablation' | 'importance' | 'fairness' | 'tail' | 'degraded' | 'limitations';
+
+const PANES: Record<PaneKey, PaneGeometry> = {
+  dataset: { title: 'Dataset card', operation: 'Loading the dataset card', columns: [{ key: 'd', width: '100%' }], rows: 5, body: 309 },
+  folds: { title: 'Walk-forward folds', operation: 'Loading the folds', columns: [{ key: 'f', width: '100%' }], rows: 5, body: 309 },
+  baselines: {
+    title: 'Baselines against the final system, per corpus',
+    operation: 'Loading the comparison',
+    columns: [
+      { key: 'c', width: '12%' },
+      { key: 'v', width: '24%' },
+      { key: 'p', width: '16%' },
+      { key: 'q', width: '16%' },
+      { key: 'n', width: '16%' },
+      { key: 'b', width: '16%' },
+    ],
+    rows: 6,
+    body: 172,
+  },
+  pr: { title: 'Precision–recall, with the operating point', operation: 'Loading the PR curve', columns: [{ key: 'c', width: '100%' }], rows: 1, rowHeight: 284, body: 284 },
+  reliability: { title: 'Reliability diagram', operation: 'Loading the reliability bins', columns: [{ key: 'c', width: '100%' }], rows: 1, rowHeight: 284, body: 284 },
+  confusion: { title: 'Confusion at the budget', operation: 'Loading the confusion matrix', columns: [{ key: 'c', width: '100%' }], rows: 4, body: 224 },
+  typologies: {
+    title: 'Per-typology recall',
+    operation: 'Loading typology recall',
+    columns: [
+      { key: 't', width: '60%' },
+      { key: 'r', width: '20%' },
+      { key: 's', width: '20%' },
+    ],
+    rows: 6,
+    body: 224,
+  },
+  ablation: {
+    title: 'Ablation',
+    operation: 'Loading the ablation',
+    columns: [
+      { key: 'v', width: '26%' },
+      { key: 'q', width: '30%' },
+      { key: 'p', width: '14%' },
+      { key: 'c', width: '14%' },
+      { key: 'n', width: '16%' },
+    ],
+    rows: 5,
+    body: 289,
+  },
+  importance: { title: 'Global SHAP importance', operation: 'Loading importances', columns: [{ key: 'f', width: '60%' }, { key: 'v', width: '40%' }], rows: 8, body: 356 },
+  fairness: {
+    title: 'Fairness and perturbation',
+    operation: 'Loading the fairness checks',
+    columns: [
+      { key: 'd', width: '30%' },
+      { key: 'b', width: '40%' },
+      { key: 'f', width: '30%' },
+    ],
+    rows: 8,
+    body: 356,
+  },
+  tail: { title: 'Tail behaviour and seed stability', operation: 'Loading the tail metrics', columns: [{ key: 't', width: '100%' }], rows: 5, body: 322 },
+  degraded: { title: 'Degradation this run', operation: 'Listing degraded dependencies', columns: [{ key: 'n', width: '40%' }, { key: 'f', width: '60%' }], rows: 3, body: 322 },
+  limitations: { title: 'Limitations', operation: 'Loading the limitations', columns: [{ key: 'l', width: '100%' }], rows: 5, body: 281 },
+};
+
+const PAGE: CSSProperties = { padding: 'var(--spacing-pane-gap)', display: 'flex', flexDirection: 'column', gap: 'var(--spacing-pane-gap)' };
+const HALF: CSSProperties = { display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1fr)', gap: 'var(--spacing-pane-gap)' };
+
+/**
+ * The same thirteen panes, empty, while the run has not answered — plus the failure
+ * itself once asking has stopped. A skeleton with no failure on it is a page that
+ * claims it is still loading, which is the one lie a loading state is allowed not to
+ * tell, so the tier-2 pane sits above the reserved geometry and retries on its own.
+ */
+function ModelSkeleton({
+  failure,
+  onRetry,
+  attempt,
+  retrying,
+}: {
+  failure: QueryState<Validation>['failure'];
+  onRetry: () => void;
+  attempt: number;
+  retrying: boolean;
+}): ReactElement {
+  const pane = (key: PaneKey) => (
+    <Pane
+      id={key}
+      title={PANES[key].title}
+      operation={PANES[key].operation}
+      skeleton={{ columns: PANES[key].columns, rows: PANES[key].rows, rowHeight: PANES[key].rowHeight }}
+      reserveHeight={PANES[key].body}
+    >
+      <span />
+    </Pane>
+  );
+  return (
+    <div style={PAGE}>
+      {failure !== null ? (
+        <ErrorPane
+          paneId="validation"
+          operation="Loading the validation record"
+          error={{
+            title: failureTitle(failure),
+            detail: failureDetail(failure) ?? undefined,
+            run_id: failureRunId(failure) ?? undefined,
+          }}
+          onRetry={onRetry}
+          attempt={attempt}
+          retrying={retrying}
+        />
+      ) : null}
+      <div style={HALF}>
+        {pane('dataset')}
+        {pane('folds')}
+      </div>
+      {pane('baselines')}
+      <div style={HALF}>
+        {pane('pr')}
+        {pane('reliability')}
+      </div>
+      <div style={HALF}>
+        {pane('confusion')}
+        {pane('typologies')}
+      </div>
+      {pane('ablation')}
+      <div style={HALF}>
+        {pane('importance')}
+        {pane('fairness')}
+      </div>
+      <div style={HALF}>
+        {pane('tail')}
+        {pane('degraded')}
+      </div>
+      {pane('limitations')}
+    </div>
+  );
+}
 
 export default function ModelPage(): ReactElement {
   const validation = useResource('validation', ROUTES.validation.path, ROUTES.validation.data);
@@ -41,62 +198,59 @@ export default function ModelPage(): ReactElement {
   const runtime = useResource('runtime', ROUTES.runtime.path, ROUTES.runtime.data);
   const timeZone = runtime.data?.deployment_timezone ?? null;
 
-  if (validation.data === null) {
+  if (validation.data === null)
     return (
-      <div style={{ padding: 'var(--spacing-pane-gap)', display: 'flex', flexDirection: 'column', gap: 'var(--spacing-pane-gap)' }}>
-        <Pane id="dataset" title="Dataset card" operation="Loading the dataset card" meta={dataset.meta} skeleton={{ columns: [{ key: 'd', width: '100%' }], rows: 4 }}>
-          <span />
-        </Pane>
-        <Pane id="folds" title="Walk-forward" operation="Loading the folds" meta={validation.meta} skeleton={{ columns: [{ key: 'f', width: '100%' }], rows: 5 }}>
-          <span />
-        </Pane>
-      </div>
+      <ModelSkeleton
+        failure={validation.failure}
+        onRetry={() => void validation.refetch()}
+        attempt={validation.attempts}
+        retrying={validation.isFetching}
+      />
     );
-  }
 
   const data = validation.data;
   const assumptions = validation.meta?.assumptions ?? [];
 
   return (
-    <div style={{ padding: 'var(--spacing-pane-gap)', display: 'flex', flexDirection: 'column', gap: 'var(--spacing-pane-gap)' }}>
-      <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1fr)', gap: 'var(--spacing-pane-gap)' }}>
+    <div style={PAGE}>
+      <div style={HALF}>
         {dataset.data === null ? (
-          <Pane id="dataset" title="Dataset card" operation="Loading the dataset card" meta={dataset.meta} skeleton={{ columns: [{ key: 'd', width: '100%' }], rows: 4 }}>
+          <Pane id="dataset" title={PANES.dataset.title} operation={PANES.dataset.operation} meta={dataset.meta} skeleton={{ columns: PANES.dataset.columns, rows: PANES.dataset.rows }} reserveHeight={PANES.dataset.body}>
             <span />
           </Pane>
         ) : (
           <DatasetCard />
         )}
 
-        <Pane id="folds" title="Walk-forward folds" operation="Loading the folds" meta={validation.meta} skeleton={{ columns: [{ key: 'f', width: '100%' }], rows: Math.max(data.folds.length, 3) }}>
+        <Pane id="folds" title={PANES.folds.title} operation={PANES.folds.operation} meta={validation.meta} skeleton={{ columns: PANES.folds.columns, rows: PANES.folds.rows }} reserveHeight={PANES.folds.body}>
           <Folds folds={data} timeZone={timeZone} />
         </Pane>
       </div>
 
-      <Pane id="baselines" title="Baselines against the final system, per corpus" operation="Loading the comparison" meta={validation.meta} skeleton={{ columns: [{ key: 'c', width: '12%' }, { key: 'v', width: '24%' }, { key: 'p', width: '16%' }, { key: 'q', width: '16%' }, { key: 'n', width: '16%' }, { key: 'b', width: '16%' }], rows: Math.max(data.baseline_table.length, 3) }}>
-        <BaselineTable data={data} />
+      <Pane id="baselines" title={PANES.baselines.title} operation={PANES.baselines.operation} meta={validation.meta} skeleton={{ columns: PANES.baselines.columns, rows: PANES.baselines.rows }} reserveHeight={PANES.baselines.body}>
+        <BaselineTable data={data} assumptions={assumptions} />
       </Pane>
 
-      <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1fr)', gap: 'var(--spacing-pane-gap)' }}>
-        <Pane id="pr" title="Precision–recall, with the operating point" operation="Loading the PR curve" meta={validation.meta} skeleton={{ columns: [{ key: 'c', width: '100%' }], rows: 1, rowHeight: 220 }}>
+      <div style={HALF}>
+        <Pane id="pr" title={PANES.pr.title} operation={PANES.pr.operation} meta={validation.meta} skeleton={{ columns: PANES.pr.columns, rows: PANES.pr.rows, rowHeight: PANES.pr.rowHeight }} reserveHeight={PANES.pr.body}>
           <PrCurve data={data} />
         </Pane>
-        <Pane id="reliability" title="Reliability diagram" operation="Loading the reliability bins" meta={validation.meta} skeleton={{ columns: [{ key: 'c', width: '100%' }], rows: 1, rowHeight: 220 }}>
+        <Pane id="reliability" title={PANES.reliability.title} operation={PANES.reliability.operation} meta={validation.meta} skeleton={{ columns: PANES.reliability.columns, rows: PANES.reliability.rows, rowHeight: PANES.reliability.rowHeight }} reserveHeight={PANES.reliability.body}>
           <Reliability data={data} />
         </Pane>
       </div>
 
-      <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1fr)', gap: 'var(--spacing-pane-gap)' }}>
-        <Pane id="confusion" title="Confusion at the budget" operation="Loading the confusion matrix" meta={validation.meta} skeleton={{ columns: [{ key: 'c', width: '100%' }], rows: 3 }}>
+      <div style={HALF}>
+        <Pane id="confusion" title={PANES.confusion.title} operation={PANES.confusion.operation} meta={validation.meta} skeleton={{ columns: PANES.confusion.columns, rows: PANES.confusion.rows }} reserveHeight={PANES.confusion.body}>
           <Confusion data={data} />
         </Pane>
-        <Pane id="typologies" title="Per-typology recall" operation="Loading typology recall" meta={validation.meta} skeleton={{ columns: [{ key: 't', width: '60%' }, { key: 'r', width: '20%' }, { key: 's', width: '20%' }], rows: Math.max(data.typology_recall.length, 3) }}>
+        <Pane id="typologies" title={PANES.typologies.title} operation={PANES.typologies.operation} meta={validation.meta} skeleton={{ columns: PANES.typologies.columns, rows: PANES.typologies.rows }} reserveHeight={PANES.typologies.body}>
           <TypologyRecall data={data} />
         </Pane>
       </div>
 
       {/* The ablation table. 00 §F: never cut. */}
-      <Pane id="ablation" title="Ablation" operation="Loading the ablation" meta={validation.meta} skeleton={{ columns: [{ key: 'v', width: '26%' }, { key: 'q', width: '30%' }, { key: 'p', width: '14%' }, { key: 'c', width: '14%' }, { key: 'n', width: '16%' }], rows: Math.max(data.ablation.length, 4) }}>
+      <Pane id="ablation" title={PANES.ablation.title} operation={PANES.ablation.operation} meta={validation.meta} skeleton={{ columns: PANES.ablation.columns, rows: PANES.ablation.rows }} reserveHeight={PANES.ablation.body}>
         <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 'var(--text-label)' }}>
           <thead>
             <tr>
@@ -128,10 +282,13 @@ export default function ModelPage(): ReactElement {
           {count(data.configurations_evaluated)} configurations were evaluated during selection, so the best validation
           result above is optimistically biased — which is exactly why the headline comes from the untouched fold.
         </p>
+        {/* The last column is money. Same rule as everywhere else in the product: a
+            currency figure travels with the keys it was computed from. */}
+        <Assumptions assumptions={assumptions} />
       </Pane>
 
-      <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1fr)', gap: 'var(--spacing-pane-gap)' }}>
-        <Pane id="importance" title="Global SHAP importance" operation="Loading importances" meta={validation.meta} skeleton={{ columns: [{ key: 'f', width: '60%' }, { key: 'v', width: '40%' }], rows: Math.max(data.shap_importance.length, 4) }}>
+      <div style={HALF}>
+        <Pane id="importance" title={PANES.importance.title} operation={PANES.importance.operation} meta={validation.meta} skeleton={{ columns: PANES.importance.columns, rows: PANES.importance.rows }} reserveHeight={PANES.importance.body}>
           <BarWithLine
             rows={data.shap_importance.map((entry) => ({ label: entry.label, value: entry.mean_abs, colour: 'var(--color-band-c)' }))}
             valueLabel="mean |SHAP|"
@@ -140,7 +297,7 @@ export default function ModelPage(): ReactElement {
           />
         </Pane>
 
-        <Pane id="fairness" title="Fairness and perturbation" operation="Loading the fairness checks" meta={validation.meta} skeleton={{ columns: [{ key: 'd', width: '30%' }, { key: 'b', width: '40%' }, { key: 'f', width: '30%' }], rows: Math.max(data.fairness.length, 4) }}>
+        <Pane id="fairness" title={PANES.fairness.title} operation={PANES.fairness.operation} meta={validation.meta} skeleton={{ columns: PANES.fairness.columns, rows: PANES.fairness.rows }} reserveHeight={PANES.fairness.body}>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
             <Hairline label="false-positive rate by proxy dimension" />
             <ul style={{ listStyle: 'none', margin: 0, padding: 0 }}>
@@ -175,8 +332,8 @@ export default function ModelPage(): ReactElement {
         </Pane>
       </div>
 
-      <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1fr)', gap: 'var(--spacing-pane-gap)' }}>
-        <Pane id="tail" title="Tail behaviour and seed stability" operation="Loading the tail metrics" meta={validation.meta} skeleton={{ columns: [{ key: 't', width: '100%' }], rows: 4 }}>
+      <div style={HALF}>
+        <Pane id="tail" title={PANES.tail.title} operation={PANES.tail.operation} meta={validation.meta} skeleton={{ columns: PANES.tail.columns, rows: PANES.tail.rows }} reserveHeight={PANES.tail.body}>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
             {data.drawdown.map((entry) => (
               <div key={entry.policy} style={{ ...PANEL_SUNKEN, padding: 10 }}>
@@ -199,10 +356,11 @@ export default function ModelPage(): ReactElement {
               {String(data.seeds.count)} seeds · {data.seeds.metric} {ratio(data.seeds.mean, 3)} ± {ratio(data.seeds.sd, 3)} —
               reported as a spread, not as the lucky run
             </p>
+            <Assumptions assumptions={assumptions} />
           </div>
         </Pane>
 
-        <Pane id="degraded" title="Degradation this run" operation="Listing degraded dependencies" meta={validation.meta} skeleton={{ columns: [{ key: 'n', width: '40%' }, { key: 'f', width: '60%' }], rows: Math.max(data.degraded_dependencies.length, 2) }}>
+        <Pane id="degraded" title={PANES.degraded.title} operation={PANES.degraded.operation} meta={validation.meta} skeleton={{ columns: PANES.degraded.columns, rows: PANES.degraded.rows }} reserveHeight={PANES.degraded.body}>
           {data.degraded_dependencies.length === 0 ? (
             <p style={{ ...T_LABEL, color: 'var(--color-ink-muted)' }}>
               Every dependency answered for this run. When one does not, it appears here with the deterministic path that
@@ -226,7 +384,7 @@ export default function ModelPage(): ReactElement {
       </div>
 
       {/* Limitations, first person, never cut. */}
-      <Pane id="limitations" title="Limitations" operation="Loading the limitations" meta={validation.meta} skeleton={{ columns: [{ key: 'l', width: '100%' }], rows: Math.max(data.limitations.length, 4) }}>
+      <Pane id="limitations" title={PANES.limitations.title} operation={PANES.limitations.operation} meta={validation.meta} skeleton={{ columns: PANES.limitations.columns, rows: PANES.limitations.rows }} reserveHeight={PANES.limitations.body}>
         <ol data-limitations style={{ margin: 0, padding: '0 0 0 18px', display: 'flex', flexDirection: 'column', gap: 8 }}>
           {data.limitations.map((entry, index) => (
             <li key={index} style={{ ...T_LABEL, color: 'var(--color-ink-muted)', maxWidth: '84ch' }}>
@@ -242,7 +400,7 @@ export default function ModelPage(): ReactElement {
     const card = dataset.data;
     if (card === null) return <span />;
     return (
-      <Pane id="dataset" title="Dataset card" operation="Loading the dataset card" meta={dataset.meta} skeleton={{ columns: [{ key: 'd', width: '100%' }], rows: 5 }}>
+      <Pane id="dataset" title={PANES.dataset.title} operation={PANES.dataset.operation} meta={dataset.meta} skeleton={{ columns: PANES.dataset.columns, rows: PANES.dataset.rows }} reserveHeight={PANES.dataset.body}>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
           <p style={{ ...T_LABEL, color: 'var(--color-ink)', fontWeight: 600 }}>{card.name}</p>
           <p style={{ ...T_MICRO, color: 'var(--color-ink-muted)' }}>
@@ -327,7 +485,7 @@ function Folds({ folds, timeZone }: { folds: Validation; timeZone: string | null
   );
 }
 
-function BaselineTable({ data }: { data: Validation }): ReactElement {
+function BaselineTable({ data, assumptions }: { data: Validation; assumptions: readonly AssumptionLine[] }): ReactElement {
   return (
     <>
       <div className="u-scroll" style={{ overflowX: 'auto' }}>
@@ -369,6 +527,9 @@ function BaselineTable({ data }: { data: Validation }): ReactElement {
         reported per corpus and never averaged into one headline: PaySim and IBM-AML label different behaviours, and a
         mean across the two would be a number about nothing.
       </p>
+      {/* Two of these columns are money, so the pane names the assumptions they are a
+          function of rather than leaving a currency figure to be read unlabelled. */}
+      <Assumptions assumptions={assumptions} />
     </>
   );
 }
