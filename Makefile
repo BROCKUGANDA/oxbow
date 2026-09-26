@@ -130,7 +130,8 @@ worker: ## RQ worker for pipeline and backtest jobs
 	$(PY) apps/api/worker.py
 
 .PHONY: dev
-dev: ## api :8000, web :3000, mlflow :5000
+dev: up ## api :8000 and web :3000 locally, on top of the compose infra (mlflow :5000 comes from `up`)
+	@$(MAKE) --no-print-directory -j2 api web
 
 .PHONY: demo
 demo: ## Restore data/snapshots/demo.dump and boot the whole stack offline (<90s)

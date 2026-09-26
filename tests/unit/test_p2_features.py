@@ -757,7 +757,7 @@ def _feature_named_literals(path: Path, ids: set[str]) -> list[str]:
     tree = ast.parse(path.read_text(encoding="utf-8"))
     docstrings: set[int] = set()
     for node in ast.walk(tree):
-        if isinstance(node, (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)):
+        if isinstance(node, ast.Module | ast.ClassDef | ast.FunctionDef | ast.AsyncFunctionDef):
             body = getattr(node, "body", [])
             if body and isinstance(body[0], ast.Expr) and isinstance(body[0].value, ast.Constant):
                 docstrings.add(id(body[0].value))
@@ -789,13 +789,13 @@ def _dispatches_on_feature_identity(path: Path, ids: set[str]) -> list[str]:
     def named(node: ast.AST) -> set[str]:
         if isinstance(node, ast.Constant) and isinstance(node.value, str):
             return {node.value} & ids
-        if isinstance(node, (ast.List, ast.Tuple, ast.Set)) and node.elts:
+        if isinstance(node, ast.List | ast.Tuple | ast.Set) and node.elts:
             return set().union(*(named(item) for item in node.elts))
         return set()
 
     for node in ast.walk(tree):
         if isinstance(node, ast.Compare) and any(
-            isinstance(op, (ast.Eq, ast.NotEq, ast.In, ast.NotIn, ast.Is, ast.IsNot))
+            isinstance(op, ast.Eq | ast.NotEq | ast.In | ast.NotIn | ast.Is | ast.IsNot)
             for op in node.ops
         ):
             hits.extend(sorted(named(node.left) | named(node.comparators[0])))

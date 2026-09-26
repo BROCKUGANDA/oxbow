@@ -170,10 +170,10 @@ def make_bundle(
     * band E ⇒ ``review_minutes_by_alert_class.E`` = 120 min at
       ``analyst.cost_per_minute_minor`` = 15,000 minor ⇒ ``c_i`` = 1,800,000 minor
       = **18,000.00 UGX**;
-    * ``EV_i = p·E·r − c_i − (1−p)·f`` with p = 0.9, r = 0.35,
+    * ``EV_i = p·E·r - c_i - (1-p)·f`` with p = 0.9, r = 0.35,
       f = 2,500,000 minor = 25,000.00 UGX ⇒
-      1,260,000 − 18,000 − 2,500 = **1,239,500.00 UGX** = 123,950,000 minor;
-    * ``E_i × r`` = 140,000,000 minor = **1,400,000.00 UGX**.
+      1,260,000 - 18,000 - 2,500 = **1,239,500.00 UGX** = 123,950,000 minor;
+    * ``E_i * r`` = 140,000,000 minor = **1,400,000.00 UGX**.
 
     The packet prints these as recorded and does not recompute them — which is why
     they have to be consistent with the config by hand, not by construction.

@@ -15,6 +15,7 @@ never written to by anything in this file.
 from __future__ import annotations
 
 import dataclasses
+import itertools
 import sys
 from pathlib import Path
 from typing import Any
@@ -128,7 +129,7 @@ def test_severity_keeps_two_accounts_rankable(
     # 0.92 > 0.88 > 0.85, each normalised as (share - 0.80) / (1 - 0.80).
     scored = [severity_of(golden_result, rule_id, account) for account in expected_order]
     assert scored == sorted(scored, reverse=True), rule_id
-    assert all(first >= second for first, second in zip(scored, scored[1:], strict=False))
+    assert all(first >= second for first, second in itertools.pairwise(scored))
 
 
 def test_declared_severity_tie_is_a_tie_not_an_ordering_bug(golden_result: Any) -> None:

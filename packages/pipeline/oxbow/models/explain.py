@@ -163,7 +163,7 @@ def explain_and_report(
         frame.get_column(probability_column)
         .cast(pl.Float64)
         .fill_null(0.5)
-        .to_numpy(zero_copy_only=False)
+        .to_numpy(allow_copy=True)
     )
     margins = np.log(
         np.clip(probabilities, 1e-12, 1.0 - 1e-12)
@@ -208,11 +208,11 @@ def explain_and_report(
 
 def _scorecard_outcome(annotated: pl.DataFrame, cfg: ShapConfig, reason: str) -> ExplanationOutcome:
     rows = annotated.height
-    fallbacks = int(
-        annotated.get_column("explanation_source")
-        .filter(pl.col("explanation_source") == SOURCE_SCORECARD)
-        .len()
-    )
+    # `Series.filter` takes a predicate function or a boolean Series, not an expression:
+    # `Series.filter(pl.col(...))` raised TypeError on every scorecard-explained path,
+    # which is the branch the drift action and a degenerate tree both land on.
+    source_column = annotated.get_column("explanation_source")
+    fallbacks = int((source_column == SOURCE_SCORECARD).sum()) if rows else 0
     return ExplanationOutcome(
         source=SOURCE_SCORECARD,
         rows=rows,

@@ -199,21 +199,59 @@ def _smoothed_woe_iv(rows: list[BinRow], alpha: float) -> tuple[list[BinRow], fl
     return updated, float(iv)
 
 
+def _solver_time_limit_ms(cfg: BinningConfig) -> int | None:
+    """`time_limit_seconds` as the integer ortools wants, or None for no limit.
+
+    optbinning hands `time_limit` straight to `pywraplp.Solver.SetTimeLimit`, whose
+    signature is `int64_t` and whose unit is **milliseconds**. The config key is in
+    seconds because that is what a human tunes, so the conversion lives here. Passing
+    the float from the config raises `TypeError: in method 'Solver_SetTimeLimit',
+    argument 2 of type 'int64_t'` inside `_numeric_edges`, and until this existed that
+    TypeError was swallowed by its bare `except Exception`, so every numeric feature
+    silently took the quantile fallback and `enforce_monotonic_trend` never ran.
+    """
+    if cfg.time_limit_seconds <= 0:
+        return None
+    return int(round(cfg.time_limit_seconds * 1000))
+
+
+def _splits_to_list(raw: object) -> list[float]:
+    """optbinning's split array as a sorted float list, without asking numpy for a truth value.
+
+    `if binner.splits:` -- the form this module used before -- raises `ValueError: the
+    truth value of an array with more than one element is ambiguous` for exactly the
+    features that found several boundaries, which is the same silent-quantile-fallback
+    path as the time-limit bug above.
+    """
+    if raw is None:
+        return []
+    values = np.atleast_1d(raw)
+    if values.size == 0:
+        return []
+    return sorted({float(value) for value in values})
+
+
 def _numeric_edges(
     x: np.ndarray,
     y: np.ndarray,
     ordinary_share: float,
     cfg: BinningConfig,
-) -> tuple[list[float], str]:
+) -> tuple[list[float], str, str | None]:
     """Split points from optbinning, or a deterministic quantile fallback.
 
     ``min_bin_size`` is rescaled by the ordinary share because optbinning measures
     it against the subset handed to it, while the declared floor is 5 % of the
     *whole* population. The merge pass enforces the declared rule afterwards either
     way; this only stops the solver proposing boundaries the merge must undo.
+
+    The third element is the fallback's cause, or ``None`` when the solver was used.
+    A fallback that explains itself is the difference between a quantile bin table
+    -- which is a legitimate, recorded outcome, since ``boundary_source`` is written
+    into the artifact -- and a monotonic-trend promise that quietly stopped being
+    kept, which is the defect this function carried until it was measured.
     """
     if np.unique(x).size < 2:
-        return [], BOUNDARY_SOURCE_SINGLE
+        return [], BOUNDARY_SOURCE_SINGLE, None
     min_bin_size = float(np.clip(cfg.min_bin_pct / max(ordinary_share, 1e-6), 1e-4, 0.5))
     try:
         binner = OptimalBinning(
@@ -224,35 +262,36 @@ def _numeric_edges(
             min_bin_size=min_bin_size,
             max_n_prebins=cfg.max_n_prebins,
             min_prebin_size=cfg.min_prebin_size,
+            prebinning_method=cfg.prebinning_method,
             split_digits=cfg.split_digits,
-            time_limit=cfg.time_limit_seconds,
+            time_limit=_solver_time_limit_ms(cfg),
         )
         binner.fit(x, y)
-        splits = (
-            sorted({float(value) for value in np.atleast_1d(binner.splits)})
-            if binner.splits
-            else []
-        )
+        splits = _splits_to_list(binner.splits)
         if binner.status in {"OPTIMAL", "FEASIBLE"} and splits:
-            return splits, BOUNDARY_SOURCE_BINNING
+            return splits, BOUNDARY_SOURCE_BINNING, None
         if binner.status in {"OPTIMAL", "FEASIBLE"}:
             # A valid solution with no split is a single-bin feature: the IV bound
             # will reject it, and that rejection is the honest outcome.
-            return [], BOUNDARY_SOURCE_SINGLE
+            return [], BOUNDARY_SOURCE_SINGLE, None
         raise DegenerateBinningError(f"optbinning reported status {binner.status!r}")
     except DegenerateBinningError:
         raise
-    except Exception:
-        # The cause is not carried forward: this branch reports "optbinning could not
-        # solve", not why. Deliberately unchanged here -- but it is a diagnosability
-        # gap, and the fallback boundary source is what the caller can see.
+    except Exception as exc:
+        # The cause is returned, not printed and not re-raised: a solver that cannot
+        # solve is a legitimate outcome on a degenerate feature, and the artifact
+        # records which bin table it got. What it may not do is look like the solver ran.
         probabilities = np.linspace(0.0, 1.0, cfg.max_bins + 1)[1:-1]
         splits = sorted(
             {float(np.quantile(x, p)) for p in probabilities if np.isfinite(np.quantile(x, p))}
         )
         unique_x = np.unique(x)
         splits = [s for s in splits if unique_x.min() <= s <= unique_x.max()]
-        return splits, BOUNDARY_SOURCE_QUANTILE_FALLBACK
+        return (
+            splits,
+            BOUNDARY_SOURCE_QUANTILE_FALLBACK,
+            f"optbinning ({cfg.solver} solver) did not run: {type(exc).__name__}: {exc}",
+        )
 
 
 def _categorical_groups(
@@ -459,9 +498,19 @@ def _fit_numeric(
             "structural zero, so the value bins are empty by construction"
         )
     else:
-        splits, source = _numeric_edges(
+        splits, source, fallback_cause = _numeric_edges(
             values[ordinary_mask], labels[ordinary_mask], ordinary_count / total, cfg
         )
+        if fallback_cause is not None:
+            promise = (
+                "the declared monotonic trend could NOT be enforced on this feature"
+                if cfg.enforce_monotonic_trend
+                else "no monotonic trend was declared"
+            )
+            notes.append(
+                f"{fallback_cause}; boundaries came from the deterministic quantile "
+                f"fallback, so {promise}"
+            )
 
     bounds: list[tuple[float | None, float | None]] = (
         list(zip([None, *splits, None][:-1], [None, *splits, None][1:], strict=True))

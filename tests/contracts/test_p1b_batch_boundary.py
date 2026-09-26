@@ -22,6 +22,7 @@ from zoneinfo import ZoneInfo
 
 import polars as pl
 import pytest
+from pandera.errors import SchemaError
 
 from oxbow.adapters.file.canonical_sink import (
     CANONICAL_VIEW,
@@ -203,23 +204,26 @@ def test_raw_paysim_schema_is_strict_and_never_coerces() -> None:
     frame = raw_frame([base_row(), base_row(step=2, nameOrig="C1001", nameDest="C2001")])
     assert raw_paysim_schema.validate(frame) is not None
 
+    # `SchemaError`, not `Exception`: a refusal raised by anything else — a polars cast
+    # error, a KeyError from the adapter — would satisfy a bare `pytest.raises(Exception)`
+    # and the test would keep passing after the contract stopped enforcing anything.
     extra = frame.with_columns(pl.lit("x").alias("surprise"))
-    with pytest.raises(Exception, match="surprise"):
+    with pytest.raises(SchemaError, match="surprise"):
         raw_paysim_schema.validate(extra)
 
     missing = frame.drop("isFraud")
-    with pytest.raises(Exception, match="isFraud"):
+    with pytest.raises(SchemaError, match="isFraud"):
         raw_paysim_schema.validate(missing)
 
     # A float-typed amount is refused rather than cast, and the message names the column:
     # coerce=False means a dtype disagreement is a failure, never a conversion.
     widened = frame.with_columns(pl.col("amount").cast(pl.Float64))
-    with pytest.raises(Exception, match="amount"):
+    with pytest.raises(SchemaError, match="amount"):
         raw_paysim_schema.validate(widened)
 
     # Three decimals is not a rounding decision this stage gets to make.
     ragged = frame.with_columns(pl.col("amount").str.replace("9839.64", "9839.641"))
-    with pytest.raises(Exception):
+    with pytest.raises(SchemaError):
         raw_paysim_schema.validate(ragged)
 
     assert list(PAYSIM_RAW_COLUMNS) == frame.columns

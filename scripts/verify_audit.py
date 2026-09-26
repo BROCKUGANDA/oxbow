@@ -30,10 +30,10 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Final
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
-
 from oxbow.adapters.file.audit import AUDIT_FILENAME, FileAuditSink
 from oxbow.audit.chain import ChainRow, render_verification, verify_chain
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
 
 DEFAULT_AUDIT_DIR: Final = REPO_ROOT / "out" / "audit"
 DECISION_SUBJECT_PREFIX: Final = "case:"
