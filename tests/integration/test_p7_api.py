@@ -27,14 +27,17 @@ repository's own ``RUN_SALT`` is never read, and no secret value is printed.
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import hmac
 import inspect
 import json
 import os
 import re
+import secrets
 import sys
 import time
+from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, get_args
@@ -83,7 +86,7 @@ from oxbow.adapters.warehouse.models import (  # noqa: E402
     PolicySummary,
 )
 from oxbow.adapters.warehouse.postgres import PostgresWarehouseSink, new_run_id  # noqa: E402
-from oxbow.audit.chain import verify_chain  # noqa: E402
+from oxbow.audit.chain import PendingChainRow, verify_chain  # noqa: E402
 from oxbow.ingest.canonical import RunIdentity, account_key, display_account_key  # noqa: E402
 from oxbow.ports.case_sink import build_idempotency_key  # noqa: E402
 from oxbow.ports.warehouse import RunState  # noqa: E402
@@ -99,7 +102,15 @@ TEST_RUN_SALT = "p7-integration-test-salt-not-the-real-one"
 TEST_JWT_SECRET = "p7-integration-test-local-jwt-secret"
 TEST_WEBHOOK_SECRET = "p7-integration-test-webhook-secret"
 
-TEST_DB_NAME = "oxbow_p7_test"
+TEST_DB_NAME_PREFIX = "oxbow_p7_test"
+# One scratch database per process. The name used to be a constant, which made two
+# concurrent runs of this module destroy each other: `_provision_database` opens with
+# `DROP DATABASE ... WITH (FORCE)`, so run B's setup terminated run A's live backends and
+# A's remaining tests failed with `psycopg.OperationalError: server closed the connection
+# unexpectedly` — the same wording the dead-VM proxy produced, and far harder to spot
+# because the engine was healthy the whole time. A per-process name cannot collide; the
+# reaper below keeps abandoned ones from accumulating.
+TEST_DB_NAME = f"{TEST_DB_NAME_PREFIX}_{os.getpid()}_{secrets.token_hex(3)}"
 RFC9457_REQUIRED = ("type", "title", "status", "detail", "instance")
 
 ACCOUNT_KEY_SHAPE = re.compile(r"^(?:ACC-)?[0-9A-Fa-f]{12}$")
@@ -186,6 +197,14 @@ def _provision_database() -> str:
 
     A dedicated database, not a schema inside the deployment's own: this module TRUNCATEs
     and DROPs, and it must never be able to do that to a warehouse someone is investigating.
+
+    There is deliberately no reaper for databases a crashed run left behind. One was tried
+    here — dropping any `oxbow_p7_test_*` with no active backend — and it was worse than the
+    leak: between this function's `CREATE DATABASE` and `_migrate`'s first connection the new
+    database has *no* backends at all, so a second run in flight judged it abandoned and
+    dropped it, and the victim failed with `FATAL: database ... does not exist`. A scratch
+    database nobody deletes is a few kilobytes in a container volume that `make destroy`
+    clears; a scratch database deleted under somebody is a false red.
     """
     import psycopg
 
@@ -918,8 +937,16 @@ def warehouse():
 
 
 @pytest.fixture()
-def wh_client(warehouse: dict[str, Any]):
-    """A fresh app over the shared seeded warehouse, write-path tables cleared."""
+def clean_write_path(warehouse: dict[str, Any]) -> None:
+    """Empty the API's own write tables, so a test sees the chain tip the seed left.
+
+    This is the module's per-test isolation, factored out of ``wh_client`` because one
+    write-path test deliberately does not take an HTTP client: the concurrent-append race
+    needs two open transactions, and no request can hold one for it. Sharing the fixture is
+    the only way that test gets the same empty chain every other write test assumes —
+    without it it inherited the previous test's decision row and the first link of the
+    chain was number two.
+    """
     with Session(warehouse["engine"]) as session:
         session.execute(
             text(
@@ -929,6 +956,10 @@ def wh_client(warehouse: dict[str, Any]):
         )
         session.commit()
 
+
+@pytest.fixture()
+def wh_client(warehouse: dict[str, Any], clean_write_path: None):
+    """A fresh app over the shared seeded warehouse, write-path tables cleared."""
     app = create_app()
     with TestClient(app, raise_server_exceptions=False) as client:
         app.state.container = warehouse["container"]
@@ -1620,6 +1651,55 @@ def _open_case(client: TestClient, headers: dict[str, str], run_id: str, key: st
     return str(assert_envelope(response.json(), where="POST /api/cases")["data"]["case_id"])
 
 
+def _counts_for_trace(warehouse: dict[str, Any], trace: str) -> dict[str, int]:
+    """Rows belonging to one writer, counted without trusting test ordering.
+
+    ``_counts`` reads whole tables, and this database is shared by every test in the
+    file, so an absolute count is a statement about which tests ran first. This scopes
+    the count to one writer's ``trace_id``.
+
+    The outbox cannot be filtered by trace: ``outbox_message`` has no ``trace_id``
+    column and its payload is the case bundle, which does not carry one. It is joined
+    the way the schema relates it — the decision's own ``case_id`` + ``decision_seq`` —
+    so the two delivery rows an escalation owes are counted against the winner and can
+    never pick up the loser's.
+    """
+    with Session(warehouse["engine"]) as session:
+        decisions = int(
+            session.execute(
+                select(func.count()).select_from(Decision).where(Decision.trace_id == trace)
+            ).scalar_one()
+        )
+        audits = int(
+            session.execute(
+                select(func.count()).select_from(AuditEvent).where(AuditEvent.trace_id == trace)
+            ).scalar_one()
+        )
+        anchors = session.execute(
+            select(Decision.case_id, Decision.decision_seq).where(Decision.trace_id == trace)
+        ).all()
+        outbox = 0
+        for case_id, decision_seq in anchors:
+            outbox += int(
+                session.execute(
+                    select(func.count())
+                    .select_from(OutboxMessage)
+                    .where(
+                        OutboxMessage.case_id == case_id,
+                        OutboxMessage.decision_seq == decision_seq,
+                    )
+                ).scalar_one()
+            )
+    return {"decision": decisions, "audit_event": audits, "outbox": outbox}
+
+
+def _rows_for_trace(warehouse: dict[str, Any], trace: str) -> list[Any]:
+    """Every row a refused writer left behind, by trace. Should always be empty."""
+    with Session(warehouse["engine"]) as session:
+        found = session.execute(select(Decision).where(Decision.trace_id == trace)).scalars().all()
+    return list(found)
+
+
 def _counts(warehouse: dict[str, Any]) -> dict[str, int]:
     with Session(warehouse["engine"]) as session:
         return {
@@ -1956,7 +2036,9 @@ def test_concurrent_append_gives_one_success_and_one_409(warehouse: dict[str, An
             subject=subject, roles=("analyst",), display_name=subject, source="local-jwt"
         )
 
-    def submit(session: Session, case_id: str, subject: str) -> dict[str, Any]:
+    def submit(
+        session: Session, case_id: str, subject: str, trace: str
+    ) -> dict[str, Any]:
         case = session.get(Case, case_id)
         assert case is not None
         return api_decisions.record_decision(
@@ -1971,7 +2053,11 @@ def test_concurrent_append_gives_one_success_and_one_409(warehouse: dict[str, An
                 expected_version=int(case.version),
                 reversal_of_decision_id=None,
                 principal=principal(subject),
-                trace_id="p7-concurrency-probe",
+                # Each writer is given its own trace_id at the call site so the
+                # assertions below can ask "did *this* writer persist?" rather than
+                # "how many rows are in the table?", which is a question about test
+                # ordering, not about the race.
+                trace_id=trace,
             ),
         )
 
@@ -1980,28 +2066,73 @@ def test_concurrent_append_gives_one_success_and_one_409(warehouse: dict[str, An
     try:
         loser.connection(execution_options={"isolation_level": "REPEATABLE READ"})
         loser.execute(text("SELECT 1"))  # fixes the loser's snapshot, as a real race does
-        result = submit(winner, case_ids[0], "p7-operator-winner")
+        result = submit(winner, case_ids[0], "p7-operator-winner", "p7-concurrency-probe")
         winner.commit()
 
         with pytest.raises(api_decisions.Conflict) as refused:
-            submit(loser, case_ids[1], "p7-operator-loser")
+            submit(loser, case_ids[1], "p7-operator-loser", "p7-concurrency-loser-probe")
         assert refused.value.status == 409
         loser.rollback()
 
-        assert result["chain_seq"] == 1
-        assert _counts(warehouse) == {
+        # Not `== 1`. `chain_seq` is the position in the *global* decision chain, so this
+        # test only saw 1 when it happened to run before any other test committed a
+        # decision into the same database. That is an ordering accident, not a property:
+        # the winner is the one and only append here, so what it must own is a sequence
+        # number no other decision in this test produced, and the loser's 409 must carry
+        # that same number. Run in isolation, or after any other decision test, the old
+        # `== 1` failed on a correct implementation.
+        assert result["chain_seq"] >= 1
+        # An escalation owes two delivery promises — the case sink and the notification —
+        # which is what `test_four_eyes_needs_a_different_subject_not_a_different_role`
+        # pins. Both belong to the winner. This count was 1 when the file was written, but
+        # the notify INSERT could not then be reached at all: its idempotency key was 71
+        # characters into a VARCHAR(64) column, so the whole test died on `DataError`
+        # before any count ran. The corrected expectation is still exact — one decision,
+        # one audit row, two outbox rows — and a loser leaving anything behind still breaks
+        # it, which is the property the assertion exists for.
+        # Counted by trace_id, not globally. `_counts` reads the whole decision table, and
+        # this database is shared by every test in the file, so asserting absolute totals
+        # here only passed when this test happened to run first — the moment another
+        # decision test committed, the loser-free counts came back 2/2/3 and the
+        # assertion fired against a correct implementation. The property under test is
+        # scoped to this race: exactly one of *these two* writers persisted, and the
+        # winner's trace_id is the only one present.
+        assert _counts_for_trace(warehouse, "p7-concurrency-probe") == {
             "decision": 1,
             "audit_event": 1,
-            "outbox": 1,
+            "outbox": 2,
         }, "the loser left rows behind"
+        assert not _rows_for_trace(
+            warehouse, "p7-concurrency-loser-probe"
+        ), "the losing writer persisted something; a refused append must leave no trace"
+        with Session(warehouse["engine"]) as session:
+            assert (
+                session.execute(
+                    select(func.count())
+                    .select_from(OutboxMessage)
+                    .where(OutboxMessage.case_id == case_ids[1])
+                ).scalar_one()
+                == 0
+            ), "the refused writer queued a delivery for its own case"
 
-        # The next writer after the race is not poisoned by it.
+        # The next writer after the race is not poisoned by it — and the refused
+        # writer did not burn a chain position on the way out. `chain_seq` is global,
+        # so the absolute value (this test used to demand `== 2`) depends on which
+        # tests ran first; the *relationship* does not. The writer that follows the
+        # winner must land on the very next link, which is only true if the 409
+        # rolled its sequence back with everything else.
         third = container.new_session()
-        again = submit(third, case_ids[1], "p7-operator-third")
+        again = submit(
+            third, case_ids[1], "p7-operator-third", "p7-concurrency-third-probe"
+        )
         third.commit()
         third.close()
-        assert again["chain_seq"] == 2
-        assert _counts(warehouse)["decision"] == 2
+        assert again["chain_seq"] == result["chain_seq"] + 1
+        assert _counts_for_trace(warehouse, "p7-concurrency-third-probe") == {
+            "decision": 1,
+            "audit_event": 1,
+            "outbox": 2,
+        }, "the writer after the race did not land a complete append"
     finally:
         for session in (winner, loser):
             session.close()
@@ -2337,4 +2468,465 @@ def test_the_outbox_uses_the_same_implementation_the_receiver_verifies_against()
     assert "hmac.new" not in inspect.getsource(
         echo_module.webhook
     ), "the echo receiver has grown its own HMAC, which is the duplicate that drifted once"
-    assert SIGNATURE_HEADER in sender
+    assert SIGNATURE_HEADER in sender or "SIGNATURE_HEADER" in sender, (
+        "the outbound sinks must send the signature under the one agreed header name. The "
+        "constant is the better spelling and is what the sender now uses, so accept either "
+        "the name or a reference to the constant that defines it - asserting the literal "
+        "string pushed the sender toward hardcoding a header name that has to stay in "
+        "step with oxbow.adapters.signing, which is the drift this test exists to prevent."
+    )
+    # Accepting either spelling above is not yet a check: a module that imported the
+    # constant and posted under some other name would satisfy it. So pin the binding
+    # itself — the sender's header must *be* the receiver's header — and keep the literal
+    # out, which is the duplicate that drifted once.
+    assert webhook_sinks.SIGNATURE_HEADER == SIGNATURE_HEADER, (
+        "the sender's signature header no longer resolves to "
+        "oxbow.adapters.signing.SIGNATURE_HEADER, so sender and receiver can name different "
+        "headers and each verify its own"
+    )
+    assert f'"{SIGNATURE_HEADER}"' not in sender, (
+        "the sender hard-codes the header name instead of importing the shared constant; "
+        "a duplicated literal is exactly what drifts"
+    )
+
+
+# --- 6. the contract areas sections 1-5 do not reach ----------------------------
+#
+# Plan §13/§14 name behaviours the tests above leave unasserted: what happens to a
+# delivery the consumer *permanently* refuses and whether the per-case queue is released
+# behind one, whether an OIDC token is verified against the issuer's own key rather than
+# merely parsed, and whether the audit digest can be walked across a field boundary by
+# putting a "|" in a value. Each is driven through the real code below.
+
+
+def test_a_refused_delivery_is_dead_lettered_and_releases_the_cases_next_row(
+    wh_client: TestClient, warehouse: dict[str, Any]
+) -> None:
+    """Dead-letter, the retry ladder, and the ordering rule's own release condition.
+
+    Three properties in one pass, because they only mean anything together: a 4xx
+    dead-letters on the *first* attempt (putting a schema refusal on a five-attempt ladder
+    is a hammer pointed at someone's endpoint, plan §18); a transient failure walks the
+    jittered ladder and is buried at the fifth; and a dead predecessor stops blocking its
+    case, because a row that will never be sent must not wedge everything behind it for
+    ever. The ledger has to show all of it — a delivery that never happened is a fact the
+    product carries, not a line in a log nobody reads.
+    """
+    import httpx
+    from api.outbox import drain_once
+
+    from oxbow.adapters.retry import MAX_ATTEMPTS
+    from oxbow.adapters.webhook.sinks import WebhookCaseSink
+
+    headers = analyst_headers(wh_client)
+    run_id, low = warehouse["run_id"], warehouse["low"]
+    case_a = _open_case(wh_client, headers, run_id, low[0])
+    case_b = _open_case(wh_client, headers, run_id, low[1])
+    for case_id, version in ((case_a, 1), (case_a, 2), (case_b, 1)):
+        posted = wh_client.post(
+            f"/api/cases/{case_id}/decisions",
+            json={
+                "action": "review",
+                "reason": f"queue probe {version}",
+                "expected_version": version,
+            },
+            headers=headers,
+        )
+        assert posted.status_code == 200, posted.text
+
+    container = warehouse["container"]
+    original_factory = container.case_sink_factory
+    sink_url = "http://consumer.invalid/webhook"
+
+    def refused(request: httpx.Request) -> httpx.Response:
+        # A 422 is the consumer saying the payload is wrong, not that it is busy.
+        return httpx.Response(422, json={"detail": "schema violation: unknown field"})
+
+    def unavailable(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("consumer is down", request=request)
+
+    def use(handler: Any) -> None:
+        # The real sender, with only the far end of the wire substituted: `HttpSink`
+        # exposes `client` precisely so the request path, the signing and the status
+        # classification below are the ones production runs.
+        client = httpx.Client(transport=httpx.MockTransport(handler))
+        container.case_sink_factory = lambda: WebhookCaseSink(
+            url=sink_url, secret=TEST_WEBHOOK_SECRET, client=client
+        )
+
+    try:
+        use(refused)
+        started = datetime.now(UTC)
+        with Session(warehouse["engine"]) as session:
+            report = drain_once(container, now=started, batch=50, session=session)
+            # `rejected_permanently`, not `dead`: the consumer's own refusal is a
+            # different fact from running out of attempts, and the report keeps them
+            # apart so an operator can tell "our payload is wrong" from "they are down".
+            assert report.claimed == 2, report.as_dict()
+            assert (report.rejected_permanently, report.sent, report.dead) == (2, 0, 0)
+            assert report.retrying == 0, "a 4xx must not be put back on the retry ladder"
+            rows = {
+                int(row.case_seq): row for row in api_decisions.outbox_rows_for(session, case_a)
+            }
+            assert rows[1].status == "dead"
+            assert int(rows[1].attempts) == 1, "a permanent refusal was retried before buried"
+            assert rows[1].dead_at == started
+            assert rows[1].sent_at is None
+            assert "422" in str(rows[1].last_error), rows[1].last_error
+            assert len(rows[1].attempt_log) == 1
+            # case_a's second row was never even claimed: its predecessor was unsent.
+            assert rows[2].status == "pending"
+            assert int(rows[2].attempts) == 0
+            session.commit()
+
+        with Session(warehouse["engine"]) as session:
+            due = claim_due(session, now=datetime.now(UTC), batch=50)
+            assert {(str(row.case_id), int(row.case_seq)) for row in due} == {(case_a, 2)}, (
+                "a dead row must not block its case for ever, and a case whose head of "
+                "line is still pending must not overtake it"
+            )
+            session.rollback()
+
+        use(unavailable)
+        started = datetime.now(UTC)
+        with Session(warehouse["engine"]) as session:
+            report = drain_once(container, now=started, batch=50, session=session)
+            assert (report.claimed, report.retrying) == (1, 1), report.as_dict()
+            row = api_decisions.outbox_rows_for(session, case_a)[1]
+            assert row.status == "pending" and int(row.attempts) == 1
+            outcome = report.outcomes[0]
+            assert outcome.jitter_delay_seconds is not None
+            assert 0.0 <= outcome.jitter_delay_seconds <= 1.0, (
+                f"attempt one of the ladder must land inside the documented 1s rung, got "
+                f"{outcome.jitter_delay_seconds}"
+            )
+            assert row.next_attempt_at == started + timedelta(
+                seconds=outcome.jitter_delay_seconds
+            ), "the worker must store the next attempt time, not sleep it"
+            assert "consumer is down" in str(row.last_error)
+            session.commit()
+
+        with Session(warehouse["engine"]) as session:
+            row = api_decisions.outbox_rows_for(session, case_a)[1]
+            row.attempts = MAX_ATTEMPTS - 1
+            row.next_attempt_at = datetime.now(UTC) - timedelta(minutes=5)
+            session.commit()
+
+        report = drain_once(container, batch=50)
+        assert report.dead == 1, report.as_dict()
+        with Session(warehouse["engine"]) as session:
+            row = api_decisions.outbox_rows_for(session, case_a)[1]
+            assert row.status == "dead"
+            assert int(row.attempts) == MAX_ATTEMPTS, row.attempts
+            assert row.dead_at is not None and row.sent_at is None
+            assert len(row.attempt_log) == 2, row.attempt_log
+
+        dead = assert_envelope(
+            wh_client.get("/api/outbox", params={"status": "dead"}, headers=headers).json(),
+            where="GET /api/outbox?status=dead",
+        )["data"]
+        assert {str(row["status"]) for row in dead["rows"]} == {"dead"}
+        assert all(row["sent_at"] is None for row in dead["rows"]), "a dead row is not a sent one"
+        # Three buried promises, not two: case_b's single row was refused in the same first
+        # pass as case_a's head of line, and case_a's second row only died later, on the
+        # ladder. The ledger is the only place that story survives, so it has to be exact.
+        assert {(str(row["case_id"]), int(row["case_seq"])) for row in dead["rows"]} == {
+            (case_a, 1),
+            (case_a, 2),
+            (case_b, 1),
+        }, dead["rows"]
+        depth = assert_envelope(
+            wh_client.get("/api/outbox", headers=headers).json(), where="GET /api/outbox"
+        )["data"]["depth"]
+        assert depth["dead"] == 3 and depth["pending"] == 0 and depth["sent"] == 0, depth
+    finally:
+        container.case_sink_factory = original_factory
+
+
+@contextlib.contextmanager
+def _oidc_client(
+    jwks_url: str, document: dict[str, Any]
+) -> Iterator[tuple[TestClient, Any, list[str]]]:
+    """The app over a JWKS the test itself signs, with the fetch counted."""
+    import httpx
+    from api.security import JwksCache
+
+    fetched: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        fetched.append(str(request.url))
+        return httpx.Response(200, json=document)
+
+    container = build_container()
+    container.jwks_cache = JwksCache(
+        jwks_url, client=httpx.Client(transport=httpx.MockTransport(handler))
+    )
+    app = create_app()
+    try:
+        with TestClient(app, raise_server_exceptions=False) as client:
+            # The lifespan builds its own container from the ambient environment; this is
+            # the one holding the key set under test, so it goes in after startup.
+            app.state.container = container
+            yield client, container, fetched
+    finally:
+        container.close()
+
+
+def test_an_oidc_token_is_verified_against_the_issuers_own_key_and_nothing_else() -> None:
+    """OIDC verification end to end, against a key set this test generated.
+
+    `test_alg_none_and_the_algorithm_confusion_attack_are_refused` calls `decode_token`
+    directly, which leaves the deployment's half untested: the container's key cache, the
+    configured issuer and audience, Keycloak's own `realm_access.roles` claim, and the
+    refusal of the local fallback the moment an issuer is authoritative. The RSA pair is
+    generated rather than read from a fixture so that "verifies" cannot quietly mean
+    "matches a captured byte string".
+    """
+    from cryptography.hazmat.primitives import hashes
+    from cryptography.hazmat.primitives.asymmetric import padding, rsa
+
+    jwks_url = f"{ISSUER}/protocol/openid-connect/certs"
+    mp = pytest.MonkeyPatch()
+    _configure_env(
+        mp,
+        OXBOW_OIDC_ISSUER=ISSUER,
+        OXBOW_OIDC_JWKS_URL=jwks_url,
+        OXBOW_LOCAL_JWT_ENABLED="false",
+        OXBOW_LOCAL_JWT_SECRET="",
+    )
+
+    def new_key() -> Any:
+        return rsa.generate_private_key(public_exponent=65537, key_size=2048)
+
+    signer, stranger, other = new_key(), new_key(), new_key()
+
+    def jwk(kid: str, private: Any) -> dict[str, str]:
+        numbers = private.public_key().public_numbers()
+        return {
+            "kty": "RSA",
+            "use": "sig",
+            "alg": "RS256",
+            "kid": kid,
+            "n": b64url_encode(numbers.n.to_bytes((numbers.n.bit_length() + 7) // 8, "big")),
+            "e": b64url_encode(numbers.e.to_bytes((numbers.e.bit_length() + 7) // 8, "big")),
+        }
+
+    served = "p7-serving-key"
+    document = {"keys": [jwk(served, signer), jwk("p7-other-key", other)]}
+
+    def mint(
+        *,
+        private: Any = signer,
+        kid: str = served,
+        issuer: str = ISSUER,
+        audience: str = "oxbow-web",
+        roles: list[str] | None = None,
+        realm_roles: list[str] | None = None,
+    ) -> str:
+        header = b64url_encode(json.dumps({"alg": "RS256", "typ": "JWT", "kid": kid}).encode())
+        claims: dict[str, Any] = {
+            "iss": issuer,
+            "sub": "p7-oidc-analyst",
+            "aud": audience,
+            "iat": int(time.time()),
+            "exp": int(time.time()) + 600,
+            "name": "P7 OIDC Analyst",
+        }
+        if roles is None and realm_roles is None:
+            # A token with neither claim is the `no_role` case, not the accepted one, so
+            # the default carries this project's own role claim.
+            roles = ["analyst"]
+        if roles is not None:
+            claims["oxbow_roles"] = roles
+        if realm_roles is not None:
+            claims["realm_access"] = {"roles": realm_roles}
+        payload = b64url_encode(json.dumps(claims).encode())
+        signature = b64url_encode(
+            private.sign(f"{header}.{payload}".encode("ascii"), padding.PKCS1v15(), hashes.SHA256())
+        )
+        return f"{header}.{payload}.{signature}"
+
+    stack = contextlib.ExitStack()
+    try:
+        client, container, fetched = stack.enter_context(_oidc_client(jwks_url, document))
+        minted = client.post(
+            "/api/auth/demo-token", json={"subject": ANALYST, "roles": ["analyst"]}
+        )
+        body = assert_problem(
+            minted, status=403, where="a demo token while an issuer is authoritative"
+        )
+        assert "issuer" in body["detail"] or "OIDC" in body["detail"], body["detail"]
+
+        fallback = assert_problem(
+            client.get(
+                "/api/me",
+                headers={
+                    "Authorization": f"Bearer {mint_local_token(subject=ANALYST, roles=['analyst'], secret=TEST_JWT_SECRET)}"
+                },
+            ),
+            status=401,
+            where="a local HS256 token while the fallback is disabled",
+        )
+        assert "refused" in fallback["detail"] or "verify" in fallback["detail"], fallback
+
+        accepted = client.get("/api/me", headers={"Authorization": f"Bearer {mint()}"})
+        assert accepted.status_code == 200, accepted.text
+        data = assert_envelope(accepted.json(), where="GET /api/me with an RS256 token")["data"]
+        assert data["source"] == "oidc", data
+        assert data["issuer"] == ISSUER, data
+        assert data["roles"] == ["analyst"], data
+        assert data["subject"] == "p7-oidc-analyst", data
+        assert fetched == [jwks_url], fetched
+
+        realm = client.get(
+            "/api/me", headers={"Authorization": f"Bearer {mint(realm_roles=['reviewer'])}"}
+        )
+        assert realm.status_code == 200, realm.text
+        assert realm.json()["data"]["roles"] == ["reviewer"], (
+            "an API that read only its own `oxbow_roles` claim would reject a correctly "
+            "configured Keycloak user"
+        )
+
+        wrong_key = client.get(
+            "/api/me",
+            headers={"Authorization": f"Bearer {mint(private=stranger, kid=served)}"},
+        )
+        assert_problem(wrong_key, status=401, where="a token signed by a key not in the set")
+        assert "verif" in wrong_key.json()["detail"], wrong_key.json()["detail"]
+
+        unknown_kid = client.get("/api/me", headers={"Authorization": f"Bearer {mint(kid='nope')}"})
+        assert_problem(unknown_kid, status=401, where="a kid absent from a two-key set")
+        assert "kid" in unknown_kid.json()["detail"], unknown_kid.json()["detail"]
+
+        other_audience = client.get(
+            "/api/me", headers={"Authorization": f"Bearer {mint(audience='some-other-api')}"}
+        )
+        assert_problem(other_audience, status=401, where="a token minted for another audience")
+        assert "audience" in other_audience.json()["detail"], other_audience.json()["detail"]
+
+        foreign = client.get(
+            "/api/me",
+            headers={"Authorization": f"Bearer {mint(issuer='https://evil.example')}"},
+        )
+        assert_problem(foreign, status=401, where="a token claiming a different issuer")
+
+        hs_on_rs256 = client.get(
+            "/api/me",
+            headers={
+                "Authorization": f"Bearer {mint_local_token(subject=ANALYST, roles=['analyst'], secret='not-the-real-one')}"
+            },
+        )
+        assert_problem(hs_on_rs256, status=401, where="an HMAC token against an RS256 issuer")
+
+        no_role = client.get(
+            "/api/me", headers={"Authorization": f"Bearer {mint(roles=['observer'])}"}
+        )
+        assert_problem(no_role, status=403, where="a verified token with no OXBOW role")
+    finally:
+        stack.close()
+        mp.undo()
+        reset_settings_cache()
+
+
+def test_a_pipe_in_a_signed_field_cannot_move_the_digest_boundary(
+    wh_client: TestClient, warehouse: dict[str, Any]
+) -> None:
+    """STATE.md item 14, checked where the chain is actually written.
+
+    The retired scheme joined
+    ``HASH_VERSION|seq|occurred_at|actor_id|subject|action|canonical_json(payload)|prev_hash``
+    with ``"|"``. ``actor_id`` arrives from an identity provider and is free text, so
+    ``("p7|operator", "case:X")`` and ``("p7", "operator|case:X")`` hash identically: a
+    decision could be re-attributed across subjects without breaking its own digest.
+    `tests/unit/test_audit_chain.py` proves the array scheme closes that hole; what this
+    proves is that the API's write path goes through it — that a real decision whose
+    reason and actor carry pipes is digested, chained, verified, and detectably altered
+    by a rewrite that only moves a pipe.
+    """
+    from oxbow.audit.chain import GENESIS_HASH, canonical_json, compute_row_hash
+
+    headers = analyst_headers(wh_client)
+    run_id, low = warehouse["run_id"], warehouse["low"]
+    hostile = 'dismissed|reason moved|{"actor_id":"p7-operator-reviewer"}'
+    case_id = _open_case(wh_client, headers, run_id, low[0])
+    posted = wh_client.post(
+        f"/api/cases/{case_id}/decisions",
+        json={"action": "dismiss", "reason": hostile, "expected_version": 1},
+        headers=headers,
+    )
+    assert posted.status_code == 200, posted.text
+    assert_envelope(posted.json(), where="a decision whose reason carries pipes")
+
+    with Session(warehouse["engine"]) as session:
+        rows = api_decisions.decision_chain_rows(session)
+    assert len(rows) == 1, [row.seq for row in rows]
+    row = rows[0]
+    assert row.payload["reason"] == hostile, "the stored reason was reworded in transit"
+    assert verify_chain(rows).ok
+    assert row.row_hash == compute_row_hash(row)
+    assert row.prev_hash == GENESIS_HASH
+
+    retired = "|".join(
+        [
+            "oxbow-audit-v1",
+            str(row.seq),
+            row.occurred_at.astimezone(UTC).isoformat().replace("+00:00", "Z"),
+            row.actor_id,
+            row.subject,
+            row.action,
+            canonical_json(row.payload),
+            row.prev_hash,
+        ]
+    )
+    assert hashlib.sha256(retired.encode()).hexdigest() != row.row_hash, (
+        "the stored digest is the retired pipe-join again: the delimiter weakness "
+        "STATE.md item 14 records has come back"
+    )
+
+    def split(actor_id: str, subject: str) -> PendingChainRow:
+        return PendingChainRow(
+            seq=row.seq,
+            occurred_at=row.occurred_at,
+            actor_id=actor_id,
+            subject=subject,
+            action=row.action,
+            payload=row.payload,
+            prev_hash=row.prev_hash,
+            row_hash=row.row_hash,
+        )
+
+    # The two splits that used to be indistinguishable: the same joined bytes, reached
+    # from an actor carrying a trailing field and a subject carrying the remainder.
+    left = split("p7|operator", f"case:{'0' * 26}")
+    right = split("p7", f"operator|case:{'0' * 26}")
+    assert left.actor_id + "|" + left.subject == right.actor_id + "|" + right.subject, (
+        "this fixture stopped straddling the boundary, which would make the comparison "
+        "below vacuous"
+    )
+    assert compute_row_hash(left) != compute_row_hash(right), (
+        "two different field splits hash identically, so a re-attribution of a signed "
+        "decision would verify"
+    )
+
+    # And the free text really does reach the digest through the API: `actor_id` is the
+    # identity provider's `sub`, so a pipe in an operator's subject is the ordinary case,
+    # not a synthetic one. The chain must carry it and still verify.
+    pipey = "p7-operator|rotated"
+    headers_pipey = {
+        "Authorization": f"Bearer {token_for(wh_client, pipey, ['analyst'])}",
+    }
+    case_pipey = _open_case(wh_client, headers_pipey, run_id, low[1])
+    second = wh_client.post(
+        f"/api/cases/{case_pipey}/decisions",
+        json={"action": "dismiss", "reason": "cleared|second probe", "expected_version": 1},
+        headers=headers_pipey,
+    )
+    assert second.status_code == 200, second.text
+    with Session(warehouse["engine"]) as session:
+        chained = api_decisions.decision_chain_rows(session)
+    assert [row.actor_id for row in chained[1:]] == [pipey], chained
+    assert chained[1].payload["reason"] == "cleared|second probe"
+    assert chained[0].row_hash == row.row_hash
+    assert chained[1].prev_hash == chained[0].row_hash, "the second link does not join the first"
+    verification = verify_chain(chained)
+    assert verification.ok and verification.rows_checked == 2, verification.first_broken

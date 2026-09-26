@@ -262,7 +262,11 @@ def _node_flags(
     if membership is not None and int(membership.get("community_id") or -1) in dense_communities:
         flags.add("dense_community")
     if score is not None and str(score.get("band")) in {"D", "E"}:
-        flags.append("flagged")
+        # ``flags`` is a set, because the same overlay name can arrive twice from two
+        # edges; ``append`` on a set raised AttributeError for every node with a D/E band,
+        # which made `GET /api/graph/subgraph` a 500 for exactly the accounts an analyst
+        # opens first -- the flagged ones.
+        flags.add("flagged")
     return sorted(flags)
 
 

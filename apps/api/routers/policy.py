@@ -22,7 +22,6 @@ from fastapi import APIRouter, Depends, Query
 
 from api.deps import Container, analyst_or_higher, get_container, reviewer_or_higher
 from api.policy_engine import (
-    assumption_lines,
     run_simulation,
     stored_policies,
     stored_policy,
@@ -33,7 +32,7 @@ from api.problems import (
     NotFound,
     problem_responses,
 )
-from api.routers.common import build_meta
+from api.routers.common import assumption_lines, build_meta
 from api.schemas.common import Envelope, envelope
 from api.schemas.policy import (
     ActivePolicyResponse,

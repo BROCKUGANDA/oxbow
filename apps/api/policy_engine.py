@@ -533,8 +533,8 @@ def assumption_pairs(assumptions: Assumptions) -> list[tuple[str, Any]]:
         ("solver.cpsat_deadline_ms", assumptions.solver.cpsat_deadline_ms),
         ("monte_carlo.runs", assumptions.monte_carlo.runs),
         ("monte_carlo.seed", assumptions.monte_carlo.seed),
-        ("tail_risk.var_alpha", assumptions.tail_risk.alpha_var),
-        ("tail_risk.es_alpha", assumptions.tail_risk.alpha_es),
+        ("tail_risk.var_alpha", assumptions.tail_risk.var_alpha),
+        ("tail_risk.es_alpha", assumptions.tail_risk.es_alpha),
         ("seed", assumptions.seed),
     ]
 

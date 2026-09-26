@@ -138,7 +138,18 @@ class AlertReason(BaseModel):
 
     code: str
     label: str
-    points: int
+    points: int | None = Field(
+        default=None,
+        description=(
+            "Scorecard points this reason contributed, or null when the pipeline recorded "
+            "the reason without a points value. Null is not zero: zero is a claim about the "
+            "scorecard (the reason fired and cost nothing) and null is a claim about the "
+            "record (the reason fired and no points were stored for it). The reasons reader "
+            "in routers/alerts.py::_reasons has always emitted null in that second case, so "
+            "typing this non-nullable made /api/alerts a 500 on every row carrying a plain "
+            "reason code."
+        ),
+    )
 
 
 class AlertRow(BaseModel):

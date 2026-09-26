@@ -32,12 +32,14 @@ from api.problems import (
     problem_responses,
 )
 from api.readmodel import ReadModel, money
-from api.routers.common import build_meta
+from api.routers.common import build_meta, row_view
 from api.schemas.common import Envelope, envelope
 from api.schemas.validation import (
     AblationRowView,
+    BandRowView,
     ConfusionCellView,
     ConfusionMatrixView,
+    CurveDatum,
     CurveSeries,
     DisagreementRowView,
     DriftRowView,
@@ -47,6 +49,7 @@ from api.schemas.validation import (
     MigrationCellView,
     PerturbationRowView,
     ScorecardAttributeView,
+    ScorecardBinView,
     ScorecardStudioBundle,
     ValidationBundle,
     ValidationMetricView,
@@ -122,24 +125,24 @@ def validation(
         run_id=rid,
         corpora=sorted({str(row["corpus"]) for row in folds}),
         folds=[FoldRow.model_validate(_fold_dict(row)) for row in folds],
-        ablation=[AblationRowView.model_validate(_ablation_dict(row)) for row in ablation],
+        ablation=[_ablation_view(row) for row in ablation],
         curves=curves,
         confusion=None
         if confusion_total == 0
         else ConfusionMatrixView(
-            cells=[ConfusionCellView.model_validate(row) for row in confusion_rows],
+            cells=[row_view(ConfusionCellView, row) for row in confusion_rows],
             budget=None if budget_metric is None else int(float(budget_metric["value"])),
             basis="at the configured review budget, not over the whole ranking (plan §12)",
         ),
         fairness=_fairness_axes(fairness),
-        perturbations=[PerturbationRowView.model_validate(row) for row in perturbations],
+        perturbations=[row_view(PerturbationRowView, row) for row in perturbations],
         metrics=[
-            ValidationMetricView.model_validate(row)
+            row_view(ValidationMetricView, row)
             for row in metrics
             if str(row["name"]) not in {"review_budget", "budget"}
         ],
         typology_recall=[
-            ValidationMetricView.model_validate(row)
+            row_view(ValidationMetricView, row)
             for row in metrics
             if str(row["name"]).startswith("typology_recall")
         ],
@@ -247,14 +250,19 @@ def scorecard_studio(
                 n_bins=int(row["n_bins"]),
                 monotone=bool(row["monotone"]),
                 family=str(row["family"]),
-                bins=grouped.get(str(row["attribute"]), []),
+                # `scorecard_bin` carries the `attribute` it belongs to because the bins
+                # are read once and grouped here; the view declares the bin, not the join.
+                bins=[
+                    row_view(ScorecardBinView, bin_row)
+                    for bin_row in grouped.get(str(row["attribute"]), [])
+                ],
             )
             for row in attributes
         ],
-        bands=list(bands),
-        drift=[DriftRowView.model_validate(row) for row in drift],
-        migration=[MigrationCellView.model_validate(row) for row in migration],
-        disagreements=[DisagreementRowView.model_validate(row) for row in disagreements],
+        bands=[row_view(BandRowView, row) for row in bands],
+        drift=[row_view(DriftRowView, row) for row in drift],
+        migration=[row_view(MigrationCellView, row) for row in migration],
+        disagreements=[row_view(DisagreementRowView, row) for row in disagreements],
         disagreement_note=None
         if disagreement_total
         else (
@@ -306,7 +314,9 @@ def _curve(read_model: ReadModel, run_id: str, family: str) -> CurveSeries:
         family=family,
         x_label=x_label,
         y_label=y_label,
-        points=rows,
+        # The stored row's `family` names which of the five charts the point belongs to,
+        # and its `id`/`run_id` are storage bookkeeping; the series declares the point.
+        points=[row_view(CurveDatum, row) for row in rows],
         currency=None if not rows or rows[0].get("currency") is None else str(rows[0]["currency"]),
         operating_threshold=None if operating is None else float(operating["x"]),
         note=note,
@@ -358,14 +368,22 @@ def _fold_dict(row: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _ablation_dict(row: dict[str, Any]) -> dict[str, Any]:
+def _ablation_view(row: dict[str, Any]) -> AblationRowView:
+    """One ablation row, with its money figure in the envelope's money shape.
+
+    The three thesis flags are derived here rather than stored: which row is the leakage
+    control, the graph thesis and the pricing thesis is a reading of the variant name, and
+    a fourth copy in the pipeline would be a fourth place to get that reading wrong.
+    """
     variant = str(row["variant"]).lower()
-    return {
-        **row,
-        "is_leakage_control": any(marker in variant for marker in LEAKAGE_CONTROL_MARKERS),
-        "is_graph_thesis": "with_graph" in variant or "graph_features" in variant,
-        "is_pricing_thesis": "threshold" in variant and "ev" in variant,
-    }
+    return row_view(
+        AblationRowView,
+        row,
+        net_benefit=money(int(row["net_benefit_minor"]), str(row["currency"]), decimals=2),
+        is_leakage_control=any(marker in variant for marker in LEAKAGE_CONTROL_MARKERS),
+        is_graph_thesis="with_graph" in variant or "graph_features" in variant,
+        is_pricing_thesis="threshold" in variant and "ev" in variant,
+    )
 
 
 def _fairness_axes(rows: list[dict[str, Any]]) -> list[FairnessAxisView]:

@@ -115,6 +115,29 @@ class PageEnvelope(BaseModel, Generic[DataT]):
     meta: PageMeta
 
 
+class ObjectPageEnvelope(BaseModel, Generic[DataT]):
+    """One framed object in ``data``, paging in ``meta``.
+
+    ``PageEnvelope`` is for a route whose payload *is* the list. The alert queue is not:
+    its rows and the capacity line they are drawn inside arrive together as one
+    ``AlertQueue``, because a page of cards that does not carry its own cutoff would
+    have to be stitched to a second request to render the one thing the screen is for.
+    So ``data`` is a single object and ``meta`` is still a ``PageMeta`` — the paging stays
+    where the doctrine puts it, and ``Envelope``'s plain ``Meta`` could not carry it
+    (``extra="forbid"`` made ``limit``/``offset``/``total`` six response-validation
+    errors, i.e. a 500 from a handler that had already built the body correctly).
+
+    Declaring it as its own model rather than loosening ``Meta`` keeps the generated
+    client honest: a route that says it pages has ``limit``/``total`` in its type, and a
+    route that does not cannot grow them by accident.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    data: DataT
+    meta: PageMeta
+
+
 def envelope(data: Any, **meta_fields: Any) -> dict[str, Any]:
     """Build the ``{data, meta}`` pair without any caller remembering the shape.
 
@@ -130,6 +153,7 @@ __all__ = [
     "Envelope",
     "Meta",
     "Money",
+    "ObjectPageEnvelope",
     "PageEnvelope",
     "PageMeta",
     "envelope",

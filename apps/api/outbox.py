@@ -159,9 +159,14 @@ def claim_due(
     """
     stale = now - timedelta(seconds=IN_FLIGHT_STALE_SECONDS)
     earlier = aliased(OutboxMessage)
+    # ``select(earlier.outbox_id)``, not ``select(func.count())``. An aggregate with no
+    # GROUP BY always returns exactly one row — including the row where the count is zero —
+    # so wrapping it in ``EXISTS`` made the guard true for *every* candidate row, ``~true``
+    # was false everywhere, and ``claim_due`` returned nothing at all: the drain reported a
+    # clean pass with ``claimed=0`` and no case was ever delivered. The ordering rule needs a
+    # semi-join that yields rows only when an unsent predecessor actually exists.
     earlier_unsent = (
-        select(func.count())
-        .select_from(earlier)
+        select(earlier.outbox_id)
         .where(
             earlier.case_id == OutboxMessage.case_id,
             earlier.case_seq < OutboxMessage.case_seq,

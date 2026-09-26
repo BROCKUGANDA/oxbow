@@ -17,13 +17,15 @@ were the answer.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from datetime import UTC, datetime
-from typing import Any, Final
+from typing import Any, Final, TypeVar
 
 from fastapi import Query
+from pydantic import BaseModel
 
 from api.deps import Container
-from api.problems import BadRequest
+from api.problems import BadRequest, DependencyUnavailable
 from api.readmodel import SORTABLE_ALERT_COLUMNS, ReadModel
 from api.schemas.common import AssumptionLine, Meta, PageMeta
 from oxbow.quant.economics import Economics
@@ -32,6 +34,8 @@ DEFAULT_PAGE_SIZE: Final = 50
 MAX_PAGE_SIZE: Final = 500
 
 PageParams = tuple[int, int, str, str]
+
+ModelT = TypeVar("ModelT", bound=BaseModel)
 
 
 class Pagination:
@@ -193,6 +197,37 @@ def run_label(run: dict[str, Any]) -> dict[str, str]:
     }
 
 
+def row_view(view: type[ModelT], row: Mapping[str, Any], **overrides: Any) -> ModelT:
+    """Validate one stored row against a response view, on the view's field set.
+
+    The read models deliberately hand a router more columns than a response declares:
+    ``curve_point`` carries its ``family`` because four chart families share the table,
+    ``scorecard_bin`` carries its ``attribute`` because the bins are grouped afterwards,
+    and every table carries the storage bookkeeping ``id`` and ``run_id`` because the
+    source is a database, not a response. The view models are ``extra="forbid"``, which is
+    the right rule for a *contract* and a wrong rule for that join: handing the row to the
+    view unchanged made ``/api/validation`` and ``/api/scorecard`` 500 on a real warehouse,
+    once per undeclared column.
+
+    So the view's declared fields are the projection, and nothing is dropped quietly: a
+    column the view declares but the row does not carry is a missing measurement, and this
+    refuses by name instead of letting Pydantic surface it as an undesigned 500. Keys in
+    ``overrides`` are built by the caller (a reshaped money figure, a derived flag) and win.
+    """
+    payload = {key: value for key, value in row.items() if key in view.model_fields}
+    payload.update(overrides)
+    required = {name for name, field in view.model_fields.items() if field.is_required()}
+    missing = sorted(required - set(payload))
+    if missing:
+        present = ", ".join(sorted(str(key) for key in row))
+        raise DependencyUnavailable(
+            f"a stored row for {view.__name__} carries no value for {missing}. The response "
+            "declares the field, so the run was expected to produce it; defaulting it here "
+            f"would put an unmeasured number on the page. Columns the row does carry: {present}"
+        )
+    return view.model_validate(payload)
+
+
 __all__ = [
     "DEFAULT_PAGE_SIZE",
     "MAX_PAGE_SIZE",
@@ -202,5 +237,6 @@ __all__ = [
     "build_meta",
     "build_page_meta",
     "page_params",
+    "row_view",
     "run_label",
 ]

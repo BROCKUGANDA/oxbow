@@ -85,6 +85,24 @@ class ProblemDetail(BaseModel):
         description="Whether the same request may succeed later. Never true for a 4xx "
         "(plan §18: a retry loop around a 4xx is a hammer pointed at a validation error).",
     )
+    # The three version-conflict members are part of this API's contract, not a caller's
+    # ad-hoc extras: plan §13 requires the loser of a concurrent write to be handed the
+    # merge view rather than told it lost. They are declared here because ``extra="forbid"``
+    # is what makes an undeclared response field a failure rather than a silent drop -- and
+    # that guard was firing on this module's own document, turning every 409 version
+    # conflict into a 500 (`ProblemDetail` refused its own payload). ``exclude_none`` keeps
+    # them out of every other problem document, so a 404 still carries exactly RFC 9457
+    # plus the correlation fields.
+    expected_version: int | None = Field(
+        default=None, description="The version the losing write believed it was editing."
+    )
+    current_version: int | None = Field(
+        default=None, description="The version the case is actually at."
+    )
+    current: dict[str, Any] | None = Field(
+        default=None,
+        description="The winning decision as stored, so the two can be read side by side.",
+    )
 
     def to_response(self) -> JSONResponse:
         """The wire form, with the problem media type set."""

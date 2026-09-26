@@ -168,7 +168,17 @@ class ConfusionMatrixView(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     cells: list[ConfusionCellView] = Field(default_factory=list)
-    budget: int
+    budget: int | None = Field(
+        default=None,
+        description=(
+            "The review budget the cells were counted at, or null when the run recorded "
+            "no review_budget metric. A confusion matrix drawn at an unnamed budget is not "
+            "a matrix at a budget, and 0 would be a claim that the desk reviewed nothing. "
+            "The reader in routers/validation.py has always passed null in this case, so "
+            "typing this non-nullable made every /api/validation response a 500 for a run "
+            "whose confusion cells were present but whose budget was not."
+        ),
+    )
     basis: str
 
 

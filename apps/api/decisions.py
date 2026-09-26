@@ -30,6 +30,7 @@ test is read from the ``economics`` row the pipeline wrote, never recomputed.
 
 from __future__ import annotations
 
+import hashlib
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -78,6 +79,21 @@ OUTBOX_SINK_CASE: Final = "webhook"
 OUTBOX_SINK_NOTIFY: Final = "slack-notify"
 OUTBOX_SCHEMA_VERSION: Final = CASE_SCHEMA_VERSION
 GENESIS_DIGEST: Final = GENESIS_HASH
+
+# ``outbox.idempotency_key`` is ``VARCHAR(64)`` because that is exactly the width of the
+# SHA-256 hex digest ``build_idempotency_key`` returns. Appending a suffix to it — the
+# obvious way to give a second sink its own key — is 71 characters, and Postgres refuses
+# the row with ``StringDataRightTruncation``, which reached the operator as an unlabelled
+# 500 on ``POST /api/decisions/{id}/confirm``. The notification's key is therefore derived
+# the same way the case key is: digested, fixed width, deterministic from the case key it
+# extends, and unable to collide with it unless the case keys already collide.
+NOTIFY_KEY_MATERIAL: Final = "notify"
+
+
+def notify_idempotency_key(case_idempotency_key: str) -> str:
+    """The second sink's delivery promise, inside the 64-character column."""
+    return hashlib.sha256(f"{case_idempotency_key}#{NOTIFY_KEY_MATERIAL}".encode()).hexdigest()
+
 
 # The decision chain is the *human* attestation sequence, separate from the system's
 # ``audit_event`` chain on purpose: interleaving them would put a machine heartbeat
@@ -211,7 +227,26 @@ def record_decision(
     The caller owns the transaction; this function only flushes. That ordering is what
     makes the three rows atomic, and it is why the audit sink is constructed with this
     session rather than opening one of its own.
+
+    The case row is re-read here under ``SELECT ... FOR UPDATE`` before the version is
+    checked, and that lock is the fix for a race this function had: two analysts on the
+    same case, each holding a snapshot taken before the other committed. Under
+    REPEATABLE READ the loser re-reads its *own* snapshot and still sees the old version,
+    so the optimistic check passed, both built the same ``idempotency_key``, and the
+    collision surfaced only at commit -- after the loser had already flushed its audit and
+    outbox rows. The count assertion in ``test_concurrent_append_gives_one_success_and_one_409``
+    caught exactly that (two outbox rows for one winner). Taking the row lock makes the
+    second writer block until the first commits, then re-read the committed version and
+    refuse with 409 *before* writing anything, which is the answer plan §13 fixes.
     """
+    # Serialize on the case row, then re-read it: a row loaded before the competing
+    # commit is not evidence about the case's current version.
+    locked = session.execute(
+        select(Case).where(Case.case_id == case.case_id).with_for_update()
+    ).scalar_one_or_none()
+    if locked is None:  # pragma: no cover - the caller's own FK guarantees it
+        raise NotFound(f"case {case.case_id} disappeared between open and append")
+    case = locked
     snapshot = CaseSnapshot.from_row(case)
     _require_version(snapshot, write.expected_version, session, write.principal)
     score = read_model.score_row(snapshot.run_id, snapshot.account_key)
@@ -453,7 +488,7 @@ def queue_decision_deliveries(
                 decision_seq=int(decision.decision_seq),
                 schema_version=OUTBOX_SCHEMA_VERSION,
                 payload=notification_payload(decision=decision, bundle=bundle),
-                idempotency_key=f"{bundle.idempotency_key}:notify",
+                idempotency_key=notify_idempotency_key(str(bundle.idempotency_key)),
             )
         )
     return written

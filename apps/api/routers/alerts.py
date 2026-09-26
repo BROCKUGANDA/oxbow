@@ -19,6 +19,7 @@ router is responsible for:
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Any, Final
 
 from fastapi import APIRouter, Depends, Query
@@ -34,7 +35,7 @@ from api.problems import (
 from api.readmodel import ReadModel, money
 from api.routers.common import Pagination, alert_page_params, build_meta, build_page_meta
 from api.schemas.catalog import AlertFacets, AlertQueue, AlertRow
-from api.schemas.common import Envelope, PageEnvelope, envelope
+from api.schemas.common import Envelope, ObjectPageEnvelope, envelope
 from api.security import Principal
 from oxbow.quant.allocate import AllocatorId
 
@@ -45,7 +46,17 @@ DEFAULT_RUN_FROM: Final = "complete"
 
 @router.get(
     "",
-    response_model=PageEnvelope[AlertQueue],
+    # `ObjectPageEnvelope`, not `PageEnvelope`: the paging for this route is in `meta`
+    # (build_page_meta), but `data` is the single queue frame, because the rows and the
+    # capacity line they are drawn inside have to arrive together or the client has to
+    # stitch a cutoff line onto a page of cards that does not carry it. `PageEnvelope`
+    # made FastAPI validate the response against `list[AlertQueue]` and reject its own
+    # body -- `data` was read as a sequence, and iterating the envelope gave the keys
+    # ('run_id', 'policy_id', ...) instead of rows. Plain `Envelope` is no better: its
+    # `Meta` is `extra="forbid"`, so the six paging fields `build_page_meta` correctly
+    # produced became response-validation errors and the route 500'd after building the
+    # right answer. Either way every /api/alerts call failed regardless of the handler.
+    response_model=ObjectPageEnvelope[AlertQueue],
     summary="The queue: server-filtered, server-sorted, ranked under the active policy",
     description=(
         "One row per scored account in one run. ``band`` accepts a repeated query "
@@ -103,9 +114,26 @@ def list_alerts(
         allocation_source=source_label,
         unpriced_accounts=unpriced,
         rows=[
+            # Field-by-field, not `**row`. `AlertRow` is `extra="forbid"`, and the read
+            # model deliberately returns more than the queue needs (calibration_band,
+            # rule_ids, scorecard_points, model_version, case_id/case_status,
+            # first_seen_at/last_seen_at, txn_count) so other callers can use the same
+            # join. Splatting that row here fed every one of those extra keys to the
+            # schema and made /api/alerts a 500 on any real run -- `extra_forbidden` on
+            # ten keys, plus a `None` where `calibration_n` and `rank` require an int.
+            # Naming the fields is also the only way this endpoint keeps agreeing with
+            # the schema: a new column in the read model becomes a visible omission here
+            # rather than an unhandled 500.
             AlertRow.model_validate(
                 {
-                    **row,
+                    "account_key": row["account_key"],
+                    "run_id": row["run_id"],
+                    "band": row["band"],
+                    "fused_score": row["fused_score"],
+                    "calibrated_probability": row["calibrated_probability"],
+                    "observed_rate": row["observed_rate"],
+                    "calibration_n": _required_int(row, "calibration_n", key=row["account_key"]),
+                    "predicted_typology": row.get("predicted_typology"),
                     "reasons": _reasons(row.get("reason_codes")),
                     "exposure": money(
                         row.get("exposure_minor"), row.get("currency"), decimals=decimals
@@ -115,6 +143,18 @@ def list_alerts(
                         row.get("currency"),
                         decimals=decimals,
                     ),
+                    "rank": _required_int(row, "rank", key=row["account_key"]),
+                    "selected": bool(row.get("selected", False)),
+                    "beyond_capacity": bool(row.get("beyond_capacity", True)),
+                    # Present-with-null, not absent: the card renders a case chip and an
+                    # activity footer, and both are declared on the schema. The read model
+                    # supplies all four; they are the fields a second, narrower mapping
+                    # would quietly drop.
+                    "case_id": row.get("case_id"),
+                    "case_status": row.get("case_status"),
+                    "first_seen_at": _required_datetime(row, "first_seen_at", key=row["account_key"]),
+                    "last_seen_at": _required_datetime(row, "last_seen_at", key=row["account_key"]),
+                    "txn_count": _required_int(row, "txn_count", key=row["account_key"]),
                     "capacity_minutes": capacity,
                     "cutoff_rank": cutoff_rank,
                 }
@@ -273,6 +313,45 @@ def _stored_allocations(
         }
         for row in rows
     }
+
+
+def _required_int(row: dict[str, Any], field: str, *, key: str) -> int:
+    """A field the schema types as ``int``, read as an int or refused by name.
+
+    ``calibration_n`` and ``rank`` are not optional in the queue's contract, and a
+    default would be the wrong kind of repair: a card with ``rank: 0`` or
+    ``calibration_n: 0`` renders a position and a sample size that no run measured. A
+    stored row that cannot supply one is a missing allocation or an unscored account,
+    and saying so beats a number that reads as measured.
+    """
+    value = row.get(field)
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise BadRequest(
+            f"alert row for account {key!r} has no usable {field!r} "
+            f"(got {value!r}); the queue cannot rank a row it cannot position"
+        )
+    return int(value)
+
+
+def _required_datetime(row: dict[str, Any], field: str, *, key: str) -> datetime:
+    """A timestamp the card's activity footer renders, read or refused by name.
+
+    Same reasoning as :func:`_required_int`: an absent ``first_seen_at`` is missing
+    evidence about the account, and substituting ``now()`` would put a fabricated
+    timestamp on a card an analyst reads.
+    """
+    value = row.get(field)
+    if isinstance(value, datetime):
+        return value
+    if isinstance(value, str):
+        try:
+            return datetime.fromisoformat(value)
+        except ValueError:
+            pass
+    raise BadRequest(
+        f"alert row for account {key!r} has no usable {field!r} (got {value!r}); the queue "
+        "will not show an activity window it did not measure"
+    )
 
 
 def _reasons(raw: Any) -> list[dict[str, Any]]:
