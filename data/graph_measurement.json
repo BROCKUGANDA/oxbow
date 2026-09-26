@@ -1,0 +1,119 @@
+{
+  "corpus": "paysim",
+  "counterparty_degree": {
+    "accounts": 9073900,
+    "max": 113,
+    "median": 1.0,
+    "p90": 1.0,
+    "p99": 14.0
+  },
+  "cycles": {
+    "budget_exhausted": false,
+    "cycles_found": 0,
+    "distinct_edges": 20000,
+    "max_len": 6,
+    "min_len": 3,
+    "sample_rows": 20000,
+    "value_retention_min": 0.6
+  },
+  "degree_total": {
+    "accounts": 9073900,
+    "max": 113,
+    "median": 1.0,
+    "p90": 1.0,
+    "p99": 14.0
+  },
+  "file": "PS_20174392719_1491204439457_log.csv",
+  "measured_at": "2026-09-26T04:23:00+00:00",
+  "n_distinct_nameDest": 2722362,
+  "n_distinct_nameOrig": 6353307,
+  "n_rows": 6362620,
+  "reuse_ratio": 0.001464,
+  "thresholds": {
+    "cycles_min_count": 10,
+    "median_counterparty_degree_gt": 2.0
+  },
+  "top20_senders": [
+    {
+      "account": "C1677795071",
+      "edges": 3
+    },
+    {
+      "account": "C1999539787",
+      "edges": 3
+    },
+    {
+      "account": "C1462946854",
+      "edges": 3
+    },
+    {
+      "account": "C1065307291",
+      "edges": 3
+    },
+    {
+      "account": "C2098525306",
+      "edges": 3
+    },
+    {
+      "account": "C1976208114",
+      "edges": 3
+    },
+    {
+      "account": "C2051359467",
+      "edges": 3
+    },
+    {
+      "account": "C1530544995",
+      "edges": 3
+    },
+    {
+      "account": "C1832548028",
+      "edges": 3
+    },
+    {
+      "account": "C724452879",
+      "edges": 3
+    },
+    {
+      "account": "C363736674",
+      "edges": 3
+    },
+    {
+      "account": "C1902386530",
+      "edges": 3
+    },
+    {
+      "account": "C545315117",
+      "edges": 3
+    },
+    {
+      "account": "C1784010646",
+      "edges": 3
+    },
+    {
+      "account": "C400299098",
+      "edges": 3
+    },
+    {
+      "account": "C547982366",
+      "edges": 2
+    },
+    {
+      "account": "C564619176",
+      "edges": 2
+    },
+    {
+      "account": "C1312671831",
+      "edges": 2
+    },
+    {
+      "account": "C1314302355",
+      "edges": 2
+    },
+    {
+      "account": "C540178175",
+      "edges": 2
+    }
+  ],
+  "verdict": "STAR_SHAPED_TRIGGER_DAY4_FALLBACK"
+}

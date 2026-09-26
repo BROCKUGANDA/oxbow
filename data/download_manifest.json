@@ -1,0 +1,25 @@
+{
+  "_written_at": "2026-09-26T04:11:13+00:00",
+  "paysim": {
+    "archive": {
+      "archive": "paysim.zip",
+      "bytes": 186385561,
+      "reused": true,
+      "sha256": "f7eef9ffad5cfa64a034143a5c9b30491d189420b273d5ad5723ca40b596613d",
+      "url": "https://www.kaggle.com/api/v1/datasets/download/ealaxi/paysim1"
+    },
+    "files": [
+      {
+        "archive_member": "PS_20174392719_1491204439457_log.csv",
+        "bytes": 493534783,
+        "file": "PS_20174392719_1491204439457_log.csv",
+        "newlines": 6362621,
+        "retrieved_at": "2026-09-26T04:11:13+00:00",
+        "sha256": "16910f90577b0d981bf8ff289714510bb89bc71bff7d3f220f024e287e4eea6b"
+      }
+    ],
+    "license": "CC BY-SA 4.0",
+    "slug": "ealaxi/paysim1",
+    "source_url": "https://www.kaggle.com/datasets/ealaxi/paysim1"
+  }
+}

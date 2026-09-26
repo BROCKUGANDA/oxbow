@@ -20,7 +20,11 @@ sources:
     source_url: "https://www.kaggle.com/datasets/ealaxi/paysim1"
     retrieval: "scripts/download_data.py"
     files:
-      - name: "PS_2014_01.csv"
+      - name: "PS_20174392719_1491204439457_log.csv"
+        # Verified on retrieval: the archive really does contain this member. The
+        # filename carries the simulator's run timestamp, so it is not the
+        # tidy "PS_2014_01.csv" one might assume. P0 declared that guess and the
+        # downloader failed closed on it, which is the behaviour we want.
         # SHA-256 is verified at download and re-verified by `make data`. A
         # mismatch fails closed; it never proceeds with the wrong bytes.
         sha256: "RECORDED_AT_DOWNLOAD"
@@ -53,7 +57,11 @@ sources:
     name: "IBM Transactions for Anti-Money Laundering"
     role: secondary
     module: "network typology detection"
-    source_url: "https://www.kaggle.com/datasets/ealtman2019/ibm-transactions-for-anti-money-laundering"
+    # NOTE: the slug ends in "-aml". P0 declared the slug without that suffix
+    # and Kaggle answered 403 "Permission 'datasets.get' was denied", which
+    # reads like a credentials problem and is actually a wrong slug. Verified
+    # against the API: this is the dataset, 41.6 GB, CDLA-Sharing-1.0.
+    source_url: "https://www.kaggle.com/datasets/ealtman2019/ibm-transactions-for-anti-money-laundering-aml"
     retrieval: "scripts/download_data.py"
     files:
       - name: "transactions.csv"
