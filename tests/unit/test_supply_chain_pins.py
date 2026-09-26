@@ -32,14 +32,16 @@ PINNED: re.Pattern[str] = re.compile(r"^[^\s@]+@sha256:[0-9a-f]{64}$")
 # is legitimate. Kept as data so the test can demand a documented reason per entry.
 KNOWN_UNRESOLVED: dict[str, str] = {
     "quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z": (
-        "quay.io grants an anonymous token whose claims list actions: [] for this "
-        "repository, so the manifest digest needs a credential to resolve"
+        "anonymous manifest read refused from this host: quay.io issues a token whose "
+        "claims grant actions: [] for minio/*, so the digest needs a credential. Resolve "
+        "with `docker login quay.io` then "
+        "`docker buildx imagetools inspect <ref> --format '{{json .Digest}}'`"
     ),
     "minio/mc:RELEASE.2024-08-13T05-33-17Z": (
-        "unresolvable on both registries tried: docker.io answers insufficient_scope / "
-        "does-not-exist for this tag and quay.io blocks anonymous manifest reads, so the "
-        "reference itself needs correcting as well as pinning -- recorded as a finding, "
-        "not silently dropped, and unverifiable further while the engine is down"
+        "same host limitation: docker.io denies anonymous manifest reads for minio/* "
+        "here, and NOT just for this tag -- minio/mc:latest and minio/minio:latest are "
+        "denied identically, which is why this is recorded as an access limitation and "
+        "not as evidence that the tag is missing. Needs `docker login` to pin"
     ),
 }
 

@@ -17,13 +17,15 @@ x-restart: &restart
 # resolved from the registries on 2026-09-26 with `docker buildx imagetools inspect`,
 # which reads the manifest index without a running engine.
 #
-# Two MinIO images are the recorded exception, because they cannot be resolved
-# anonymously and I will not invent a digest: quay.io issues a token for
-# `repository:minio/minio:pull` whose claims grant `actions: []`, so the manifest
-# fetch answers 401 for an unauthenticated caller. That is server-side authorization,
-# not a client header problem -- the same flow resolves docker.io and ghcr.io freely.
-# The tag here is the published MinIO release tag, so it is reproducible but not
-# integrity-pinned; pin it with credentials via the TODO marker below.
+# Two MinIO images are the recorded exception: this host is denied anonymous manifest
+# reads for minio/* on both registries (quay.io returns a token whose claims grant
+# `actions: []` and answers 401 on the manifest; docker.io returns `pull access denied`
+# for these tags AND for `minio/minio:latest` / `minio/mc:latest`, so the limitation is
+# access, not evidence that a tag is gone). postgres/redis/mlflow/keycloak resolved
+# anonymously without trouble, which is what makes the asymmetry the diagnosis.
+# Unpinning them is not an option and guessing a digest would be worse, so they stay
+# tag-only until resolved with `docker login` -- see the TODO below and
+# tests/unit/test_supply_chain_pins.py, which enforces the rule and the exception list.
 # TODO(supply-chain): pin minio/minio and minio/mc digests with a Quay credential.
 
 services:
