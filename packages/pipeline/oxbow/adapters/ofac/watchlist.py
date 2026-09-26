@@ -171,8 +171,17 @@ class OfacWatchlistAdapter:
         best_score, best_basis, best_matched = max(candidates, key=lambda item: item[0])
         if best_score < self._min_similarity:
             return None
-        if best_basis == "alt_name":
-            best_basis = "token_subset" if best_score < 1.0 else "exact_normalised"
+        # Both the primary name and an alt name have to be reported in the port's
+        # vocabulary. The candidate list uses "name"/"alt_name" as *provenance* - which
+        # column won - but that is not a basis a reviewer can act on, and a consumer
+        # switching on `match_basis` would meet a value MATCH_BASES does not contain.
+        # The basis says *how* it matched; the column is carried by `matched_name`.
+        if best_score >= 1.0:
+            best_basis = "exact_normalised"
+        elif best_basis == "alt_name":
+            best_basis = "token_subset"
+        else:
+            best_basis = "edit_distance"
         return self._hit(record, best_score, best_basis, matched_name=best_matched or None)
 
     def _hit(

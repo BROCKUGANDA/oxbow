@@ -142,9 +142,7 @@ def test_the_makefile_does_not_invent_a_run_salt() -> None:
     testing the harness.
     """
     makefile = (REPO_ROOT / "Makefile").read_text(encoding="utf-8")
-    body = "\n".join(
-        line for line in makefile.splitlines() if not line.lstrip().startswith("#")
-    )
+    body = "\n".join(line for line in makefile.splitlines() if not line.lstrip().startswith("#"))
     assert "RUN_SALT" not in body, (
         "the Makefile assigns RUN_SALT; the salt is an identity that must come from the "
         "environment or .env, never from a recipe (01 A rule 8)"
@@ -540,7 +538,9 @@ def test_no_cache_or_dependency_tree_is_tracked() -> None:
     assert not offenders, f"cache or dependency tree tracked: {offenders[:10]}"
 
 
-@pytest.mark.parametrize("directory", ["data/raw", "data/interim", "data/processed", "data/snapshots"])
+@pytest.mark.parametrize(
+    "directory", ["data/raw", "data/interim", "data/processed", "data/snapshots"]
+)
 def test_ignored_data_directories_survive_a_fresh_clone(directory: str) -> None:
     """Four ``data/`` subdirectories are ignore-managed, so nothing in git keeps them.
 

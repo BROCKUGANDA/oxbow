@@ -87,7 +87,7 @@ def rules_only_severity_sum(frame: pl.DataFrame, cfg: BaselinesConfig) -> np.nda
             frame.get_column(RULE_COLUMN_SEVERITY_SUM)
             .cast(pl.Float64)
             .fill_null(0.0)
-            .to_numpy(zero_copy_only=False)
+            .to_numpy(allow_copy=True)
             .astype(np.float64)
         )
     severity_columns = [
@@ -103,7 +103,7 @@ def rules_only_severity_sum(frame: pl.DataFrame, cfg: BaselinesConfig) -> np.nda
             frame.get_column(name)
             .cast(pl.Float64)
             .fill_null(0.0)
-            .to_numpy(zero_copy_only=False)
+            .to_numpy(allow_copy=True)
             .astype(np.float64)
             for name in sorted(severity_columns)
         ]
@@ -134,7 +134,7 @@ def scorecard_reference(frame: pl.DataFrame, cfg: BaselinesConfig) -> np.ndarray
             f"{column.len()} row(s): the run mixed calibrated and uncalibrated rows, so the "
             "scorecard baseline would rank against a column that is sometimes absent"
         )
-    return column.cast(pl.Float64).to_numpy(zero_copy_only=False).astype(np.float64)
+    return column.cast(pl.Float64).to_numpy(allow_copy=True).astype(np.float64)
 
 
 def compute_baselines(

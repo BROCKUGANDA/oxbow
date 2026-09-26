@@ -14,11 +14,11 @@ the position.
 | **P3a** | time-stamped directed multigraph, rails, Leiden, cycles, subgraph cap | **DONE** | `verify.py --phase P3a` 2/2 — 80 tests (61 prior + `test_p3a_self_edges.py`'s 19), and two `oxbow graph` runs landing **5 byte-identical artifacts** with self-transfers admissible in the input |
 | **P2** | 60-75 features, feature-spec hash, leakage gate proven to bite, purged splits | **DONE** | `verify.py --phase P2` 2/2, re-measured directly after: `tests/test_leakage.py` **19 passed** (exit 0) and `tests/unit -k p2` **78 passed** (exit 0) — 78 where it was 76 before, so the P4 worker's new tests landed without breaking this layer |
 | **P3b** | golden fixture, rules R1-R12 | **DONE** | `verify.py --phase P3b` **2/2 PASS** — 86 tests across rules, golden matrix and the DEV-015 labelled-cycle file (the four that were failing earlier are green now) |
-| **P4** | WOE scorecard, LightGBM, Isolation Forest, calibration, fusion, SHAP | code present, **not verified by the orchestrator** | agent-reported full-stack run at 620 s/fold with an `import mlflow` MemoryError; nothing audited here |
+| **P4** | WOE scorecard, LightGBM, Isolation Forest, calibration, fusion, SHAP | in progress — **the two blockers are gone** | The segfault was a native load order (DEV-021) and the scorecard's monotonic binning had never run behind a swallowing fallback (DEV-020); both are fixed and mutation-proven. 15 §10 guardrail tests now exist (`test_p4_scorecard_guards.py`, `test_p4_calibration_fusion.py`), `tests/unit -k p4` = 16 passed. What is left is one scored run landing: `uv run oxbow score --max-events 40000` has cleared rules (736 hits / 72,135 accounts), features (75 published), and the fold plan (30-day embargo accepted over 2014-01-02 → 2014-06-12) and is in the per-fold model stack as at this entry. No gate in `verify.py` yet, because there is no run to gate on |
 | **P5** | EV allocation, greedy vs CP-SAT, Monte Carlo exposure, economics | **DONE** | `verify.py --phase P5` 1/1 (89 tests) |
-| **P6** | walk-forward backtest, ablation table, fairness, perturbation | in progress | `data/processed/eval.json` exists; its numbers have not been reproduced from a command here |
-| **P7** | FastAPI, SSE, RQ, ports/adapters, outbox, audit chain, OIDC | partially executed | `tests/integration/test_p7_api.py` now exists and **really serves the app** (its own words: "before this file, nothing had ever imported apps/api"); 9 session-hygiene tests pass against real SQLAlchemy statements, and the read model's connection leak is fixed. **8 of its tests cannot run on this host right now** — see item 15 |
-| **P8** | seven screens, state craft, `/dev/states`, zero-CLS | code present, **never rendered** | `apps/web/src/app/` routes exist; no build/browser evidence, no test config |
+| **P6** | walk-forward backtest, ablation table, fairness, perturbation | in progress | `oxbow backtest --corpus` now has a producer: the score stage lands the per-account corpus frame. 19 metric tests pass; no fold has produced a real number yet, so MODEL_CARD/ECONOMICS_CARD still carry placeholders |
+| **P7** | FastAPI, SSE, RQ, ports/adapters, outbox, audit chain, OIDC | **DONE** | `verify.py --phase P7` **3/3 PASS**: 22 port-conformance tests, 4 import-linter contracts kept, 77 integration tests (41 API + 23 worker + 9 session hygiene + 4 envelope doctrine) against a real Postgres. `apps/api/worker.py` exists — `jobs.py:103` had been enqueuing `api.worker.run_stages` into a module that did not |
+| **P8** | seven screens, state craft, `/dev/states`, zero-CLS | **rendered, measured, NOT claimed** | First browser run this app has ever had (Playwright against the chromium in the ms-playwright cache — nothing downloaded): **21 of 26 green**. vitest 51/51, tsc 0 errors, biome clean, zero `any`. **Measured CLS: /alerts 0.0153** against the plan's zero (a `div` shifts 0.0153 on resolution — the queue's matched-geometry claim does not hold), /cases 0.00059, /dev/states 0.00072. axe: 0 critical and 0 serious on every route sampled. Two gallery specs still red, both diagnosed below |
 | **P9** | packet, generated docs, demo snapshot, limitations | in progress | `README`/`ARCHITECTURE`/`MODEL_CARD`/`ECONOMICS_CARD`/`LIMITATIONS` written by `make eval`, which also overwrote the authored dataset card (see below) |
 
 Execution order is `P0 → P1a → P1b → P3a → P2 → P3b → …` per DEV-008: the graph
@@ -28,11 +28,25 @@ does not exist yet.
 ## Environment (measured, this session)
 
 ```
-uv python 3.12.13 · docker 29.6.2 UP · disk 104 GB free · PaySim on disk 493,534,783 B
+uv python 3.12.13 · docker UP (postgres healthy on host 5433, redis 6379, mlflow 5000,
+keycloak 8081, echo 8099, minio 9000) · disk 81 GB free of 953 GB · RAM 15.7 GB total,
+2.1–3.4 GB free while the pipeline and one agent shared the box · PaySim on disk
+493,534,783 B · IBM HI-Small_Trans.csv 475,664,283 B over 17.68 days
 ```
 
-The two P0 blockers are cleared: the Docker daemon is now running (B1) and free
-disk rose from 49 GB to 104 GB (B3).
+Memory is a load-bearing constraint, not a footnote: an `import mlflow` MemoryError
+reported by a worker as a blocker was host load under concurrent runs (it imports fine at
+2.19.0 — see the ledger), and running a full-corpus score stage next to an agent that is
+itself running pytest is how that happens.
+
+The two P0 blockers are cleared: the Docker daemon is running (B1) and disk is sufficient
+(B3), though free disk fell from 104 GB to 81 GB as the corpora and artifacts landed.
+
+`make` still does not exist on this host, so every §16 gate phrased as `make X` has been
+run as the underlying command (see "Two things about this host" below). `pnpm` is absent
+too; the web checks run as `./node_modules/.bin/<tool>`. Playwright is usable without a
+download because a chromium already sits in `~/AppData/Local/ms-playwright` — the config
+points at it by path rather than installing one.
 
 ## The load-bearing fact: DEV-011
 
@@ -258,7 +272,21 @@ Ordered by damage if any of it survives into a claimed-complete phase.
     `registry_from_repo`, whose parameter is a repository root -- the exact two-meanings
     bug its own docstring warns about. 11 passed after the one-line fix.
 
-14. **The dataset card's own figures were wrong, and the artifacts corrected them.**
+14. **CLOSED — PaySim's `step` semantics, measured rather than argued.** The card's
+   `step` range is 1–743 against `config/pipeline.yaml`'s `step_hours: 24`, i.e. the clock
+   this build declares is **743 days**, not the 30 synthetic days an earlier draft assumed.
+   The consequence is not cosmetic: `LIMITATIONS.md` §7 said five expanding folds with a
+   30-day embargo "do not fit inside the observation period" and proposed shortening the
+   fold design. Measured on the bytes: a 1,500,000-row PaySim ingest spans
+   **2014-01-02 → 2014-05-24 (143 days)**, and `build_walk_forward` accepted it —
+   `30d embargo over 2014-01-02T00:48:09 → 2014-06-12T11:48:49`, five folds, no knob
+   touched. §7's sentence is therefore true of the **IBM** corpus (17.68 days) and false of
+   PaySim, and it has to name which corpus it means. The `step_hours: 24` reading stays a
+   declared assumption (the published simulator's own `step` is an hour; the plan's 30-day
+   feature windows are only meaningful under the day reading) — the declaration is in
+   `config/pipeline.yaml` and the card prints it as declared, not measured.
+
+14a. **The dataset card's own figures were wrong, and the artifacts corrected them.**
     Running the new card verifier (`oxbow dataset_card`, wired into `make eval` as a
     verify-not-write step) found three: degree p90/p99 is **53 / 116**, not the 51 / 119
     the authored card carried; the IBM currency-name list I wrote included six names
@@ -269,34 +297,33 @@ Ordered by damage if any of it survives into a claimed-complete phase.
     step semantics feed the temporal-split rationale and
     `LIMITATIONS.md`'s "the corpus window is 18 days", so it needs a decision about
     which claim is authoritative before either number moves.
+    → resolved by item 14 above: the day reading is the declared one, the landed slice
+    spans 143 days, and the fold plan accepts it without any knob being touched.
 
-15. **The Docker engine went away mid-session, and it is the only thing between P7 and
-    a verdict.** `docker info` fails on `npipe://./pipe/dockerDesktopLinuxEngine`, and
-    `.env` has no `DATABASE_URL` (which is why `verify-audit` independently reports
-    `SKIPPED postgres`). Port 5432 still answers a PostgreSQL SSLRequest with `N`, so a
-    listener is up while the VM behind it is not — which turns into
-    `psycopg.OperationalError: server closed the connection unexpectedly` inside the 8
-    database-backed tests rather than a clean "no database" message. The daemon was UP
-    earlier in this session, so this is a state change, not a missing prerequisite.
-    Docker Desktop's executable is not at the path I tried and only a client exists at
-    `~/bin/docker.exe`, so I did not start it myself; restarting the engine is the
-    user's action, after which `uv run pytest -q tests/integration` is the command that
-    says whether P7 holds.
+15. **CLOSED — the Docker engine came back and P7 was judged on it.** The blocker recorded
+    below was real at the time (`docker info` failing on the Desktop Linux engine while port
+    5432 still answered a PostgreSQL `SSLRequest` with `N`, turning eight database-backed
+    tests into `server closed the connection unexpectedly`), and the diagnosis was right:
+    a state change, not a missing prerequisite, and not something to fix by restarting
+    someone else's VM without asking. The engine is up now and the verdict is in: **77
+    integration tests pass** (see the ledger). `docker compose ps` shows postgres healthy
+    on host port **5433** — host 5432 belongs to a different project's listener, which is
+    why a bare `localhost:5432` probe is not evidence about this stack.
 
 16. **A four-way audit found two gates that cannot pass and one that cannot fail.**
     Reports are in `docs/audit/` (`00-architecture.md`, `01-inventory.md`,
     `02-code-review.md`, `03-gates.md`), measured against HEAD `470b09c`.
-    * **The P7 port-conformance gate is UNRUNNABLE.** `tests/contracts_adapters/`
-      holds no test module — one fixture and nothing else — so `pytest -q
-      tests/contracts_adapters` collects zero tests and exits 5. The gate named "port
-      conformance across every adapter" cannot pass, and every one of the 7 ports, 7
-      `Null*` implementations and 7 adapter families is unverified against the others.
-      `apps/api/routers/cases.py:482` cites
-      `tests/contracts_adapters/test_watchlist_conformance.py` as its justification and
-      that file does not exist. **This is the "part judges interrogate".**
-    * **The P4 gate is UNRUNNABLE.** `verify.py` selects it with `-k p4` and no
-      `test_p4_*.py` exists anywhere, so the phase's real state is "no tests", which
-      the phase table's "not verified by the orchestrator" understates.
+    * **CLOSED — the P7 port-conformance gate was UNRUNNABLE.** `tests/contracts_adapters/`
+      held one fixture and no test module, so the gate collected zero tests and exited 5,
+      while `apps/api/routers/cases.py:482` cited
+      `tests/contracts_adapters/test_watchlist_conformance.py` as its justification. That
+      file now exists (22 tests, and it is the reason the OFAC adapter's `match_basis`
+      vocabulary was corrected to stay inside `MATCH_BASES`), and the phase is claimed:
+      `verify.py --phase P7` 3/3.
+    * **CLOSED — the P4 gate was UNRUNNABLE.** `-k p4` matched nothing because no
+      `test_p4_*.py` existed. Sixteen do now, and they found two real defects (DEV-020)
+      rather than only describing code that works. The gate itself still has to be written,
+      because a P4 gate worth having runs a scored corpus and there is not one yet.
     * **`make verify` being green does not mean the gates pass.** Bare `verify.py` calls
       `verify(PHASES)`, which runs only the gates of phases *marked done*; P7 is not, so
       its unrunnable gate is skipped rather than passed. Run a phase explicitly to see
@@ -313,10 +340,14 @@ Ordered by damage if any of it survives into a claimed-complete phase.
       in `data/graph_measurement.json` (`C1065307291` and 19 more). That is the PII
       boundary the plan draws at ingest. The remedy is a history rewrite, which is a
       human's call, so it is recorded rather than performed.
-    * Also missing and load-bearing: `apps/api/worker.py` (so `make worker` and the
-      `full` Compose profile cannot start), `scripts/demo_seed.py` (item 11), `PROMPT.md`,
-      `notebooks/02_features.ipynb`, `notebooks/03_validation.ipynb`, `apps/api/Dockerfile`
-      and `apps/web/Dockerfile` (both referenced by `docker-compose.yml`).
+    * **Missing and load-bearing, part-closed.** `apps/api/worker.py` now exists (with
+      23 tests and the `api.worker.run_stages` name `jobs.py` had been enqueueing into
+      nothing), and so do `apps/api/Dockerfile` and `apps/web/Dockerfile`, digest-pinned as
+      the compose services already assume; compose also gained the `data/` and `out/`
+      mounts without which the worker container cannot declare a source at all. Still
+      missing: `scripts/demo_seed.py` (item 11), `PROMPT.md`, `notebooks/02_features.ipynb`
+      and `notebooks/03_validation.ipynb` — all four named by the plan, none of them
+      invented here as a checkbox.
     * The suite is otherwise green: **790 passed, 8 failed, 1 skipped in 427 s**, with
       all 8 failures in `tests/integration/test_p7_api.py` and item 15 the stated cause.
       `ruff check .` is at 45 errors, down from 85; the `F821` class is now zero.
@@ -342,7 +373,27 @@ Ordered by damage if any of it survives into a claimed-complete phase.
     P6 therefore need a genuine full-corpus run, which is minutes of compute rather than
     more diagnosis.
 
+17. **`data/interim/<source>/run_manifest.json` is one mutable pointer, and any ingest
+    re-points every downstream stage.** Found the hard way: a worker container run inside
+    Docker executed `oxbow ingest` with a small limit, rewrote the PaySim manifest to 2,000
+    rows over a 1-day window, and the next `oxbow score` refused at the fold plan —
+    `the embargo puts the training cutoff (2013-12-03 …) before the training start` —
+    because the corpus it "had" was now seven days short of one. Nothing was corrupted and
+    nothing was wrong with the code: the manifest is the contract, and it had honestly
+    changed. The same hazard is built into the P1b gate, which runs
+    `oxbow ingest --limit 200000` twice; **`make verify` therefore changes what the score
+    stage reads**, and a score run must re-assert its own corpus first. Two follow-ons:
+    (a) per-run manifests under `data/interim/<source>/runs/<run_id>.json` with the flat
+    file as a symlink/pointer would make the pointer explicit; (b) the score stage should
+    print the landed window next to the embargo arithmetic when it refuses, since "the
+    corpus you are reading is 1 day long" is the sentence the operator needed. Related, and
+    already fixed: a manifest recorded **absolute** batch paths, so a container that wrote
+    `/srv/data/interim/...` produced a manifest the host could not read and discarded a
+    6.4M-event corpus as "absent on disk" — now relative on both sides, pinned by
+    `tests/unit/test_p1b_manifest_path_portability.py`.
+
 ## Verification ledger (run by the orchestrator, not reported by agents)
+
 
 §16 requires a gate to be run in-session with observed output, so this is the list of
 what has been independently executed here, with the number that came back. Anything
@@ -350,6 +401,18 @@ not on this list is *not* verified, regardless of what a package's own tests cla
 
 | What | Command | Result |
 | --- | --- | --- |
+| P7 gate set, this session | `uv run python scripts/verify.py --phase P7` | **3 gates run, 3 passed** — 22 conformance, `Contracts: 4 kept, 0 broken`, and **77 passed in 160.62s** across the API, worker, session hygiene and envelope doctrine |
+| Append race, isolated | `uv run pytest -q tests/integration/test_p7_api.py` | **41 passed**. The two order-dependent assertions in `test_concurrent_append_gives_one_success_and_one_409` are now scoped to the race itself (`chain_seq == winner + 1`, counts by `trace_id`). Mutation-proven: `+ 2` produced `E assert 2 == (1 + 2)` |
+| The scorecard solver actually runs | seeded 4,000-row monotone signal through `fit_feature_binning` | `boundary_source='optbinning-mip'`, eight value bins, bad rates `0.011 → 0.711` monotone, `monotonic_direction='ascending'`, identical table inside and outside the pytest warning filter. Before DEV-020 every numeric feature came from `quantile-fallback` |
+| P4 guardrail tests | `uv run pytest -q tests/unit -k p4` | **16 passed** (9 guards + 6 calibration/fusion/explain + the scorer seam) |
+| 1.5M-row ingest | `uv run oxbow ingest -s paysim --limit 1500000` | **1,500,000 canonical events, 0 quarantined, 0 silently coerced, 69.4s**, window `2014-01-02 → 2014-05-24` = 143 days, which is what makes the 30-day embargo arithmetically satisfiable |
+| Score at the configured slice | `uv run oxbow score` (500,000-event target) | **did not finish in 1h47m** (72 CPU-minutes) while two agents shared the host; killed. The lesson is the same one that withdrew the P3a graph gate: a phase gate that cannot finish is not a gate |
+| Score on a bounded slice | `uv run oxbow score --max-events 120000` | killed by a 90-minute budget: the rules-layer graph alone took ~65 min for **173,031 nodes, 0 cycles, 23,646 communities** |
+| Score on the run now in flight | `uv run oxbow score --max-events 40000` | rules **736 hits over 72,135 accounts, 11 rules below the hit-rate floor**, graph `0 cycles / 6,150 communities`; features 75 published; **fold plan accepted** (`30d embargo over 2014-01-02 → 2014-06-12`); per-fold model stack running at the time of writing |
+| First browser run of the web app | `./node_modules/.bin/playwright test` (chromium from the ms-playwright cache) | **21 passed, 5 failed in 5.8 min.** Measured CLS `/alerts 0.0153` (gate: zero), `/cases 0.00059`, `/dev/states 0.00072`; axe 0 critical/serious on every route sampled. After two fixes the gallery file is 3 passed / 2 failed |
+| Web static + unit | `tsc --noEmit` / `biome check .` / `vitest run` | **0 type errors**, 109 files clean, **51 tests in 11 files all passing** |
+| P0 toolchain after the guard fix | `uv run pytest -q tests/unit/test_p0_toolchain.py` | **44 passed** (was 3 failed when the import-order guard asserted `osqp` before `pyarrow`; see DEV-021) |
+
 | Completed-phase gates as claimed | `uv run python scripts/verify.py` | superseded by the per-phase rows below, run after DEV-016/017/018 landed |
 | P1a gates | `uv run python scripts/verify.py --phase P1a` | **2/2 PASS** — PaySim and all three IBM members match their recorded SHA-256 against bytes on disk (475 MB + 34 MB + 324 KB) |
 | P1b gates | `uv run python scripts/verify.py --phase P1b` | **3/3 PASS** — 28 contract tests; 200,000 canonical events with 0 quarantined and 0 silently coerced from PaySim **and** from IBM through its own adapter. Held pending on the dataset-card deliverable, not on ingest |

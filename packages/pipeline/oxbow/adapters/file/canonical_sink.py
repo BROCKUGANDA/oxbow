@@ -81,6 +81,45 @@ class SinkConfigError(RuntimeError):
     """Raised when the determinism block cannot be honoured as written."""
 
 
+def _repo_root_for(interim_root: Path) -> Path:
+    """The directory an ``interim_root`` batch path is recorded relative to.
+
+    The recorded path is ``<root>/<...>/<source>/<batch>.parquet`` and the reader joins it
+    against the root, so the root has to be the directory that contains the per-source
+    subdirectories. That is not always one level up: callers build the sink both ways --
+    ``for_repo`` (root is ``<repo>``, interim is ``<repo>/data/interim``) and directly as
+    ``CanonicalSink(interim_root=tmp_path / "interim")`` -- so the answer depends on the
+    layout, and guessing wrong in either direction records a path that resolves one
+    directory off from the real file.
+
+    The two shapes the tree actually uses are recognised by name. Anything else is
+    treated as "interim sits directly under the root", which is the direct-construction
+    case, and is the only guess available without the caller saying so.
+    """
+    resolved = Path(interim_root).resolve()
+    if resolved.name == INTERIM_DIRNAME and resolved.parent.name == DATA_DIRNAME:
+        # <repo>/data/interim -- the layout for_repo builds.
+        return resolved.parent.parent
+    # <root>/interim -- the shape a direct CanonicalSink(interim_root=...) caller uses.
+    return resolved.parent
+
+
+def _relative_to_root(path: Path, root: Path) -> str:
+    """``path`` as a POSIX string relative to ``root``, falling back to the absolute form.
+
+    The fallback is the honest behaviour when the artifact genuinely lives outside the
+    repo (an ``--out`` directory elsewhere on disk): recording it absolutely still lets
+    the next reader open it on this machine, whereas a fabricated relative path would
+    not open anywhere.
+    """
+    target = Path(path)
+    base = Path(root)
+    try:
+        return target.resolve().relative_to(base.resolve()).as_posix()
+    except ValueError:
+        return target.as_posix()
+
+
 @dataclass(frozen=True, slots=True)
 class BatchArtifact:
     """One Parquet file the sink actually wrote, with the digest of its bytes."""
@@ -175,10 +214,16 @@ class CanonicalSink:
         interim_root: Path,
         duckdb_path: Path,
         determinism: Mapping[str, Any],
+        repo_root: Path | None = None,
     ) -> None:
         self.interim_root = Path(interim_root)
         self.duckdb_path = Path(duckdb_path)
         self.settings = parquet_settings(determinism)
+        # The repo root, kept only to relativise recorded artifact paths so a manifest
+        # written inside a container (/srv) is still readable from the host. Derived from
+        # interim_root when not given, but that derivation is only valid for the default
+        # layout -- `for_repo` passes the real root because --out relocates interim_root.
+        self.repo_root = Path(repo_root) if repo_root is not None else _repo_root_for(self.interim_root)
 
     @classmethod
     def for_repo(
@@ -205,12 +250,26 @@ class CanonicalSink:
             interim_root=interim,
             duckdb_path=Path(root) / OUT_DIRNAME / WAREHOUSE_DIRNAME / f"oxbow{DUCKDB_EXTENSION}",
             determinism=determinism,
+            repo_root=Path(root),
         )
 
     def source_dir(self, source_dataset: str) -> Path:
         directory = self.interim_root / source_dataset
         directory.mkdir(parents=True, exist_ok=True)
         return directory
+
+    def resolve(self, recorded: str) -> Path:
+        """A recorded batch path as something openable on this machine.
+
+        `BatchArtifact.path` is repo-relative so the manifest survives being written by a
+        container at /srv and read by a host checkout. That makes it useless on its own to
+        a caller that just wants to open the file -- `pl.read_parquet(artifact["path"])`
+        and a DuckDB `CREATE VIEW` both resolve against the process working directory, not
+        the repo root. They resolve the record first, so no caller has to remember that
+        the string in the manifest is a root-relative path and not a path.
+        """
+        candidate = Path(recorded)
+        return candidate if candidate.is_absolute() else self.repo_root / candidate
 
     def batch_path(self, source_dataset: str, batch_id: str) -> Path:
         """``data/interim/<source>/<batch_id>.parquet`` — the port's own resume path."""
@@ -244,7 +303,13 @@ class CanonicalSink:
         return BatchArtifact(
             batch_id=batch_id,
             source_dataset=source_dataset,
-            path=target.as_posix(),
+            # Repo-relative, not absolute. The reader (cli.py:594) opens `batch.path`
+            # verbatim, so an absolute path makes the manifest non-portable across the two
+            # places this tree legitimately runs: a container writes /srv/data/interim/...
+            # and the host then reads that manifest and looks for a literal /srv path it
+            # does not have, failing with "is declared by paysim's run manifest but is
+            # absent on disk". Same convention as eval.Artifact (relpath + root / relpath).
+            path=_relative_to_root(target, self.repo_root),
             rows=ordered.height,
             sha256=sha256_of_file(target),
             window_start=_as_datetime(window["start"]),

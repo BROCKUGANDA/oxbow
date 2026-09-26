@@ -253,9 +253,7 @@ def feature_matrix(
             columns.append(_stable_category_codes(column).astype(np.float64))
         else:
             casted = column.cast(pl.Float64, strict=False) if column.dtype != pl.Float64 else column
-            columns.append(
-                casted.fill_null(np.nan).to_numpy(zero_copy_only=False).astype(np.float64)
-            )
+            columns.append(casted.fill_null(np.nan).to_numpy(allow_copy=True).astype(np.float64))
     if not columns:
         raise FrameContractViolationError("a model needs at least one feature column")
     matrix = np.column_stack(columns)

@@ -76,7 +76,11 @@ from oxbow.scoring.drift import (
     per_feature_drift,
     psi_from_shares,
 )
-from oxbow.scoring.errors import DegenerateBinningError, SeparationDetectedError
+from oxbow.scoring.errors import (
+    DegenerateBinningError,
+    ScorecardFitError,
+    SeparationDetectedError,
+)
 from oxbow.scoring.frame import (
     COL_ACCOUNT_KEY,
     COL_AS_OF_TS,
@@ -723,6 +727,61 @@ def test_separation_detected() -> None:
     message = str(excinfo.value)
     assert "fit.separation_auc_threshold=1.0" in message, message
     assert "AUC=" in message, message
+
+
+def test_a_feature_with_no_value_evidence_is_excluded_and_recorded() -> None:
+    """A dead feature is a fact about the fold; a dead scorecard is a failure.
+
+    ``fit_feature_binning`` refuses when no value bin is populated -- every row null or
+    every row a structural zero. That is the right local answer and the wrong global one:
+    on the first real score run this build produced, ``zero_value_count_30d`` on PaySim did
+    exactly that, and the refusal propagated out of ``fit_scorecard`` to kill **all five
+    folds**, discarding 75 features that had evidence with it. A single no-information
+    attribute must cost that attribute its place in the table, not the model.
+
+    Asserted in both directions: the zero-valued feature is excluded and *named* in the
+    guard log while the scorecard still fits, and a frame whose only informative feature is
+    the zero one still refuses, because a scorecard with no attributes is the thing the
+    original raise was protecting against.
+    """
+    cfg = _scorecard()
+    frame = _tiny_frame()
+    labels = frame.data.get_column(COL_LABEL).to_numpy().astype(np.float64)
+    rng = _rng()
+    informative = rng.normal(0.0, 1.0, frame.n_rows) + 1.6 * labels
+    dead = replace(
+        frame,
+        data=frame.data.with_columns(
+            # every row a structural zero: no value bin can be populated
+            pl.Series("quiet", np.zeros(frame.n_rows, dtype=np.float64)),
+            # carries the signal, and is not the label, so separation stays honest
+            pl.Series("loud", informative),
+            pl.Series("leaky", rng.normal(0.0, 1.0, frame.n_rows)),
+        ),
+    )
+
+    model = fit_scorecard(dead, cfg, _tiny_registry())
+
+    assert "quiet" not in model.admitted_features, model.admitted_features
+    failures = " ".join(model.guard_log.binning_failures)
+    assert "quiet" in failures, (
+        f"the excluded feature is not named in the guard log ({failures!r}); an exclusion "
+        "nobody can read is the silent variant of the bug this test exists for"
+    )
+    assert "no populated value bin" in failures, failures
+    assert "quiet" not in model.binnings, "a feature with no bin table must not reach the table"
+    assert model.admitted_features, "the informative feature was not admitted either"
+
+    everything_dead = replace(
+        frame,
+        data=frame.data.with_columns(
+            pl.Series("quiet", np.zeros(frame.n_rows, dtype=np.float64)),
+            pl.Series("loud", np.zeros(frame.n_rows, dtype=np.float64)),
+            pl.Series("leaky", np.zeros(frame.n_rows, dtype=np.float64)),
+        ),
+    )
+    with pytest.raises(ScorecardFitError, match="no scorecard exists"):
+        fit_scorecard(everything_dead, cfg, _tiny_registry())
 
 
 def test_psi_action_degrades_scoring() -> None:

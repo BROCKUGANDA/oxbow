@@ -415,7 +415,8 @@ def test_ingest_deterministic(
             determinism=determinism,
         )
         artifact = sink.write_batch(PAYSIM_NAMESPACE, serial.batch_id, serial.events)
-        landed = Path(str(artifact["path"]))
+        # Recorded repo-relative for the container/host handoff; resolved to open the bytes.
+        landed = sink.resolve(str(artifact["path"]))
         digests.append(hashlib.sha256(landed.read_bytes()).hexdigest())
         assert artifact["sha256"] == digests[-1]
         assert artifact["rows"] == 3

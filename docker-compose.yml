@@ -200,6 +200,22 @@ services:
       REDIS_URL: redis://redis:6379/0
       RUN_SALT: ${RUN_SALT:?RUN_SALT is required and must come from the environment, never the repo}
       OXBOW_SEED: ${OXBOW_SEED:-1337}
+    volumes:
+      # apps/api/Dockerfile:50-53 deliberately bakes no corpus into the image (1.2 GB,
+      # and a service that ingests needs it mounted), but nothing here mounted it, so the
+      # first real job failed with `SourceDeclarationError: none of the declared files`
+      # -- the worker had no data/raw/paysim to declare against.
+      #
+      # data/ is read-write, not :ro, and that is not a shortcut. Ingest writes its
+      # canonical Parquet and the DuckDB views under data/interim/<source>/, so a read-only
+      # mount fails the stage with `OSError: [Errno 30] Read-only file system:
+      # /srv/data/interim/paysim/<batch>.parquet.partial` -- the run then goes red at
+      # ingest with zero rows. Only the raw corpus half needs protecting, and a container
+      # that can rewrite a manifest under data/interim is worse than one that cannot, so
+      # the narrower mount is the right one: raw/ in, read-only.
+      - ./data:/srv/data
+      - ./data/raw:/srv/data/raw:ro
+      - ./out:/srv/out
     ports: ["8000:8000"]
 
   worker:
@@ -217,6 +233,15 @@ services:
       REDIS_URL: redis://redis:6379/0
       RUN_SALT: ${RUN_SALT:?RUN_SALT is required}
       OXBOW_SEED: ${OXBOW_SEED:-1337}
+    volumes:
+      # Same mounts as `api`, and for the same reason. This is the container that actually
+      # runs the stages, so without data/ mounted here the run fails at ingest declaration
+      # and there is nothing for the API to report on. data/ is read-write because ingest
+      # writes data/interim/<source>/*.parquet and the DuckDB views; only the raw half is
+      # re-mounted read-only over the top of it.
+      - ./data:/srv/data
+      - ./data/raw:/srv/data/raw:ro
+      - ./out:/srv/out
 
   web:
     build:

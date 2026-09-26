@@ -44,7 +44,12 @@ from oxbow.scoring.binning import (
     fit_feature_binning,
 )
 from oxbow.scoring.config import FeatureRegistry, ScorecardConfig
-from oxbow.scoring.errors import PointsInvariantError, ScorecardFitError, SeparationDetectedError
+from oxbow.scoring.errors import (
+    DegenerateBinningError,
+    PointsInvariantError,
+    ScorecardFitError,
+    SeparationDetectedError,
+)
 from oxbow.scoring.frame import (
     COL_ACCOUNT_KEY,
     COL_AS_OF_TS,
@@ -245,9 +250,7 @@ def _column_values(frame: pl.DataFrame, feature: str, dtype: str) -> np.ndarray:
     column = frame.get_column(feature)
     if dtype == "categorical":
         return np.array(column.to_list(), dtype=object)
-    return (
-        column.cast(pl.Float64).fill_null(np.nan).to_numpy(zero_copy_only=False).astype(np.float64)
-    )
+    return column.cast(pl.Float64).fill_null(np.nan).to_numpy(allow_copy=True).astype(np.float64)
 
 
 def _scan_separation(
@@ -334,7 +337,17 @@ def fit_scorecard(
     for feature in registry.names:
         dtype = "categorical" if feature in categorical else "numerical"
         values = _column_values(fit_rows, feature, dtype)
-        binning = fit_feature_binning(feature, values, labels, cfg.binning, dtype)
+        try:
+            binning = fit_feature_binning(feature, values, labels, cfg.binning, dtype)
+        except DegenerateBinningError as exc:
+            # A feature with no value evidence in this fold -- every row null or every
+            # row a structural zero -- is a fact about the corpus, not a broken fit.
+            # PaySim's `zero_value_count_30d` is exactly that shape, and refusing the
+            # whole fold for it threw away 75 features that did have evidence. The
+            # exclusion is recorded rather than silent, and the guard that actually
+            # matters is below: if nothing survives admission, there is no scorecard.
+            binning_failures.append(f"{feature}: {exc}")
+            continue
         binnings[feature] = binning
         table = {row.label: row.woe for row in binning.rows}
         observed = assign_bins(values, binning, cfg.binning)

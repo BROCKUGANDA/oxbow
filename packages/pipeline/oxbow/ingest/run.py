@@ -652,7 +652,17 @@ def run_ingest(
         if writer is not None:
             if state.batches:
                 state.views = writer.register_views(
-                    canonical_files={source.source_id: [str(b["path"]) for b in state.batches]},
+                    # Batch paths are recorded repo-relative (see
+                    # canonical_sink._relative_to_root) so the manifest survives the
+                    # container/host handoff, but a DuckDB CREATE VIEW resolves its file
+                    # list against the process working directory, not the repo root. The
+                    # sink's own resolver turns the record back into something openable
+                    # here, rather than every caller remembering to.
+                    canonical_files={
+                        source.source_id: [
+                            str(writer.resolve(str(b["path"]))) for b in state.batches
+                        ]
+                    },
                     quarantine_files=state.quarantine_files,
                 )
             state.manifest_path = writer.write_run_manifest(

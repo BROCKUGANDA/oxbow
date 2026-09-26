@@ -26,7 +26,9 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 _READS_PY: Final = re.compile(
     r"""(?:environ\.get|environ\[|getenv)\(\s*["']([A-Z][A-Z0-9_]{2,})["']"""
 )
-_READS_TS: Final = re.compile(r"process\.env\.([A-Z][A-Z0-9_]{2,})|process\.env\[['\"]([A-Z][A-Z0-9_]{2,})['\"]\]")
+_READS_TS: Final = re.compile(
+    r"process\.env\.([A-Z][A-Z0-9_]{2,})|process\.env\[['\"]([A-Z][A-Z0-9_]{2,})['\"]\]"
+)
 
 # Set by the runtime or the platform rather than by this project, so declaring them in
 # .env.example would be noise: Node/Next provide NODE_ENV, uv and the container runtime
@@ -122,11 +124,7 @@ def test_the_gate_itself_bites() -> None:
     """
     reads = {"RUN_SALT": "x.py", "NODE_ENV": "y.ts", "OXBOW_NOT_DOCUMENTED_ANYWHERE": "z.py"}
     declared = _declared_keys()
-    missing = sorted(
-        name
-        for name in reads
-        if name not in declared and name not in FRAMEWORK_VARS
-    )
+    missing = sorted(name for name in reads if name not in declared and name not in FRAMEWORK_VARS)
     assert missing == ["OXBOW_NOT_DOCUMENTED_ANYWHERE"], missing
     assert "RUN_SALT" in declared, "RUN_SALT must stay declared or the check above lies"
 
@@ -152,8 +150,7 @@ RETIRED_COMPOSE_NAMES: dict[str, str] = {
 def test_compose_injects_the_names_the_code_reads() -> None:
     text = (REPO_ROOT / "docker-compose.yml").read_text(encoding="utf-8")
     injected = {
-        match.group(1)
-        for match in re.finditer(r"^ {6}([A-Z][A-Z0-9_]{2,}):", text, re.MULTILINE)
+        match.group(1) for match in re.finditer(r"^ {6}([A-Z][A-Z0-9_]{2,}):", text, re.MULTILINE)
     }
     for name, reader in COMPOSE_CONSUMES.items():
         assert name in injected, (
