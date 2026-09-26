@@ -184,6 +184,20 @@ Ordered by damage if any of it survives into a claimed-complete phase.
     silently). So even with a landed case the PDF step would fail here. Both must be
     named in `LIMITATIONS.md`; only the first is this build's to fix.
 
+11. **`make demo` is a phantom gate.** The target runs
+    `$(PY) scripts/demo_seed.py --restore --boot-budget 90`, and that script does not
+    exist; `data/snapshots/` is empty. So the plan §15 requirement -- "boots offline in
+    under 90 seconds" -- has never been attempted, while `make help` advertises it. The
+    seeder and a pinned snapshot are the work; the hosted read-only demo stays blocked
+    on the licensing decision already recorded in `BACKLOG.md` (00 §I.4), which is a
+    human call, not a task to absorb.
+
+12. **A full-suite number taken while workers are editing is not a verdict.** The one
+    snapshot captured concurrently reported 114 failed / 538 passed / 34 errors,
+    including every test in `test_p9_packet.py`; the same file run alone reports 28
+    passed, 1 skipped. `make test` has to be read on a quiet tree, and the green claim
+    in §16 belongs to that run only.
+
 ## Verification ledger (run by the orchestrator, not reported by agents)
 
 §16 requires a gate to be run in-session with observed output, so this is the list of
