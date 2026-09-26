@@ -986,6 +986,48 @@ def test_the_orphan_sweep_leaves_a_live_job_and_a_young_row_alone(
     assert _job_row(warehouse, "p7w-young-1").state == api_worker.JOB_STARTED
 
 
+def test_a_job_sweeps_the_rows_a_killed_horse_left_behind(
+    warehouse: dict[str, Any], queue: _FakeQueue, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """RQ forks a horse per job; the kernel can kill *it* while the worker carries on.
+
+    The orphan sweep used to run only at process start, so the common failure measured on
+    this stack -- two `OSError: [Errno 12] Cannot allocate memory` rows sitting in
+    `job_run` -- left its run `running` until the next deploy, which is the one row shape
+    this module exists to prevent. Every job now runs the sweep before it begins.
+
+    Asserted both ways: an orphan older than the grace closes as a side effect of an
+    unrelated job starting, and the job that happened to start is untouched by it.
+    """
+    container = warehouse["container"]
+    orphan = _abandoned_run(
+        warehouse, job_id="p7w-horse-killed", kind="pipeline", created_at=_ago(5)
+    )
+    # `""` is the probe's evidence for "there is no such job".
+    monkeypatch.setattr(api_worker, "_rq_state_probe", lambda _c: (lambda _job_id: ""))
+
+    submission = _submit(container, queue, stages=("ingest",), kind="pipeline")
+    api_worker.run_stages(
+        run_id=submission.run_id,
+        stages=["ingest"],
+        kind="pipeline",
+        container=container,
+        runners={"ingest": _ok_runner(3)},
+    )
+
+    dead = _run_row(container, orphan)
+    assert dead["state"] == RunState.FAILED.value, (
+        f"the horse's run is still {dead['state']!r} after another job ran the sweep"
+    )
+    assert "abandoned" in str(dead["error"])
+    assert _job_row(warehouse, "p7w-horse-killed").state == api_worker.JOB_FAILED
+    live = _run_row(container, submission.run_id)
+    assert live["state"] == RunState.COMPLETE.value, (
+        "the sweep condemned the job that ran it: its own row is younger than the grace, "
+        "and that is the only thing standing between this and a worker that eats itself"
+    )
+
+
 def _abandoned_run(
     warehouse: dict[str, Any],
     *,

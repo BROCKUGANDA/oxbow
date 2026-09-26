@@ -305,7 +305,16 @@ def _running_totals(
     expressions.append((index - run_start_index + 1).cast(pl.Int64).alias(ROWS))
     for name in sources:
         total = pl.col(name).cum_sum().over([*groups])
-        expressions.append(total.cast(pl.Int64).alias(f"c_{name}"))
+        # The total keeps its source's dtype. Money is integer minor units (DEV-005) and a
+        # money column is Int64 on the way in, so it needs no cast; what the unconditional
+        # `.cast(pl.Int64)` was actually doing to the float sources is twofold and both bad
+        # -- it truncated a fractional running total toward zero, and it refused the whole
+        # stage on the first corpus big enough to hit it. `_squares` is the case: a single
+        # PaySim transfer of 3.5e9 minor units squares to 1.2e19, past `i64::MAX`, and the
+        # sum of squares for one account's 30-day window died with
+        # `InvalidOperationError: conversion from f64 to i64 failed in column '_squares'`.
+        # A moment is not an amount; it does not get an integer type imposed on it.
+        expressions.append(total.alias(f"c_{name}"))
     return started.select(expressions)
 
 

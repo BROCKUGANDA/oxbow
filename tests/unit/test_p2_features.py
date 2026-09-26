@@ -17,7 +17,7 @@ whose failure nobody can interpret gets deleted rather than fixed.
 from __future__ import annotations
 
 import dataclasses
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Final
 
@@ -944,3 +944,51 @@ def test_a_bare_graph_frame_is_refused_where_a_provider_is_expected() -> None:
             graph_features=pl.DataFrame({"account": ["a"], "pagerank": [0.5]}),  # type: ignore[arg-type]
             fold=_fold(),
         )
+
+
+def test_a_running_total_keeps_the_units_of_its_own_source() -> None:
+    """Money stays integer; a moment stays a float, however large it gets.
+
+    ``_running_totals`` used to cast every accumulated source to ``Int64``. For a money
+    column that was a no-op wearing a name; for the float intermediates it did two kinds of
+    damage. It truncated a fractional running total toward zero, and it refused the whole
+    feature build on the first corpus with amounts big enough to matter. Measured, on the
+    full PaySim ingest: one transfer of 3.5e9 minor units squares to 1.2e19, and
+    ``i64::MAX`` is 9.22e18, so ``_squares`` died on its own before any window arithmetic --
+
+        InvalidOperationError: conversion from `f64` to `i64` failed in column '_squares'
+        for 11 out of 80000 values: [1.2190e19, 1.1968e19, 2.1355e19]
+
+    A sum of squares is a statistic, not an amount. The integer-minor-units rule (DEV-005)
+    is about money, and applying it to a moment is the version of over-correction that
+    breaks the build instead of protecting the cents.
+    """
+    from oxbow.features.kinds import POSITION, SQUARES, _running_totals
+
+    t0 = datetime(2024, 1, 1, tzinfo=UTC)
+    rows = pl.DataFrame(
+        {
+            "entity": ["A", "A", "A", "B"],
+            EVENT_TS: [t0, t0 + timedelta(days=1), t0 + timedelta(days=2), t0],
+            TXN_ID: ["t1", "t2", "t3", "t4"],
+            POSITION: [0, 1, 2, 3],
+            "amount_minor": pl.Series([100, 200, 300, 50], dtype=pl.Int64),
+            SQUARES: pl.Series([1.0e19, 2.0e19, 3.0e19, 4.0e18], dtype=pl.Float64),
+            "ratio": pl.Series([0.5, 0.25, 0.125, 0.75], dtype=pl.Float64),
+        }
+    )
+
+    totals = _running_totals(rows, ["entity"], ["amount_minor", SQUARES, "ratio"])
+
+    money = totals["c_amount_minor"]
+    assert money.dtype == pl.Int64, money.dtype
+    assert money.to_list() == [100, 300, 600, 50], "money must still accumulate in minor units"
+    squares = totals[f"c_{SQUARES}"]
+    assert squares.dtype == pl.Float64, squares.dtype
+    assert squares.to_list() == [1.0e19, 3.0e19, 6.0e19, 4.0e18], (
+        "a sum of squares past i64::MAX is the normal case for large transfers, not an error"
+    )
+    ratio = totals["c_ratio"]
+    assert ratio.to_list() == [0.5, 0.75, 0.875, 0.75], (
+        "the running total was truncating a fractional source toward zero -- 0.75 arrived as 0"
+    )

@@ -728,6 +728,43 @@ def _run_state(run: StageRun) -> str:
 # --- the queued entrypoint --------------------------------------------------
 
 
+def _sweep_orphans(
+    container: Container, *, probe: Callable[[str], str | None] | None = None
+) -> int:
+    """Close abandoned rows at the start of every job, not only at process start.
+
+    :func:`reclaim_orphaned` runs once in :func:`main`, which covers a worker that
+    restarts. It does not cover the commoner failure on this stack: RQ forks a horse per
+    job, the kernel OOM-kills *that* process, and the worker carries on serving. Nothing
+    ever runs the boot sweep again, so a run the killed horse was holding stays ``running``
+    indefinitely -- the exact row shape this module's whole failure story exists to
+    prevent, arriving by a route no ``except`` block sees.
+
+    Re-running the sweep per job closes that window without a new mechanism: the same
+    grace period and the same "an unreachable Redis is not evidence" refusal apply, so a
+    job another live worker is running is never condemned, and a job's own fresh row is
+    younger than the grace by construction.
+
+    It cannot fail the job it precedes. Bookkeeping about somebody else's abandoned row is
+    not this stage's business, and a worker that dies of a good intention serves nobody.
+    """
+    try:
+        observer = probe if probe is not None else _rq_state_probe(container)
+        closed = reclaim_orphaned(container, probe=observer)
+    except Exception as exc:  # noqa: BLE001 - deliberately broad, and it only logs
+        logger.warning(
+            "the per-job orphan sweep was skipped", error=f"{type(exc).__name__}: {exc}"
+        )
+        return 0
+    if closed:
+        logger.warning(
+            "the per-job orphan sweep closed rows",
+            closed=len(closed),
+            jobs=[str(row.job_id) for row in closed],
+        )
+    return len(closed)
+
+
 def run_stages(
     *,
     run_id: str,
@@ -772,6 +809,7 @@ def run_stages(
             return replayed
         _validate(kind, stages)
         ledger.mark_started(trace_id=str(trace_id))
+        _sweep_orphans(resolved)
         summary = _drive(
             resolved,
             kind=kind,

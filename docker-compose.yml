@@ -216,7 +216,21 @@ services:
       - ./data:/srv/data
       - ./data/raw:/srv/data/raw:ro
       - ./out:/srv/out
-    ports: ["8000:8000"]
+    ports: ["${API_PORT:-8000}:8000"]
+    healthcheck:
+      # /healthz is unauthenticated by design (apps/api/main.py:162-176 -- "a banner that
+      # needs a token to explain why the API is unusable is not a banner"), so it is the
+      # only path a probe can use. `< 500` rather than `== 200` because a DEGRADED api is
+      # serving: 03 J asks for degraded mode, and a healthcheck that calls degraded process
+      # unhealthy would restart the thing that is telling the operator what is missing.
+      # No curl in the image (python:slim ships none), so this is urllib through `python -c`.
+      test:
+        - CMD-SHELL
+        - python -c "import sys,urllib.request as u; sys.exit(0 if u.urlopen('http://127.0.0.1:8000/healthz', timeout=4).status < 500 else 1)"
+      interval: 10s
+      timeout: 6s
+      retries: 6
+      start_period: 40s
 
   worker:
     build:
@@ -225,6 +239,12 @@ services:
     <<: *restart
     profiles: ["full"]
     command: ["python", "apps/api/worker.py"]
+    # SIGTERM to a worker mid-stage is the difference between a job that finishes and a
+    # run row the next boot has to sweep as abandoned. RQ installs its own SIGTERM
+    # handler and stops between jobs, so the grace period is what lets the in-flight
+    # stage land its transitions; Docker's 10s default is shorter than any real ingest,
+    # and this stack's measured ingest of the full corpus took 252s.
+    stop_grace_period: 5m
     depends_on:
       redis: { condition: service_healthy }
       postgres: { condition: service_healthy }
