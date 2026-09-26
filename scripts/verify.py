@@ -150,7 +150,7 @@ PHASES: tuple[Phase, ...] = (
     Phase(
         name="P2",
         done=False,
-        pending_reason="feature layer in build",
+        pending_reason="splits, providers and the grain bridge are tested; the score stage still refuses at the unwired bridge call",
         gates=(
             Gate(
                 "the leakage gate passes AND is proven to bite",
@@ -165,7 +165,7 @@ PHASES: tuple[Phase, ...] = (
     Phase(
         name="P3b",
         done=False,
-        pending_reason="rules R1-R12 in build",
+        pending_reason="82 rules and golden-matrix tests pass; 4 labelled-cycle tests disagree with DEV-015/018 (STATE item 13)",
         gates=(
             Gate(
                 "golden fixture is self-consistent (hand-computed ground truth)",
@@ -180,7 +180,7 @@ PHASES: tuple[Phase, ...] = (
     Phase(
         name="P4",
         done=False,
-        pending_reason="scorecard and models in build",
+        pending_reason="models/ and scoring/ exist with tests, but nothing has trained end to end because the score stage stops at the bridge seam",
         gates=(
             Gate(
                 "scorecard scaling, guards, calibration and fusion",
@@ -212,7 +212,7 @@ PHASES: tuple[Phase, ...] = (
     Phase(
         name="P6",
         done=False,
-        pending_reason="backtest harness not started",
+        pending_reason="backtest/ modules and metrics tests exist; no fold has produced a real number, so the model and economics cards carry placeholders",
         gates=(
             Gate(
                 "all five folds, the ablation table and the leakage control",
@@ -223,7 +223,7 @@ PHASES: tuple[Phase, ...] = (
     Phase(
         name="P7",
         done=False,
-        pending_reason="API and adapters in build",
+        pending_reason="apps/api is served by tests/integration/test_p7_api.py; 8 of its tests need PostgreSQL through the Docker engine that went down mid-session",
         gates=(
             Gate(
                 "port conformance across every adapter",
@@ -238,7 +238,7 @@ PHASES: tuple[Phase, ...] = (
     Phase(
         name="P8",
         done=False,
-        pending_reason="web app not started",
+        pending_reason="screens and primitives compile clean over 64 files (tsc), but nothing has been rendered in a browser, so states/CLS/reduced-motion are unverified",
         gates=(
             Gate(
                 "unit tests for the design system and state craft",
@@ -249,7 +249,7 @@ PHASES: tuple[Phase, ...] = (
     Phase(
         name="P9",
         done=False,
-        pending_reason="packet, generated docs and demo not started",
+        pending_reason="docs render and the packet refuses for want of a landed case; make demo still calls a scripts/demo_seed.py that does not exist",
         gates=(
             Gate(
                 "audit hash chain verifies",
