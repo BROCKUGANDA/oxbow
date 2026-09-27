@@ -270,13 +270,13 @@ PHASES: tuple[Phase, ...] = (
             "fps probe, which the null-file warehouse cannot draw and says so rather than "
             "passing vacuously. Measured CLS is 0.000000 on /alerts and 0.000000 on "
             "/cases/[id] against a zero budget, and 0.000438 on /dev/states against 0.001. "
-            "51 vitest tests over 11 files, tsc --noEmit clean, biome clean at zero findings. "
-            "The one red spec is the dataset-fidelity clause driven against the live API: "
-            "13 of /model's panes never leave their loading state even though their route "
-            "answered 200, so the pane-error tier DESIGN.md §5 promises is not reached on "
-            "that path, and /network's node shape still diverges from the client decoder "
-            "(apps/api serves id/label/is_seed, contract.ts:773 requires "
-            "key/node_type/flagged/is_cycle_member/hops/true_size)"
+            "63 vitest tests over 12 files, tsc --noEmit clean, biome clean at zero findings "
+            "across 90 files. The one red spec is the dataset-fidelity clause driven against "
+            "the live API: 13 of /model's panes never leave their loading state even though "
+            "their route answered 200, so the pane-error tier DESIGN.md §5 promises is not "
+            "reached on that path. Re-measure before claiming it closed — the decision rail "
+            "on /cases/[id] was the same class of defect and is fixed, with a page-harness "
+            "test that mounts the route as a page."
         ),
         gates=(
             # `bun run test:unit --run` -- the declared package script, so this gate runs the same

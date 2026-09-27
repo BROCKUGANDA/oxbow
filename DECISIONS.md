@@ -973,3 +973,44 @@ Not offered as an option: lowering `min_positives_for_calibration` to make a fol
 calibrated. That is the same sin as widening a leakage guard to get past it — the guard exists
 because isotonic on a thin positive count steps on noise and reports a confident 0.0 or 1.0, and
 the money layer multiplies whatever it is given.
+
+---
+
+## DEV-025 — folds that degrade do not carry the same columns, and the artifact refused to hold them. **Fixed; the alignment is on the live path.**
+
+A run that scored all five folds died on its last step:
+
+    ComputeError: schema names differ: got p_gbm, expected p_fused_raw
+
+`cli.py` stacked the per-fold frames with `pl.concat(..., how="vertical_relaxed")`, which aligns
+**by position** and rejects a name mismatch. A fold that degraded to `scorecard_and_rules_only`
+carries no `p_gbm` and no `anomaly_norm`; a fold that ran the full stack carries no `drift_banner`
+or `drift_score_psi`. Each mode drops two columns and adds two others, so the frames are the same
+*width* with different *names* — the one shape positional alignment cannot absorb. Every model had
+been fitted and not one number reached disk, which is the worst place in the pipeline for a guard
+to fire.
+
+**The decision: align on names at the persist boundary, and keep the contract check on the union.**
+`stack_scored_frames` concatenates `how="diagonal_relaxed"` and then refuses if any
+`SCORED_ROW_COLUMNS` entry is missing from the result. A channel one fold lacked is a null on that
+fold's rows, which is what `scoring_mode` already says; a column NO fold produced is a build
+defect, and the all-degraded run is the case that proves the distinction matters — its `p_gbm`
+would otherwise ship as a column of nothing but nulls that the read model would present as a
+channel that exists and is empty.
+
+Alternatives considered and rejected:
+
+- **Make every fold carry every column by writing explicit nulls in each producer.** It keeps
+  `vertical_relaxed` strict, but it spreads the schema across four call sites and the next
+  optional channel has to be remembered in all of them. The contract is already declared in one
+  place; the check belongs next to it.
+- **Suppress the degraded folds so all frames agree.** That throws away the two folds that carry
+  the refusal evidence, which is the opposite of what `record_refusals_in_artifact` exists for.
+- **`diagonal` without the contract check.** A typo in a column name would then become a second
+  all-null column instead of a failure — the silent widening this file keeps refusing.
+
+The first fix went into `write_run_artifacts`, which is exported, documented, tested and **has no
+production caller** — the score stage lands its own frames. It was green in its own test file and
+would still have crashed the run. The gate is now a source assertion on `_score_models_and_land`
+itself, mutation-proved by putting the positional concat back.
+
