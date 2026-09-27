@@ -128,7 +128,7 @@ DEV-011. Verdict: `STAR_SHAPED_TRIGGER_DAY4_FALLBACK`.
 | Payment formats | Cheque 1,864,331 · Credit Card 1,323,324 · ACH 600,797 · Cash 490,891 · Reinvestment 481,056 · Wire 171,855 · Bitcoin 146,091 | `data/ibm_graph_measurement.json#/payment_formats` · measured |
 | Measured | 2026-09-26 by `scripts/measure_ibm_graph.py` | `data/ibm_graph_measurement.json#/measured_at_utc` · measured |
 | Timestamp assumption | instants are read in `Africa/Kampala`, the deployment zone, because the file declares no zone of its own | `config/pipeline.yaml#/ibmaml/source_timezone_assumption` · declared in config/ |
-| Licence | **CDLA-Sharing-1.0** (the repository code is Apache-2.0; the data is not) | `config/sources.yaml#/sources/1/license` · declared in config/ |
+| Licence | **CDLA-Sharing-1.0** (the repository code is MIT; the data is not) | `config/sources.yaml#/sources/1/license` · declared in config/ |
 | Citation | ealtman2019, *IBM Transactions for Anti-Money Laundering*, Kaggle | `config/sources.yaml#/sources/1/citation` · declared in config/ |
 | Label caveat | Is Laundering is a curated research annotation, not a prosecuted case, and it is the corpus's ONLY label column: 5,177 of 5,078,345 rows. Typology membership is not a label at all — it comes from the annotated attempt blocks in HI-Small_Patterns.txt, which cover just 3,209 of those 5,177 positives, so 1,968 laundering rows carry no typology and a row with no typology is unlabeled rather than clean. No threshold-flag concept exists here, so label_is_flagged is 0 with the meaning "no equivalent", never "checked and cleared". | `config/sources.yaml#/sources/1/label_caveat` · declared in config/, counts measured per DEV-014 |
 | Known bias 1 | Synthetic injection over a simulated base; the injected patterns are designed, not observed. | `config/sources.yaml#/sources/1/known_biases/0` · declared in config/ |
@@ -230,7 +230,7 @@ a config flag the ingest path checks rather than a comment.
 
 * Both corpora carry share-alike on derived data (CC BY-SA 4.0 and CDLA-Sharing-1.0).
   That covers the canonical event table, the feature tables and any published sample,
-  so the repository's Apache-2.0 code licence does not release the data terms. The
+  so the repository's MIT code licence does not release the data terms. The
   stricter terms govern, and they are stated here rather than discovered later.
 * Every account identifier downstream of ingest is `sha256(account_id + RUN_SALT)`,
   truncated to the configured prefix and rendered as `ACC-<HEX>`
