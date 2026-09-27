@@ -118,8 +118,8 @@ every route and on page one of every exported packet — asserted by
 
 ## 04 · Built with
 
-**Language and environment** — Python 3.12 (uv, locked), TypeScript 5.6 (pnpm 9,
-`pnpm-lock.yaml` committed), Node 20+.
+**Language and environment** — Python 3.12 (uv, locked), TypeScript 5.6 (Bun as the package
+manager and task runner, `bun.lock` committed; Node serves the build), Node 20+.
 
 **Data and pipeline** — Polars 1.32 · DuckDB 1.1 · Pandera 0.20 (contracts) · PyArrow 18 ·
 NumPy 1.26 + Numba · NetworkX 3.3, python-igraph and leidenalg (communities) · WeasyPrint
