@@ -36,6 +36,7 @@ import os
 import re
 import secrets
 import sys
+import threading
 import time
 from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
@@ -2930,3 +2931,146 @@ def test_a_pipe_in_a_signed_field_cannot_move_the_digest_boundary(
     assert chained[1].prev_hash == chained[0].row_hash, "the second link does not join the first"
     verification = verify_chain(chained)
     assert verification.ok and verification.rows_checked == 2, verification.first_broken
+
+
+def test_two_unrelated_cases_can_be_decided_at_the_same_instant(
+    warehouse: dict[str, Any],
+) -> None:
+    """The other half of the chain race: two writers on DIFFERENT cases must both land.
+
+    `test_concurrent_append_gives_one_success_and_one_409` forces REPEATABLE READ to
+    exercise the unique-constraint backstop, which is a real property but not the one plan
+    §13 is about. §13's "one success and one 409" is the four-eyes rule for two analysts on
+    the SAME case; it is enforced by the case row lock and `expected_version`, not by the
+    chain. Before the advisory lock, the chain was global and its tip was read unlocked, so
+    two decisions on unrelated cases both computed the same link and one was refused with a
+    409 blaming a collision the server had caused — a per-case integrity rule paid for as a
+    per-database throughput limit.
+
+    What is asserted is the consequence of the lock rather than its existence: the second
+    writer's `chain_seq` is exactly one above the first, which is only possible if it read
+    the tip AFTER the first committed — i.e. it waited, instead of racing and losing.
+
+    The overlap here is a real thread, so the window is narrow; the mutation is the proof.
+    Removing `chain_append_lock` from `decisions.py` turns this red with a Conflict, and
+    that is the assertion doing its job, not the timing.
+    """
+    container = warehouse["container"]
+    read_model = container.read_model
+    run_id, low = warehouse["run_id"], warehouse["low"]
+
+    loader = container.new_session()
+    case_ids = [
+        str(api_decisions.open_case(loader, read_model, run_id=run_id, account_key=key).case_id)
+        for key in (low[0], low[1])
+    ]
+    loader.commit()
+    loader.close()
+
+    def principal(subject: str) -> Principal:
+        return Principal(
+            subject=subject, roles=("analyst",), display_name=subject, source="local-jwt"
+        )
+
+    def submit(session: Session, case_id: str, subject: str, trace: str) -> dict[str, Any]:
+        case = session.get(api_decisions.Case, case_id)
+        assert case is not None
+        return api_decisions.record_decision(
+            session,
+            read_model,
+            container.audit_sink(session),
+            container.economics,
+            case=case,
+            write=api_decisions.DecisionWrite(
+                action="escalate",
+                reason="cross-case concurrency candidate",
+                expected_version=int(case.version),
+                reversal_of_decision_id=None,
+                principal=principal(subject),
+                trace_id=trace,
+            ),
+        )
+
+    holder = container.new_session()
+    waiter = container.new_session()
+    outcome: dict[str, Any] = {}
+
+    def wait_and_write() -> None:
+        # The thread must not let an exception escape: a refused writer has to be reported
+        # through the assertion below, not through a lost thread that makes the test pass by
+        # never observing the failure.
+        try:
+            outcome["receipt"] = submit(
+                waiter, case_ids[1], "p7-operator-waiter", "p7-crosscase-waiter"
+            )
+            waiter.commit()
+            outcome["status"] = "ok"
+        except BaseException as exc:
+            waiter.rollback()
+            outcome["status"] = type(exc).__name__
+            outcome["error"] = exc
+
+    try:
+        first = submit(holder, case_ids[0], "p7-operator-holder", "p7-crosscase-holder")
+        # The holder's transaction is still open, so it still owns the chain lock. Starting
+        # the writer now is what asks the question: does it wait, or does it collide?
+        thread = threading.Thread(target=wait_and_write, name="p7-crosscase-waiter")
+        thread.start()
+        # Wait until the second writer is demonstrably parked on the advisory lock.
+        # `pg_locks` is the observable; a sleep would only prove the machine was slow,
+        # and a test that passes because nothing happened yet is worse than no test.
+        parked = False
+        probe = container.new_session()
+        try:
+            for _ in range(200):
+                waiting = probe.execute(
+                    text(
+                        "SELECT count(*) FROM pg_locks "
+                        "WHERE locktype = 'advisory' AND NOT granted"
+                    )
+                ).scalar_one()
+                if int(waiting) > 0:
+                    parked = True
+                    break
+                time.sleep(0.05)
+        finally:
+            probe.close()
+        assert parked, (
+            "the second writer never blocked on the chain lock, so this test did not "
+            "create the overlap it claims to test — it proved nothing about ordering"
+        )
+        holder.commit()
+        thread.join(timeout=30)
+        assert not thread.is_alive(), (
+            "the second writer is still parked after the holder committed: the lock is "
+            "not being released with the transaction"
+        )
+
+        assert outcome["status"] == "ok", (
+            "the second writer on an UNRELATED case was refused as "
+            + str(outcome.get("status")) + ": " + repr(outcome.get("error"))
+        )
+        seq_a = int(first["chain_seq"])
+        seq_b = int(outcome["receipt"]["chain_seq"])
+        assert seq_b == seq_a + 1 or seq_a == seq_b + 1, (
+            f"the two links are {seq_a} and {seq_b}, which is not a contiguous pair — the "
+            "second writer read a stale tip instead of waiting for the first to commit"
+        )
+
+                # Both links must exist in the table, not just in the receipts the callers
+        # were handed: a refused writer that was quietly swallowed would still have
+        # returned a receipt if the exception had been caught in the wrong place.
+        both = container.new_session()
+        try:
+            landed = both.execute(
+                text("SELECT count(*) FROM decision WHERE trace_id IN (:first, :second)"),
+                {"first": "p7-crosscase-holder", "second": "p7-crosscase-waiter"},
+            ).scalar_one()
+            assert int(landed) == 2, (
+                f"the chain receipts said two decisions, the table holds {landed}"
+            )
+        finally:
+            both.close()
+    finally:
+        holder.close()
+        waiter.close()
