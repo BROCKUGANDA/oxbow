@@ -41,3 +41,21 @@ each cut gets a line here naming what was dropped.
 - IBM-AML's column names must be re-verified against the real bytes on arrival if
   the adapter was written before the download landed; `make data --verify-only`
   is the check.
+- **The JS dependency tree has 26 advisories at `high` or above (6 critical).**
+  This is not new risk — it is a gate that could not run. `make audit` called
+  `pnpm audit --audit-level=high` and pnpm is not installed here (DEV-022's whole
+  premise), so the web half of the supply-chain gate was silently absent while the
+  Python half (`pip-audit`) reported. Now `bun audit --audit-level=high` runs and
+  says what it says. Nothing here blocks on it yet, and nothing should: P8's
+  demo-mode posture is a local stack on loopback. What would force it is the
+  hosted-demo decision already logged above — the moment an origin that is not
+  `localhost` serves this app, the critical advisories are the gate.
+- **Per-frame SSE flushing through the Caddy edge is unmeasured** (DEV-023).
+  `flush_interval -1` is set on the `/api` route and
+  `tests/unit/test_caddy_edge.py` turns red if the directive or its route
+  disappears, but a *measurement* of incremental delivery needs a run in flight:
+  a finished run's stored events leave `apps/api/events.py` in one burst, so the
+  edge and a direct fetch to the API are indistinguishable (measured: 4 frames, one
+  830-byte read, identical either way). What would force it: stream
+  `/api/runs/{id}/events/stream` while the pipeline is actually running, sampling
+  arrival times at `:8080` and against the API port, in the same window.
