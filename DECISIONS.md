@@ -1127,3 +1127,57 @@ account (latest fold, latest as-of) before it validates, and an account whose *c
 refused is refused by name instead of rescued by an older fold's calibrated number. Three of the
 four tests added to `tests/unit/test_p7_warehouse_landing.py` fail if that collapse is reverted.
 
+## DEV-027 — the shared fold fit, the row labels that outran it, and the generator that now says so. **Fixed as disclosure; the model ablation is open work.**
+
+The first completed real-corpus walk-forward (2026-09-27, run `01M3HZHE02G8HC8D0HSEV5SP78` over
+`out/score/01M3H8WG436R394NZT2GS1KG69/backtest_corpus.parquet`) published nine variants whose
+discrimination metrics were byte-identical: Rules only, Scorecard only (WOE logistic), LightGBM
+without graph features and LightGBM with graph features all reported PR-AUC 0.059115, AUROC
+0.61015557 and Brier 0.00123847, and only net benefit moved.
+
+That is not an arithmetic bug. It is what `run_real` was built to do: one `SharedFoldScores`
+instance handed to all eight honest rows, because re-fitting the same configuration eight times
+cannot measure anything new — a correct memory decision on a host where a fold fit costs ten
+minutes and gigabytes. The consequence was editorial, and worse: the eight row labels name
+MODEL configurations while the run varies only the policy ladder, and PR-AUC is
+policy-independent. A reader of the card would take identical columns as evidence that the
+graph features add nothing — the exact opposite of the detection thesis the build rests on.
+
+The artifact already knew. `ablation_caveat` reads "Every honest arm here runs the full fitted
+stack; the rows differ by policy ladder, not yet by feature subset or model… named here rather
+than faked by reusing one scorer's numbers under eight labels." It lived in a JSON file no
+reviewer opens.
+
+**The decision: move the disclosure into the published document, and leave the model ablation
+unbuilt rather than imitate it.**
+
+- `eval.py` reads `ablation_caveat` from the artifact and prints it under the table in
+  MODEL_CARD.md prefixed "**What this table does not measure:**". The generator copies the
+  artifact's own sentence; it is not free to compose a kinder one.
+- The limitations item was re-keyed. It was
+  `published_metrics_are_harness_self_checks_until_p6_runs_for_real`, false in both directions
+  now — the figures are no longer self-checks, and the real limitation was absent. The item id
+  is chosen at run time from the variants' declared provenance.
+- `harness_provenance` had been `loaded["backtest_model_card"] is not None`: "a model card
+  exists, therefore every figure is a harness self-check". It now inspects the variants. On
+  this run the CLI was printing a `fake_harness` warning beside a card whose first line says
+  `provenance=real_corpus`.
+
+Alternatives considered and rejected:
+
+- **Give each row a different slice of the same scores and let the metrics fall out.** A
+  PR-AUC for a feature subset requires a model fitted on that subset. Re-channelling one
+  scorer's output is the imitation the caveat names: rows that look like an ablation and
+  measure a partition of one model's rankings.
+- **Cut the model rows and ship the policy rows, relabelled.** §17 lists the ablation table
+  under "Never cut, at any cost"; the policy ladder alone is worth showing, but shipping it
+  with model-shaped labels is the lie and removing the labels quietly narrows a never-cut item.
+- **Fit eight stacks.** Roughly 80 CPU-minutes and a memory ceiling this host has already
+  killed runs against. It is the correct end state, recorded as such, not tonight's.
+
+What would close it: channel and feature-subset switches in `models/run.py` (which today picks
+`scoring_mode` itself from its guards, so scorecard-only cannot be *asked for*), a per-arm
+scorer factory in `backtest/run.py`, and a re-run. Until then the table ships with the sentence
+that bounds it, and a reviewer can check that sentence against `ablation_results.json` in one
+line.
+
