@@ -92,6 +92,31 @@ def test_the_repository_declares_a_license_and_says_which() -> None:
     )
 
 
+def test_the_code_licence_agrees_everywhere_it_is_stated() -> None:
+    """The licence was stated in five places and they were not the same licence.
+
+    LICENSE says MIT while config/sources.yaml, the OpenAPI `license_info`, the served
+    `repository_licence` field and the generated cards all said Apache-2.0. A reader who
+    trusts the machine-readable one — an API client, or anyone opening `/openapi.json`
+    before reusing the code — gets a different answer from the file that actually grants
+    the rights. So: no tracked text may name a code licence other than the one in LICENSE.
+    Dataset terms (CC BY-SA, CDLA-Sharing) are a separate fact and are checked by
+    test_every_licensed_source_is_declared_in_the_license_notice, not here.
+    """
+    license_text = (REPO_ROOT / "LICENSE").read_text(encoding="utf-8")
+    assert license_text.startswith("MIT License"), "LICENSE is not the MIT licence"
+    other = re.compile(r"(?:Apache-\d[\d.]*|GPL-\d[\d.]*|AGPL-\d[\d.]*|LGPL-\d[\d.]*|BSD-[23]-Clause|Unlicense|CC0-1\.0)")
+    offenders: list[str] = []
+    for path, text in tracked_text().items():
+        if path.name in {"LICENSE", "DECISIONS.md", "STATE.md", "BACKLOG.md"}:
+            continue  # the decision record may quote a rejected proposal
+        for match in other.finditer(text):
+            offenders.append(f"{path.relative_to(REPO_ROOT)}: {match.group(0)}")
+    assert not offenders, (
+        f"tracked files name a code licence other than MIT: {sorted(set(offenders))[:6]}. The "
+        "fix is to agree with LICENSE, not to widen this check."
+    )
+
 def test_no_developer_home_path_is_committed() -> None:
     """`C:\\Users\\name\\...` is a username, and it is a path that exists on one machine.
 

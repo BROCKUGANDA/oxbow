@@ -24,7 +24,7 @@ data only: no live rail is connected, and no decision here moves money.
 - **IBM-AML**: ibmaml HI-Small bundle (data/raw/ibmaml/HI-Small_Trans.csv) (source: `data/ibm_graph_measurement.json#/source` · provenance: `measured`). 5,078,345 (source: `data/ibm_graph_measurement.json#/n_transaction_rows` · provenance: `measured`) transaction rows, 515,080 (source: `data/ibm_graph_measurement.json#/n_distinct_accounts` · provenance: `measured`) accounts, 647,939 (source: `data/ibm_graph_measurement.json#/n_directed_edges_excl_self_loops` · provenance: `measured`) directed edges excluding self-loops, of which 591,212 (source: `data/ibm_graph_measurement.json#/n_self_loop_rows` · provenance: `measured`) rows are self-loops. Laundering-labelled: 0.1019 (source: `data/ibm_graph_measurement.json#/laundering_rate_pct` · provenance: `measured`) (5,177 (source: `data/ibm_graph_measurement.json#/laundering_rows` · provenance: `measured`) rows).
 - **PaySim citation:** E. A. Lopez-Rojas, A. Elmir, S. Axelsson, "PaySim: A financial mobile money simulator for fraud detection," 28th European Modeling and Simulation Symposium (EMSS), Larnaca, Cyprus, 2016.
 - **IBM-AML citation:** ealtman2019, IBM Transactions for Anti-Money Laundering, Kaggle. (source: `config/sources.yaml#/sources/1/citation` · provenance: `declared in config/`)
-- **Licence obligations on derived data.** PaySim (CC BY-SA 4.0): Share-alike. Any derivative dataset we publish, including the canonical event table and any feature extract, inherits CC BY-SA 4.0 and must be released under the same terms with attribution. IBM-AML (CDLA-Sharing-1.0): Share-alike on derived data. Any derivative dataset we publish inherits CDLA-Sharing-1.0. The repository code is Apache-2.0, but the DATA carries the stricter CDLA terms. That covers the canonical event table, the feature tables and any published sample.
+- **Licence obligations on derived data.** PaySim (CC BY-SA 4.0): Share-alike. Any derivative dataset we publish, including the canonical event table and any feature extract, inherits CC BY-SA 4.0 and must be released under the same terms with attribution. IBM-AML (CDLA-Sharing-1.0): Share-alike on derived data. Any derivative dataset we publish inherits CDLA-Sharing-1.0. The repository code is MIT-licensed, but the DATA carries the stricter CDLA terms. That covers the canonical event table, the feature tables and any published sample.
 - **Elliptic** is cite-only and **IEEE-CIS** is refused outright; the reasons are in `data/DATASET_CARD.md`, and both are declared in `config/sources.yaml` so ingest cannot read them by accident.
 
 ## The measurement that changed the architecture
@@ -75,16 +75,16 @@ A stale document is detectable: run `make eval` and diff these digests.
 
 | artifact | stage | state | bytes | sha256 |
 | ---| ---| ---| ---| --- |
-| `data/graph_measurement.json` | P1a | present | 2,192 | `8055beaff887d58e…` |
-| `data/ibm_graph_measurement.json` | P1a | present | 2,575 | `829bde0c47214f18…` |
-| `data/ibm_cycle_measurement.json` | P3a | present | 4,661 | `6ddb671dfca36634…` |
+| `data/graph_measurement.json` | P1a | present | 2,073 | `b3b009856c1ef7d0…` |
+| `data/ibm_graph_measurement.json` | P1a | present | 2,431 | `feafd509443283b5…` |
+| `data/ibm_cycle_measurement.json` | P3a | present | 4,521 | `7663116be7a271ac…` |
 | `data/processed/ibm_typologies.parquet` | P1b | present | 9,357 | `faf682effbf58107…` |
-| `data/download_manifest.json` | P0 | present | 841 | `a7368658cfcff07e…` |
+| `data/download_manifest.json` | P0 | present | 816 | `7496669571de0af7…` |
 | `out/backtest/model_card.json` | P6 | present | 15,728 | `2cd06143d76f7445…` |
 | `out/backtest/ablation_results.json` | P6 | present | 273,053 | `69ca1437570e77ee…` |
 | `out/p4/scored_rows.parquet` | P4b | **absent** | - files | `absent` |
 | `out/warehouse/drift_period` | P4b | **absent** | - files | `absent` |
 | `out/warehouse/curve_point` | P5 | **absent** | - files | `absent` |
 | `out/audit/audit.jsonl` | P7 | **absent** | - files | `absent` |
-| `out/warehouse/runs.jsonl` | P7 | present | 11,057 | `cc3f13c0c7f4d756…` |
+| `out/warehouse/runs.jsonl` | P7 | present | 34,179 | `064c1093efdc3da8…` |
 

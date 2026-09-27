@@ -400,7 +400,7 @@ def licence(
                 }
                 for card in cards
             ],
-            "repository_licence": "Apache-2.0",
+            "repository_licence": "MIT",
             "derived_data_licence": (
                 "CC BY-SA 4.0 (PaySim derivatives) and CDLA-Sharing-1.0 (IBM-AML derivatives). "
                 "Both impose share-alike on derived data, which covers the canonical event table "

@@ -134,7 +134,7 @@ sources:
       ~510 MB of the ~8.18 GB served by the slug.
     license_obligation: >-
       Share-alike on derived data. Any derivative dataset we publish inherits
-      CDLA-Sharing-1.0. The repository code is Apache-2.0, but the DATA carries
+      CDLA-Sharing-1.0. The repository code is MIT-licensed, but the DATA carries
       the stricter CDLA terms.
     citation: >-
       ealtman2019, IBM Transactions for Anti-Money Laundering, Kaggle.

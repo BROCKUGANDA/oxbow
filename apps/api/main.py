@@ -134,7 +134,7 @@ def create_app() -> FastAPI:
         # the docs route is a convenience with no bearing on it.
         openapi_tags=_TAGS,
         contact={"name": "OXBOW", "url": "https://oxbow.dev"},
-        license_info={"name": "Apache-2.0", "identifier": "Apache-2.0"},
+        license_info={"name": "MIT", "identifier": "MIT"},
     )
     app.add_middleware(RequestContextMiddleware)
     _install_cors_if_configured(app)
