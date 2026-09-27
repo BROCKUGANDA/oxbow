@@ -977,7 +977,7 @@ live stage events, sampled with per-frame arrival times through `:8080` and to t
 Caddy does auto-detect `text/event-stream` independent of this directive, which is why the explicit
 setting and its test exist -- but that is config, not measurement.
 
-## DEV-024 — the 40k slice cannot calibrate, and that is arithmetic rather than a defect. **Open; needs the owner.**
+## DEV-024 — the 40k slice cannot calibrate, and that is arithmetic rather than a defect. **Accepted as option 2; the 500k slice is running and the curve is its result.**
 
 **Status as of this commit: unverified finding, deliberately not decided.** The score stage now
 trains all five folds, and every one of them reports `calibrated=False`. The reason is countable:
@@ -1014,6 +1014,27 @@ Not offered as an option: lowering `min_positives_for_calibration` to make a fol
 calibrated. That is the same sin as widening a leakage guard to get past it — the guard exists
 because isotonic on a thin positive count steps on noise and reports a confident 0.0 or 1.0, and
 the money layer multiplies whatever it is given.
+
+**Chosen: option 2, at the config's own number.** The owner's word was to spend the day chasing
+the curve, and `config/pipeline.yaml` already declares `sampling.interactive_txn_target:
+500_000` — larger than the 110k this record estimated as the Platt floor — so `oxbow score` was
+launched with no `--max-events` at 23:12 on 2026-09-27 (run `01M3J805Z2SKK5AYB4XXDDYKET`,
+500,000 of 6,362,620 canonical events, connected-subcorpus sampling).
+
+The arithmetic this buys, stated before the measurement so the measurement can contradict it:
+the 40k slice carried 108 positives, of which the folds' validation sets held 6, 14 and 18 — the
+three counts the refusals named. Scaling positives with events gives roughly 1,350 in the
+500k slice and roughly 75-225 in a fold's validation set. That clears
+`min_positives_for_calibration = 50`, so `choose_method` should return **Platt on every fold**;
+it does not reach `isotonic_min_positives = 500`, so isotonic stays refused and the card says so.
+Two consequences worth noting: a calibration curve finally exists to publish (DEV-024's whole
+objection), and `landing.score_rows` stops refusing every row for want of `calibration_n`, which
+is the gate on the demo snapshot, the packet, and the queue panes that today answer 200 with
+nothing in them.
+
+If the run does not finish, or a fold still falls under 50, nothing here changes on its own: the
+40k artifacts stay published with the refusal named, because that state is measured and this one
+is a projection.
 
 ---
 
