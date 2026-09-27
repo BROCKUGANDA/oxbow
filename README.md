@@ -41,7 +41,7 @@ All money derives from `config/economics.yaml` plus observed data: recovery rate
 
 | command | what it does |
 | --- | --- |
-| `make bootstrap` | uv sync, pnpm install, pre-commit hooks |
+| `make bootstrap` | uv sync, bun install, pre-commit hooks |
 | `make up` | Postgres 16, Redis 7, MinIO, MLflow, Keycloak, the webhook echo service |
 | `make up-full` | the application profile too: api, worker, web, and caddy as the one browser origin |
 | `make data` | download or verify the corpora against the recorded SHA-256 |

@@ -271,8 +271,46 @@ services:
     profiles: ["full"]
     depends_on: [api]
     environment:
-      NEXT_PUBLIC_API_BASE_URL: http://localhost:8000
+      # Both of these name the `api` service, and neither used to. Inside this container
+      # 127.0.0.1/localhost is the web container itself, so `http://localhost:8000` sent every
+      # server-rendered API call to a port nothing was listening on -- the browser's relative
+      # /api calls were fine (transport.ts returns '' when window exists), but anything rendered
+      # on the server had no API behind it. NEXT_PUBLIC_* is also inlined into the client bundle
+      # at build time, where it is read and then ignored for exactly that same-origin reason.
+      NEXT_PUBLIC_API_BASE_URL: http://api:8000
+      # Read by next.config.ts's rewrite at server start. The edge in front of this service
+      # routes /api itself, so the rewrite is the path a bare `docker compose up web` (no caddy)
+      # still depends on, and it has to reach something real too.
+      OXBOW_API_ORIGIN: http://api:8000
     ports: ["3000:3000"]
+
+  caddy:
+    # The local edge (DEV-023): one origin for the browser, /api/* to the API and everything
+    # else to the Next app. Digest resolved with `docker buildx imagetools inspect` on
+    # 2026-09-27, anonymously, so it carries no entry in the supply-chain exception list.
+    image: caddy:2.11.4-alpine@sha256:6aeddd44c3078b0f9a35206472a11420648a79c184603ef95957d0a20044cb2b
+    <<: *restart
+    profiles: ["full"]
+    depends_on: [web, api]
+    environment:
+      # One variable sets both the container's bind address and the host publish, so they cannot
+      # drift into the shape where compose maps a port Caddy is not listening on.
+      OXBOW_EDGE_PORT: ${OXBOW_EDGE_PORT:-8080}
+    ports: ["${OXBOW_EDGE_PORT:-8080}:${OXBOW_EDGE_PORT:-8080}"]
+    volumes:
+      - ./config/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    healthcheck:
+      # The admin endpoint only answers once Caddy has loaded a config, so this says "the edge
+      # is up" without borrowing an upstream's health. Probing /api/* here would mark the edge
+      # unhealthy for an API that is deliberately serving DEGRADED MODE (03 J), and a restarted
+      # proxy is worse than a banner naming what is missing.
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:2019/config/"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 10s
 
 volumes:
   postgres_data:
@@ -280,3 +318,5 @@ volumes:
   minio_data:
   mlflow_data:
   echo_data:
+  caddy_data:
+  caddy_config:

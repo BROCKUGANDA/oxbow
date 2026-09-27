@@ -1,0 +1,45 @@
+# OXBOW local edge (DEV-023) -- the one origin a browser is allowed to learn.
+#
+# WHY THIS FILE EXISTS
+#
+# apps/web/src/lib/api/transport.ts sends *relative* /api paths from the page on purpose: a
+# cross-origin POST cannot ride a simple request, Chrome blocks it on the preflight, no demo
+# token is ever minted, and every later GET answers 401 -- which the envelope decoder then
+# reports as a contract failure rather than as a wiring mistake. The `/api` rewrite in
+# next.config.ts has been the thing that keeps that promise, and it is a poor place for it: it
+# is applied after Node has loaded the app, it has no way to leave the run-progress SSE
+# unbuffered per route, and the seam vanishes for anything that does not enter through
+# `next start`. Caddy owns the seam here, at the edge, in front of both services.
+#
+# The rewrite stays in next.config.ts. It is what a bare `make web` with no edge in front still
+# relies on, and removing it would break the path that exists today.
+#
+# NO TLS, DELIBERATELY
+#
+# Spec 12.9 makes `docker compose up` the reproducibility claim, and `tls internal` here would
+# mean installing and trusting Caddy's local root CA on every machine that runs the demo before
+# a browser would load the page at all. Host ports 80 and 443 are free on this box and are left
+# unclaimed for the same reason: an edge that needs a privileged port is an edge nobody demos.
+
+# Bound to the port rather than to a hostname, so localhost, 127.0.0.1 and the compose service
+# name all reach the same site. Name a host here instead and Caddy matches on it, answering a
+# request from any other Host with its no-site page -- which looks exactly like an app failure.
+:{$OXBOW_EDGE_PORT:8080} {
+	# The API owns its own prefix: apps/api/main.py mounts every data route under /api, so the
+	# path is passed through unchanged. Stripping it would send /dashboard-matters to a router
+	# that has never heard of that path.
+	handle /api/* {
+		reverse_proxy api:8000 {
+			# GET /api/runs/{id}/events/stream is `text/event-stream` (apps/api/events.py:288),
+			# resumable with Last-Event-ID. -1 means flush every frame as it is produced instead
+			# of letting the proxy accumulate one; with buffering on, the live run banner paints
+			# all at once at the end, which is the failure the demo is specifically about.
+			flush_interval -1
+		}
+	}
+
+	# Everything else is the Next app, including its own /_next assets and RSC payloads.
+	handle {
+		reverse_proxy web:3000
+	}
+}

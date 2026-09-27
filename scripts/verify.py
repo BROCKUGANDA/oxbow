@@ -276,22 +276,34 @@ PHASES: tuple[Phase, ...] = (
             "hold on the queue route"
         ),
         gates=(
-            # `node node_modules/vitest/vitest.mjs`, not `pnpm --dir apps/web test:unit`:
-            # pnpm is not installed on this host and never was, so the gate could not run at
-            # all -- a green phase definition that cannot be executed is the same phantom
-            # `make demo` was. .env.example:139-140 records this host's convention.
+            # `bun run test:unit --run` is the declared package script, so this gate runs the same
+            # command the Makefile and a fresh clone run. Two gates that reach the same tests by
+            # different routes is how a green verify and a broken `make test-web` coexist.
             #
-            # The JS entry point rather than `node_modules/.bin/vitest`: that is a shell
-            # script, and subprocess on Windows raises WinError 2 trying to CreateProcess it.
-            # Going through node is also the path the .CMD shim itself uses, so this is the
-            # same resolution order pnpm would have produced.
+            # The pinned toolchain question is settled, not assumed: plan §T2 named
+            # `packageManager: "pnpm@9.15.9"` with a committed `pnpm-lock.yaml`, and §13 puts
+            # `pnpm audit` in CI, but pnpm is not installed on this host and never was -- so every
+            # `pnpm ...` recipe was unrunnable as written. DEV-022 is the plan amendment that
+            # supersedes that pin, and the owner approved it on 2026-09-27;
+            # test_the_declared_js_toolchain_is_the_one_every_recipe_uses now holds the whole chain
+            # to Bun, so a future swap has to be another amendment rather than a quiet edit.
+            #
+            # The previous form of this gate (`node node_modules/vitest/vitest.mjs run`) existed
+            # only to dodge the missing pnpm, and it kept one fact worth carrying forward:
+            # `node_modules/.bin/vitest` is a shell script, which subprocess on Windows cannot
+            # CreateProcess (WinError 2). `bun run` resolves the bin itself and never asks Windows
+            # to exec a shell script, so the dodge is no longer needed.
+            #
+            # Bun runs the task, not the tests: the vitest process this produces prints Node's own
+            # DEP0205 and Vite's CJS Node API deprecation, which is the evidence the suite executes
+            # on Node -- the interpreter `engines.node` names and every prior web gate measured.
             #
             # cwd="apps/web" is load-bearing: vitest resolves its config and its
             # `include: tests/unit/**` globs against the working directory, and passing a
             # relative --config instead breaks esbuild's own path resolution.
             Gate(
                 "unit tests for the design system and state craft",
-                ("node", "node_modules/vitest/vitest.mjs", "run"),
+                ("bun", "run", "test:unit", "--run"),
                 cwd="apps/web",
             ),
         ),
