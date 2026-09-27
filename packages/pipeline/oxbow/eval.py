@@ -378,7 +378,65 @@ def artifact_descriptors(root: Path) -> dict[str, dict[str, Any]]:
     return descriptors
 
 
+def _declared_provenance(document: Mapping[str, Any]) -> str:
+    """What the variants of one ablation document say about themselves.
+
+    Read off the document rather than its path, because the path is exactly the thing this
+    check cannot trust: a real run copied over a harness self-check, or left unread in a
+    run directory, both look identical from here.
+    """
+    seen = {str(variant.get("provenance", "")) for variant in document.get("variants") or []}
+    if "real_corpus" in seen:
+        return "real_corpus"
+    if PROVENANCE_FAKE in seen:
+        return PROVENANCE_FAKE
+    return "unknown"
+
+
+def _refuse_a_stale_backtest_artifact(root: Path) -> None:
+    """Refuse to publish figures a newer backtest has already superseded.
+
+    The publisher reads two fixed paths, while ``oxbow backtest`` defaults to writing a
+    per-run directory — so the ordinary failure is not a crash, it is the cards quietly
+    continuing to quote the last run someone remembered to copy. The digests in the
+    generated documents make that detectable after the fact (§16's staleness detector);
+    this makes it loud *before* the document is written, which is the point of a gate.
+
+    Two signals, because they catch different mistakes. A run directory declaring
+    ``provenance: real_corpus`` while the published file declares ``fake_harness`` is a
+    harness self-check on the page instead of the corpus result — no clock reading needed.
+    A strictly newer modification time is the general case: the published copy is older
+    than something the same command wrote.
+    """
+    published = root / "out" / "backtest" / "ablation_results.json"
+    if not published.is_file():
+        return  # nothing is being claimed about a backtest yet; ARTIFACTS reports it absent
+    published_document = _read_json(published)
+    published_kind = _declared_provenance(published_document)
+    published_stamp = published.stat().st_mtime
+
+    for candidate in sorted((root / "out" / "backtest").glob("*/ablation_results.json")):
+        kind = _declared_provenance(_read_json(candidate))
+        demoted = kind == "real_corpus" and published_kind == PROVENANCE_FAKE
+        newer = candidate.stat().st_mtime > published_stamp + 1.0
+        if not (demoted or newer):
+            continue
+        reason = (
+            "declares real_corpus while the published one declares fake_harness"
+            if demoted
+            else "was written after the published one"
+        )
+        raise FileNotFoundError(
+            f"{candidate.relative_to(root).as_posix()} {reason}, and this command publishes "
+            f"{published.relative_to(root).as_posix()}, which is older. Refusing rather than "
+            "regenerating cards from superseded figures: the fix is to point "
+            "`oxbow backtest --out` at out/backtest, or copy the intended artifact pair "
+            "(ablation_results.json and model_card.json) into place and re-run."
+        )
+
+
 def _load_available(root: Path) -> dict[str, Any]:
+    _refuse_a_stale_backtest_artifact(root)
     loaded: dict[str, Any] = {}
     for name, relpath in (
         ("paysim_measurement", "data/graph_measurement.json"),
