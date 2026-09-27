@@ -148,9 +148,11 @@ def test_the_latest_stamp_carries_the_money_and_any_stamp_can_make_the_account_p
     ]
     decisions = _decisions_per_account(rows, stamps[20:24])
 
-    assert [decision.account_key for decision in decisions] == ["ACC-AAA", REP, "ACC-BBB"], (
-        "first-appearance order is the fold's order; a set would make the queue non-deterministic"
-    )
+    assert [decision.account_key for decision in decisions] == [
+        "ACC-AAA",
+        REP,
+        "ACC-BBB",
+    ], "first-appearance order is the fold's order; a set would make the queue non-deterministic"
     rep = next(decision for decision in decisions if decision.account_key == REP)
     assert rep.review_minutes == 90 and rep.exposure_minor == 2_000, (
         "the latest as-of is the account's state when the analyst reaches the queue; summing "
