@@ -6,7 +6,7 @@ that matters. Every decision the drain makes reads from the row, so a worker tha
 restarts mid-flight resumes from ``status`` and ``next_attempt_at`` rather than from a
 dict that died with the previous process.
 
-The four behaviours that a reviewer of this file should be able to point at:
+The five behaviours that a reviewer of this file should be able to point at:
 
 * **ordering per ``case_id``, never global.** A row is claimable only when no earlier
   ``case_seq`` for the same case is unsent. That is what lets several workers drain in
@@ -23,6 +23,13 @@ The four behaviours that a reviewer of this file should be able to point at:
 * **signing is not reimplemented here.** The payload is signed by
   ``oxbow.adapters.signing`` inside the sink, on the raw bytes actually sent — the
   copy this module used to keep is why two implementations disagreed once.
+* **the claim is committed before the packet leaves.** A pass resolves its sinks
+  once per ``sink_id`` (so the within-process dedupe guard holds the keys it
+  delivered, and every client it opens is closed when the pass ends), marks each
+  row ``in_flight`` with its attempt counted, and commits that claim up front.
+  A worker SIGKILLed mid-POST therefore comes back to a row whose ``attempts``
+  already moved, and the five-attempt ladder stays reachable; a row that has run
+  out of attempts is buried at claim time rather than POSTed a sixth time.
 """
 
 from __future__ import annotations
@@ -45,8 +52,7 @@ from oxbow.adapters.retry import (
 )
 from oxbow.adapters.warehouse.models import OutboxMessage
 from oxbow.ports.case_sink import CaseSink, assert_self_describing
-from oxbow.ports.notify import Notification, NotifySink
-from oxbow.ports.report import ReportSink
+from oxbow.ports.notify import Notification
 
 DRAIN_BATCH_DEFAULT: Final = 20
 DRAIN_BATCH_MAX: Final = 200
@@ -146,6 +152,36 @@ def resolve_sink(container: Container, sink_id: str, session: Session) -> Any:
     )
 
 
+class _PassSinks:
+    """The sinks one drain pass uses: built at most once per ``sink_id``, all closed.
+
+    The production factories in ``api.deps`` build a NEW adapter per call and
+    ``HttpSink.__init__`` opens an ``httpx.Client`` with it, so resolving inside
+    ``attempt_delivery`` used to mint one client per row and close none of them —
+    up to twenty leaks a pass. The same fact is why the within-process dedupe could
+    never fire: :meth:`HttpSink.has_delivered` reads an instance dict that a fresh
+    instance always left empty. One instance per ``sink_id`` per pass fixes both,
+    and ``close`` runs in the pass's ``finally`` so a crashed worker gives its
+    clients back.
+    """
+
+    def __init__(self, container: Container) -> None:
+        self._container = container
+        self._by_sink_id: dict[str, Any] = {}
+
+    def resolve(self, sink_id: str, session: Session) -> Any:
+        if sink_id not in self._by_sink_id:
+            self._by_sink_id[sink_id] = resolve_sink(self._container, sink_id, session)
+        return self._by_sink_id[sink_id]
+
+    def close(self) -> None:
+        while self._by_sink_id:
+            _, sink = self._by_sink_id.popitem()
+            close = getattr(sink, "close", None)
+            if callable(close):
+                close()
+
+
 def claim_due(
     session: Session, *, now: datetime, batch: int = DRAIN_BATCH_DEFAULT
 ) -> list[OutboxMessage]:
@@ -209,16 +245,53 @@ def drain_once(
     The session is injectable because the integration suite drives one drain inside a
     transaction it can inspect and roll back; production passes nothing and gets its
     own commit, which is the only way a delivery that succeeded stays recorded.
+
+    The claim commit below is deliberately *not* tied to the caller's transaction,
+    even when the session was injected: the whole point of the claim is that it
+    survives the process that made it. A worker killed between that commit and the
+    delivery rolls back only what happened after the POST, and the attempt it was
+    making is already counted.
     """
     started = now or datetime.now(UTC)
     report = DrainReport(started_at=started)
     own_session = session is None
     active = session if session is not None else container.new_session()
+    sinks = _PassSinks(container)
     try:
         rows = claim_due(active, now=started, batch=batch)
         report.claimed = len(rows)
+        deliverable: list[OutboxMessage] = []
         for row in rows:
-            outcome = attempt_delivery(container, active, row, now=started)
+            if int(row.attempts) >= MAX_ATTEMPTS:
+                # The ladder is spent — the usual cause being this very branch's
+                # history: claims that died mid-POST. Bury it here rather than open
+                # a sixth attempt the contract does not allow.
+                _bury_exhausted(active, row, at=started)
+                outcome = DeliveryOutcome(
+                    outbox_id=int(row.outbox_id),
+                    case_id=str(row.case_id),
+                    case_seq=int(row.case_seq),
+                    sink_id=str(row.sink_id),
+                    idempotency_key=str(row.idempotency_key),
+                    attempts=int(row.attempts),
+                    status="dead",
+                    detail=(f"retry ladder exhausted at {MAX_ATTEMPTS} attempts"),
+                )
+                report.outcomes.append(outcome)
+                report.dead += 1
+                continue
+            _claim_in_flight(active, row, at=started)
+            deliverable.append(row)
+        if deliverable:
+            # The claim is a fact about the queue BEFORE the first packet leaves:
+            # status in_flight, the attempt counted, next_attempt_at holding the
+            # staleness horizon. Committing here also releases the FOR UPDATE row
+            # locks, which otherwise sat on every row for the whole pass — up to
+            # twenty HTTP round-trips — and let a second worker wait rather than
+            # work.
+            active.commit()
+        for row in deliverable:
+            outcome = attempt_delivery(container, active, row, now=started, sinks=sinks)
             report.outcomes.append(outcome)
             if outcome.status == "sent":
                 report.sent += 1
@@ -235,18 +308,30 @@ def drain_once(
             active.rollback()
         raise
     finally:
+        sinks.close()
         if own_session:
             active.close()
     return report
 
 
 def attempt_delivery(
-    container: Container, session: Session, row: OutboxMessage, *, now: datetime
+    container: Container,
+    session: Session,
+    row: OutboxMessage,
+    *,
+    now: datetime,
+    sinks: _PassSinks | None = None,
 ) -> DeliveryOutcome:
-    """One attempt at one row. Every branch writes state; none of them swallows."""
-    attempts = int(row.attempts) + 1
+    """One attempt at one row. Every branch writes state; none of them swallows.
+
+    The row arrives already claimed by :func:`drain_once` — ``status in_flight``,
+    this attempt counted in ``attempts`` — so the counter is read here, not
+    incremented: a second increment would double-count every pass. Callers outside
+    the drain pass get their own single-use sink cache, which is closed on the way
+    out; the client belongs to somebody, and it is not this module's to leak.
+    """
+    attempts = int(row.attempts)
     payload = dict(row.payload or {})
-    sink: CaseSink | NotifySink | ReportSink
     outcome = DeliveryOutcome(
         outbox_id=int(row.outbox_id),
         case_id=str(row.case_id),
@@ -257,68 +342,88 @@ def attempt_delivery(
         status="retrying",
         detail="",
     )
+    pass_sinks = sinks if sinks is not None else _PassSinks(container)
     try:
-        sink = resolve_sink(container, str(row.sink_id), session)
-    except SinkConfigurationError as exc:
-        _mark_dead(session, row, attempts=attempts, error=str(exc), at=now)
-        outcome.status = "dead"
-        outcome.detail = str(exc)
-        return outcome
-
-    if sink.has_delivered(str(row.idempotency_key)):
-        # The sink already holds this key: this is at-least-once delivery meeting its
-        # idempotent consumer, and the honest outcome is "sent", not a second POST.
-        _mark_sent(session, row, attempts=attempts, at=now, note="deduplicated by sink")
-        outcome.status = "sent"
-        outcome.detail = "sink already holds this idempotency key"
-        return outcome
-
-    try:
-        if row.sink_id == decision_module.OUTBOX_SINK_CASE:
-            bundle = decision_module.bundle_from_payload(payload)
-            assert_self_describing(bundle.to_payload())
-            receipt = sink.emit(bundle)  # type: ignore[union-attr]
-        else:
-            notification = _notification_from_payload(payload)
-            receipt = sink.notify(notification)  # type: ignore[union-attr]
-    except NonRetryableDeliveryError as exc:
-        # A permanent refusal: the payload is wrong, and the consumer has said so.
-        # Retrying it five times is hammering a validation error (plan §18), so the
-        # row dead-letters now with the consumer's own words attached.
-        _mark_dead(session, row, attempts=attempts, error=str(exc), at=now)
-        outcome.status = "rejected"
-        outcome.detail = str(exc)
-        return outcome
-    except Exception as exc:  # transient by contract: everything retryable lands here
-        plan: RetryPlan = plan_delay(attempts)
-        if attempts >= MAX_ATTEMPTS or plan.exhausted:
+        try:
+            sink = pass_sinks.resolve(str(row.sink_id), session)
+        except SinkConfigurationError as exc:
             _mark_dead(session, row, attempts=attempts, error=str(exc), at=now)
             outcome.status = "dead"
-        else:
-            next_at = now + timedelta(seconds=plan.delay_seconds)
-            _mark_retry(session, row, attempts=attempts, at=now, error=str(exc), next_at=next_at)
-            outcome.status = "retrying"
-            outcome.next_attempt_at = next_at
-            outcome.jitter_delay_seconds = plan.delay_seconds
-        outcome.detail = str(exc)
+            outcome.detail = str(exc)
+            return outcome
+
+        # The row's own ``idempotency_key`` is the promise the database made and the
+        # only key the sink's delivered map is allowed to hold it under — the notify
+        # path used to record the decision id here and check the row key there, two
+        # spaces that never met, so this guard could never fire for a notification.
+        if sink.has_delivered(str(row.idempotency_key)):
+            # The sink already holds this key: this is at-least-once delivery meeting its
+            # idempotent consumer, and the honest outcome is "sent", not a second POST.
+            _mark_sent(session, row, attempts=attempts, at=now, note="deduplicated by sink")
+            outcome.status = "sent"
+            outcome.detail = "sink already holds this idempotency key"
+            return outcome
+
+        try:
+            if row.sink_id == decision_module.OUTBOX_SINK_CASE:
+                bundle = decision_module.bundle_from_payload(payload)
+                assert_self_describing(bundle.to_payload())
+                receipt = sink.emit(bundle)  # type: ignore[union-attr]
+            else:
+                notification = _notification_from_payload(
+                    payload, idempotency_key=str(row.idempotency_key)
+                )
+                receipt = sink.notify(notification)  # type: ignore[union-attr]
+        except NonRetryableDeliveryError as exc:
+            # A permanent refusal: the payload is wrong, and the consumer has said so.
+            # Retrying it five times is hammering a validation error (plan §18), so the
+            # row dead-letters now with the consumer's own words attached.
+            _mark_dead(session, row, attempts=attempts, error=str(exc), at=now)
+            outcome.status = "rejected"
+            outcome.detail = str(exc)
+            return outcome
+        except Exception as exc:  # transient by contract: everything retryable lands here
+            plan: RetryPlan = plan_delay(attempts)
+            if attempts >= MAX_ATTEMPTS or plan.exhausted:
+                _mark_dead(session, row, attempts=attempts, error=str(exc), at=now)
+                outcome.status = "dead"
+            else:
+                next_at = now + timedelta(seconds=plan.delay_seconds)
+                _mark_retry(
+                    session, row, attempts=attempts, at=now, error=str(exc), next_at=next_at
+                )
+                outcome.status = "retrying"
+                outcome.next_attempt_at = next_at
+                outcome.jitter_delay_seconds = plan.delay_seconds
+            outcome.detail = str(exc)
+            return outcome
+
+        _mark_sent(session, row, attempts=attempts, at=now, note=receipt.consumer)
+        outcome.status = "sent"
+        outcome.detail = f"accepted by {receipt.consumer}"
         return outcome
-
-    _mark_sent(session, row, attempts=attempts, at=now, note=receipt.consumer)
-    outcome.status = "sent"
-    outcome.detail = f"accepted by {receipt.consumer}"
-    return outcome
+    finally:
+        if sinks is None:
+            pass_sinks.close()
 
 
-def _notification_from_payload(payload: dict[str, Any]) -> Notification:
+def _notification_from_payload(payload: dict[str, Any], *, idempotency_key: str) -> Notification:
     """Rebuild the port's notification from stored JSON, with its money basis intact.
 
     ``Notification.__post_init__`` refuses a money figure with no currency or
     assumptions, so a row whose payload has drifted since it was written fails here,
     loudly, instead of arriving as a confident one-liner about a number nobody can
     account for.
+
+    The notification is identified — to the sink's dedupe map, to the consumer's
+    idempotency header, and to ``has_delivered`` — by the OUTBOX ROW's key, not by
+    the ``notification_id`` stored in the payload body. That stored id is the
+    decision's own name; the row's key is the delivery promise, and doctrine is
+    that dedupe runs on the promise. Two key spaces used to mean the guard could
+    never fire and the consumer deduped on a key no ledger row carried.
     """
     return Notification(
-        notification_id=str(payload["notification_id"]),
+        notification_id=idempotency_key,
         run_id=str(payload["run_id"]),
         severity=str(payload["severity"]),
         title=str(payload["title"]),
@@ -335,6 +440,54 @@ def _notification_from_payload(payload: dict[str, Any]) -> Notification:
         model_version=payload.get("model_version"),
         schema_version=str(payload["schema_version"]),
     )
+
+
+def _claim_in_flight(session: Session, row: OutboxMessage, *, at: datetime) -> None:
+    """Persist the intent to deliver: ``in_flight``, attempt counted, horizon stamped.
+
+    This is the only writer of ``in_flight``, which is what makes the status mean
+    something: ``claim_due``'s staleness filter treats ``next_attempt_at`` as the
+    instant the claim was made, so a row abandoned by a dead worker becomes
+    claimable again after ``IN_FLIGHT_STALE_SECONDS`` instead of stranding forever.
+    ``drain_once`` commits this before the first POST; an increment that only
+    exists in an open transaction is an increment a crash takes back.
+    """
+    row.status = "in_flight"
+    row.attempts = int(row.attempts) + 1
+    row.next_attempt_at = at
+    session.flush()
+
+
+def _bury_exhausted(session: Session, row: OutboxMessage, *, at: datetime) -> None:
+    """Dead-letter a row whose attempt budget is spent before it is claimed again.
+
+    The caught-failure path in :func:`attempt_delivery` can only bury a row it is
+    still allowed to deliver; a crash-looping worker runs its attempts out inside
+    ``_claim_in_flight``, where no delivery branch ever runs. Refusing the claim
+    here is what keeps the ladder a five-attempt ladder: the sixth attempt never
+    happens, the row says so, and the ledger keeps the row for whoever reads it
+    next.
+    """
+    error = (
+        f"retry ladder exhausted: {int(row.attempts)} attempts recorded, delivery "
+        "last claimed at "
+        f"{row.next_attempt_at.isoformat() if row.next_attempt_at else 'unknown'} "
+        "and never reported back — most often a worker killed mid-POST"
+    )
+    log = list(row.attempt_log or [])
+    log.append(
+        {
+            "attempt": int(row.attempts),
+            "at": at.isoformat(),
+            "status": "dead",
+            "error": error[:500],
+        }
+    )
+    row.attempt_log = log
+    row.status = "dead"
+    row.dead_at = at
+    row.last_error = error[:1000]
+    session.flush()
 
 
 def _append_attempt(
