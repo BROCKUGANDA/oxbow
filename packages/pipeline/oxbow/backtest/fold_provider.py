@@ -40,16 +40,25 @@ class SplitsFoldProvider:
         self._as_of_column = as_of_column
 
     def folds(self, corpus: pl.DataFrame) -> list[HarnessFold]:
-        """Materialise each split fold's masks against ``corpus`` row order."""
+        """Materialise each split fold's masks against ``corpus`` row order.
+
+        The splits module nests the validation window *inside* the training period (it is the
+        last ``fraction_of_train`` slice of what the fold may fit on). The harness's
+        ``assert_fold_discipline`` requires the three masks to be pairwise disjoint, so this
+        adapter carves the validation slice out of train rather than handing back the nested
+        pair. The boundaries themselves are unchanged — only their presentation as disjoint
+        masks — which is exactly the adapter's job and adds no fold arithmetic of its own.
+        """
         harness_folds: list[HarnessFold] = []
         for fold in self._plan.folds:
+            validation = self._evaluate(corpus, fold.validation_mask(self._as_of_column))
+            train = self._evaluate(corpus, fold.train_rows_mask(self._as_of_column))
+            train = tuple(t and not v for t, v in zip(train, validation, strict=True))
             harness_folds.append(
                 HarnessFold(
                     index=fold.index,
-                    train_mask=self._evaluate(corpus, fold.train_rows_mask(self._as_of_column)),
-                    validation_mask=self._evaluate(
-                        corpus, fold.validation_mask(self._as_of_column)
-                    ),
+                    train_mask=train,
+                    validation_mask=validation,
                     test_mask=self._evaluate(corpus, fold.test_mask(self._as_of_column)),
                     embargo_days=self._plan.embargo_days,
                 )

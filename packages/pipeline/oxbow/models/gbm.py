@@ -33,6 +33,7 @@ import polars as pl
 
 from oxbow.models.config import GbmConfig
 from oxbow.models.errors import ModelLayerError
+from oxbow.models.inputs import categorical_for_lightgbm
 from oxbow.scoring.frame import COL_LABEL
 
 MIN_POSITIVES_FOR_FIT: Final = 2
@@ -73,6 +74,12 @@ class GbmBundle:
     seed: int
     history: tuple[dict[str, float], ...]
     degenerate: bool
+    #: The subset of ``categorical_features`` actually named to ``categorical_feature``. A
+    #: declared categorical whose codes are not admissible category indices (a string column,
+    #: which arrives FNV-hashed) is coded numerically and is absent here; the gap is recorded
+    #: rather than silent, because "which features the tree may split categorically" is a fact
+    #: about the fitted model a reader is owed.
+    lightgbm_categorical_features: tuple[str, ...] = ()
 
     def predict_matrix(self, matrix: np.ndarray) -> np.ndarray:
         """P(bad) for a feature matrix, at the early-stopped iteration.
@@ -202,18 +209,22 @@ def fit_gbm(
     if params_override:
         params.update(dict(params_override))
 
-    categorical_columns = [
-        index for index, name in enumerate(feature_names) if name in set(categorical_features)
-    ]
+    # Only the declared categoricals whose codes are admissible category INDICES are named
+    # to lightgbm. A declared categorical whose column is string-coded arrives here as an
+    # FNV-1a hash (2.4e9-magnitude), and lightgbm sizes its per-category structures by the
+    # largest index, not by the category count: measured 2026-09-27, that coding took a
+    # 29 MB fold-1 frame from 468 MB to 7,339 MB of RSS before `bad allocation` killed folds
+    # 1-4 of run 01M3FZ2GC3J71AYT1QEKPWEDKJ. The filtered list is the guard, and what it
+    # dropped is published on the bundle as ``lightgbm_categorical_features`` beside the
+    # declared list rather than left as a silent narrowing of the model.
+    admissible_categoricals = categorical_for_lightgbm(
+        train_frame, feature_names, categorical_features
+    )
     train_data = lgb.Dataset(
         x_train,
         label=y_train,
         feature_name=list(feature_names),
-        categorical_feature=(
-            [feature_names[index] for index in categorical_columns]
-            if categorical_columns
-            else "auto"
-        ),
+        categorical_feature=list(admissible_categoricals) if admissible_categoricals else "auto",
         free_raw_data=False,
     )
     valid_data = lgb.Dataset(
@@ -221,11 +232,7 @@ def fit_gbm(
         label=y_valid,
         reference=train_data,
         feature_name=list(feature_names),
-        categorical_feature=(
-            [feature_names[index] for index in categorical_columns]
-            if categorical_columns
-            else "auto"
-        ),
+        categorical_feature=list(admissible_categoricals) if admissible_categoricals else "auto",
         free_raw_data=False,
     )
     # Per-round validation metrics are captured by a callback: ``booster.evaluation_result``
@@ -295,6 +302,7 @@ def fit_gbm(
         seed=seed,
         history=tuple(history),
         degenerate=best_iteration == 0 or _split_count(booster) == 0,
+        lightgbm_categorical_features=tuple(admissible_categoricals),
     )
 
 

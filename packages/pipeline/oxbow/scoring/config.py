@@ -175,6 +175,8 @@ class BinningConfig:
     min_prebin_size: float
     split_digits: int
     time_limit_seconds: float
+    build_budget_seconds: float
+    measured_ms_per_candidate_pair: float
     categorical_features: tuple[str, ...]
     unseen_tail_population_share: float
     floor_merge_preference: str
@@ -411,6 +413,10 @@ def load_scorecard_config(root: Path | None = None) -> ScorecardConfig:
         min_prebin_size=require_float(raw, "binning.min_prebin_size"),
         split_digits=require_int(raw, "binning.split_digits"),
         time_limit_seconds=require_float(raw, "binning.time_limit_seconds"),
+        build_budget_seconds=require_float(raw, "binning.build_budget_seconds"),
+        measured_ms_per_candidate_pair=require_float(
+            raw, "binning.measured_ms_per_candidate_pair"
+        ),
         categorical_features=require_optional_str_list(raw, "binning.categorical_features"),
         unseen_tail_population_share=require_float(raw, "binning.unseen_tail_population_share"),
         floor_merge_preference=require_str(raw, "binning.floor_merge_preference"),

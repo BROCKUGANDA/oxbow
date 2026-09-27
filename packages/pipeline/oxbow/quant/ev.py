@@ -18,6 +18,14 @@ what it multiplied. Three rules govern everything below:
   handed back as the break-even recovery rate rather than silently filtered
   away, because "nothing pays for itself at r = 0.35" and "there is no r that
   makes anything pay" are different answers.
+* **A currency this configuration cannot price is refused and labelled, never
+  converted.** ``config/economics.yaml`` declares exactly one ``currency``, and every cost
+  term in it — the per-minute analyst price, the friction cost, the four-eyes threshold — is
+  a minor-unit count of that one money. There is consequently no cost basis to price a
+  second currency group against, so :func:`price_row` and :func:`price_exposures` hand the
+  foreign rows back labelled rather than raising: ``CurrencyMismatchError`` is a quant error
+  and not an API problem class, so on a route with no handler for it the refusal leaves as an
+  unhandled 500 that names neither the account nor the assumption to change.
 
 ``CalibratedScore`` is the seam to P4: this layer takes a probability plus the
 calibration bin's observed rate and sample size, and never imports the scoring
@@ -188,20 +196,26 @@ def price_at_rate(row: AccountEV, rate: float, cfg: Economics) -> Money:
     return intercept - row.review_cost - row.expected_friction_cost
 
 
-def price_account(score: CalibratedScore, exposure: Money, cfg: Economics) -> AccountEV:
-    """Apply the §11 formula to one account under the configured assumptions.
+def _currency_mismatch_message(score: CalibratedScore, exposure: Money, cfg: Economics) -> str:
+    """The one sentence both refusal arms print.
 
-    Raises on a currency disagreement rather than converting: an exposure observed
-    in one currency and a cost stated in another have no difference, and inventing
-    the rate that would produce one is exactly the implicit FX the money rules
-    forbid.
+    Shared so that the raising and the labelled arm cannot drift into naming different
+    problems for the same row.
     """
-    if exposure.currency != cfg.currency:
-        raise CurrencyMismatchError(
-            f"exposure for {score.account_key} is {exposure} but "
-            f"{cfg.source_path.name} prices review time in {cfg.currency}: EV would be a "
-            "difference of two unrelated monies."
-        )
+    return (
+        f"exposure for {score.account_key} is {exposure} but "
+        f"{cfg.source_path.name} prices review time in {cfg.currency}: EV would be a "
+        "difference of two unrelated monies."
+    )
+
+
+def _priced(score: CalibratedScore, exposure: Money, cfg: Economics) -> AccountEV:
+    """The §11 arithmetic, once, for an exposure already known to be in ``cfg.currency``.
+
+    Reached only from `price_account` and `price_row`, so the two arms cannot disagree
+    about what an account's EV is; they differ solely in what happens when the currency
+    does not match.
+    """
     minutes = cfg.minutes_for(score.alert_class)
     if minutes < cfg.analyst.min_review_minutes:
         raise PricingError(
@@ -225,20 +239,147 @@ def price_account(score: CalibratedScore, exposure: Money, cfg: Economics) -> Ac
     )
 
 
+@dataclass(frozen=True, slots=True)
+class UnpriceableRow:
+    """An exposure this configuration cannot price, with the reason carried on the row.
+
+    Deliberately holds no money. An ``EV`` for a foreign-currency exposure could only be
+    produced by inventing an FX rate or by borrowing a cost stated in another currency,
+    and 02's money rules refuse both — so the honest object is the refusal, not a number.
+    The row is returned rather than dropped so that the alerted set and the priced set
+    still reconcile: a queue that silently shrinks by the unpriced accounts reads as "we
+    found nothing" when the truth is "we could not price what we found", which is the
+    exact ambiguity `price_exposures` already refuses on the missing-score side.
+    """
+
+    account_key: str
+    exposure: Money
+    configured_currency: str
+    reason: str
+
+    @property
+    def label(self) -> str:
+        """The short line a queue row or packet prints next to the gap."""
+        return (
+            f"unpriced: {self.exposure.currency} exposure against "
+            f"{self.configured_currency} costs (no implicit FX)"
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class PricingOutcome:
+    """What pricing a corpus of more than one currency actually produced.
+
+    ``priced`` holds only rows in ``cfg.currency``; every other currency group lands in
+    ``unpriceable``, labelled. ``groups`` is the evidence for the sentence a run report has
+    to print anyway — this repository's own score stage reports the corpus's distinct
+    currencies — so the mismatch is visible in the output rather than only in a traceback.
+    """
+
+    priced: tuple[AccountEV, ...]
+    unpriceable: tuple[UnpriceableRow, ...]
+
+    @property
+    def groups(self) -> tuple[tuple[str, int], ...]:
+        """``(currency, account count)`` over every exposure read, in currency order."""
+        counts: dict[str, int] = {}
+        for row in self.priced:
+            counts[row.exposure.currency] = counts.get(row.exposure.currency, 0) + 1
+        for row in self.unpriceable:
+            counts[row.exposure.currency] = counts.get(row.exposure.currency, 0) + 1
+        return tuple(sorted(counts.items()))
+
+    @property
+    def refused_note(self) -> str:
+        """The honest headline for a partial price, or the clean-run sentence."""
+        if not self.unpriceable:
+            return f"all {len(self.priced)} accounts priced in {self._currency}."
+        foreign = ", ".join(
+            f"{code} ({count})" for code, count in self.groups if code != self._currency
+        )
+        return (
+            f"{len(self.priced)} of {len(self.priced) + len(self.unpriceable)} accounts priced "
+            f"in {self._currency}; {len(self.unpriceable)} refused for want of "
+            f"{self._currency}-denominated costs: {foreign}. No exchange rate was applied."
+        )
+
+    @property
+    def _currency(self) -> str:
+        """The currency the priced rows are in, or the first refusal's own."""
+        if self.priced:
+            return self.priced[0].exposure.currency
+        if self.unpriceable:
+            return self.unpriceable[0].configured_currency
+        return ""
+
+
+def price_account(score: CalibratedScore, exposure: Money, cfg: Economics) -> AccountEV:
+    """Apply the §11 formula to one account under the configured assumptions.
+
+    Raises on a currency disagreement rather than converting: an exposure observed
+    in one currency and a cost stated in another have no difference, and inventing
+    the rate that would produce one is exactly the implicit FX the money rules
+    forbid.
+
+    This raising contract is the right one for a build that has committed to a single
+    currency and must stop when a row contradicts it. A caller reading a corpus of
+    unknown currency — a stored row, a landed packet — wants the mismatch as data about
+    the row, and `price_row` is that arm: `CurrencyMismatchError` is a quant error, not
+    an API problem class, so where a route has no handler for it the refusal leaves as a
+    500 that names neither the account nor the assumption to fix.
+    """
+    if exposure.currency != cfg.currency:
+        raise CurrencyMismatchError(_currency_mismatch_message(score, exposure, cfg))
+    return _priced(score, exposure, cfg)
+
+
+def price_row(
+    score: CalibratedScore, exposure: Money, cfg: Economics
+) -> AccountEV | UnpriceableRow:
+    """Price one account, or refuse and label it. Never converts, never raises for currency.
+
+    The non-raising arm of `price_account`, for callers that must keep going over a
+    mixed-currency corpus: a foreign exposure becomes an :class:`UnpriceableRow` naming
+    the account, both currencies and the reason, so the gap reaches the response as a
+    labelled row instead of escaping as an unhandled server error. The sub-floor review
+    time still raises — that is a registry/config contradiction on a row this currency
+    *can* price, not a currency fact, and defaulting the minutes would price the account
+    on a denominator the configuration rejects.
+    """
+    if exposure.currency != cfg.currency:
+        return UnpriceableRow(
+            account_key=score.account_key,
+            exposure=exposure,
+            configured_currency=cfg.currency,
+            reason=_currency_mismatch_message(score, exposure, cfg),
+        )
+    return _priced(score, exposure, cfg)
+
+
 def price_exposures(
     exposures: Sequence[ExposureResult],
     scores: Sequence[CalibratedScore],
     cfg: Economics,
-) -> tuple[AccountEV, ...]:
-    """Join exposures to calibrated scores and price each pair.
+) -> PricingOutcome:
+    """Join exposures to calibrated scores and price each pair, grouped by currency.
 
     The join fails on either side missing. An account with a probability and no
     exposure prices at ``-c - (1-p)f``, i.e. negative and therefore invisible in
     the queue, which is indistinguishable in the output from "we found nothing
     worth reviewing" — the exact ambiguity 03 §A refuses.
+
+    A currency disagreement is NOT part of that refusal set. Costs exist in exactly one
+    currency in this configuration — `analyst.cost_per_minute_minor`,
+    `friction_cost_minor` and `four_eyes.threshold_exposure_minor` are all declared as
+    ``config/economics.yaml`` minor units of `currency` — so there is no cost basis to
+    price a second currency group against, and "price per currency group" would mean
+    inventing one. The group matching `cfg.currency` is priced; every other row is
+    returned labelled in `PricingOutcome.unpriceable`. Silently converting is the one
+    outcome neither arm offers.
     """
     by_account = {score.account_key: score for score in scores}
     priced: list[AccountEV] = []
+    unpriceable: list[UnpriceableRow] = []
     for exposure in exposures:
         score = by_account.pop(exposure.account, None)
         if score is None:
@@ -247,13 +388,20 @@ def price_exposures(
                 "cannot be priced. Refusing rather than skipping keeps the alerted set "
                 "and the priced set the same size."
             )
-        priced.append(price_account(score, exposure.exposure, cfg))
+        row = price_row(score, exposure.exposure, cfg)
+        if isinstance(row, UnpriceableRow):
+            unpriceable.append(row)
+        else:
+            priced.append(row)
     if by_account:
         raise PricingError(
             f"these accounts have probabilities but no exposure: {sorted(by_account)}. "
             "A missing E_i is a window or graph question, not a zero."
         )
-    return tuple(sorted(priced, key=lambda row: (-row.density_ratio, row.account_key)))
+    return PricingOutcome(
+        priced=tuple(sorted(priced, key=lambda row: (-row.density_ratio, row.account_key))),
+        unpriceable=tuple(sorted(unpriceable, key=lambda row: row.account_key)),
+    )
 
 
 def scores_from_frame(frame: pl.DataFrame | _HasIterRows) -> tuple[CalibratedScore, ...]:
@@ -590,6 +738,8 @@ __all__ = [
     "BreakEvenRecovery",
     "CalibratedScore",
     "PricingError",
+    "PricingOutcome",
+    "UnpriceableRow",
     "break_even_recovery",
     "captured_exposure",
     "cost_figure",
@@ -603,6 +753,7 @@ __all__ = [
     "price_account",
     "price_at_rate",
     "price_exposures",
+    "price_row",
     "review_cost_total",
     "review_minutes_total",
     "scores_from_frame",

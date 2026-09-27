@@ -387,7 +387,15 @@ def _window_totals(
         ROWS: (head[ROWS].fill_null(0) - tail["_b_rows"].fill_null(0)).cast(pl.Int64)
     }
     for name in names:
-        out[name] = (head[f"c_{name}"].fill_null(0) - tail[f"b_{name}"].fill_null(0)).cast(pl.Int64)
+        # The window total keeps its source's dtype, for the reason `_running_totals` now
+        # does: `c_<name> - b_<name>` is a difference of the same two running totals, so it
+        # is integral exactly when the source is, and forcing it to Int64 truncated the
+        # float intermediates and overflowed the squares of large transfers --
+        # `conversion from f64 to i64 failed in column 'c__squares' for 10 out of 80000
+        # values: [1.2190e19, ...]`, which is 40,000 PaySim events refusing to build at
+        # all. A count column is cast because it is a count (see `__rows__` above); a
+        # moment is not.
+        out[name] = head[f"c_{name}"].fill_null(0) - tail[f"b_{name}"].fill_null(0)
     return out
 
 
@@ -395,31 +403,88 @@ def _zeros(height: int) -> pl.Series:
     return pl.Series("__zero__", [0] * height, dtype=pl.Int64)
 
 
+# --- the rounding floor of a one-pass variance -----------------------------
+# ``Sxx - Sx*Sx/n`` subtracts two quantities of size n*mean**2 to recover a residue of size
+# (n-1)*variance, so it keeps only the digits the two operands do not share. float64 holds
+# 53 bits of integer, and a PaySim transfer of 3.5e9 minor units squares to 1.225e19, past
+# that range: one ulp there is 2048.0 (measured, and the reason the file's own comment at
+# `_running_totals` refuses to give the squares an integer type). A window of huge amounts
+# that differ by less than a few thousand minor units therefore has a residue that is pure
+# rounding noise, with a sign decided by round-to-nearest on terms the account never
+# transacted in.
+#
+# Scaling the amounts by a per-partition constant before squaring does NOT fix this, which
+# is why this layer does not do it: cancellation is *relative*, so dividing x by k shrinks
+# the residue and the noise floor by the same k**2 and leaves the ratio — the thing that
+# decides whether any significant digits survive — untouched. Only a two-pass sum of squared
+# deviations removes it, and that is not expressible as a difference of two running totals.
+FLOAT64_EPS: Final = 2.220446049250313e-16
+# Higham's bound on a naive sum of n float64 terms is gamma_(n-1) ~ (n-1)*eps times the sum
+# of the |terms|. Eight multiples of it cover the second operand, the square and the divide,
+# and rounds the factor up so the test is a conservative floor rather than a coin flip.
+VARIANCE_NOISE_FACTOR: Final = 8.0
+EXACT_INT_LIMIT: Final = 2.0**53
+# |Sx| below 2**26 keeps Sx*Sx under 2**53, i.e. every intermediate exactly representable.
+EXACT_SUM_LIMIT: Final = 2.0**26
+
+
+def _sample_std_expression() -> pl.Expr:
+    """Sample standard deviation from the columns `total`, `squares`, `n` — or NULL.
+
+    The residue is published only when it is a measurement rather than the subtraction's own
+    error: either it clears ``VARIANCE_NOISE_FACTOR * n * eps * max(|Sxx|, |Sx*Sx/n|)``, its
+    rounding floor, or every intermediate sits inside float64's exact-integer range and the
+    residue is therefore the exact integer value.
+
+    That second arm is the only place a zero survives. With exact operands a residue of 0.0
+    means every amount in the window was the same number, which is a measured dispersion of
+    zero and not an unknown one. Outside that regime a destroyed residue and a true zero are
+    indistinguishable from the residue alone — which is precisely why the ``.clip(0.0, None)``
+    this replaces was a defect: it answered "zero dispersion" for accounts whose amounts were
+    too large to square exactly, and a zero reads as "this amount is typical" (see
+    `_kind_float_stat`'s docstring and 03 A rule 2). There is no clamp here; a residue that
+    cannot be trusted answers NULL.
+    """
+    mean_term = (pl.col("total") * pl.col("total")) / pl.col("n")
+    residue = pl.col("squares") - mean_term
+    floor = (
+        pl.lit(VARIANCE_NOISE_FACTOR * FLOAT64_EPS)
+        * pl.col("n")
+        * pl.max_horizontal(pl.col("squares").abs(), mean_term.abs())
+    )
+    exact = (
+        (pl.col("total").abs() <= EXACT_SUM_LIMIT)
+        & (pl.col("squares").abs() <= EXACT_INT_LIMIT)
+        & (mean_term.abs() <= EXACT_INT_LIMIT)
+        & (mean_term * pl.col("n") == pl.col("total") * pl.col("total"))
+    )
+    trusted = (residue > floor) | (exact & (residue == 0.0))
+    return (
+        pl.when(pl.col("n") > 1)
+        .then(pl.when(trusted).then(residue / (pl.col("n") - 1)).otherwise(None))
+        .otherwise(None)
+        .sqrt()
+        .cast(pl.Float64)
+    )
+
+
 def _sample_std(total: pl.Series, squares: pl.Series, counts: pl.Series) -> pl.Series:
     """Sample standard deviation from two running totals, in one pass.
 
     ``sqrt((Sxx - Sx*Sx/n) / (n - 1))`` is the variance algebraically, so no second window
-    is needed. A negative residue inside the bracket is clamped to zero, and fewer than two
-    observations is null rather than 0.0: a dispersion measured from one sample does not
-    exist.
+    is needed — but the residue is only a measurement when it clears its own rounding floor,
+    and a destroyed one answers NULL rather than the clamped zero the old
+    ``.clip(0.0, None)`` published. Fewer than two observations is null for the same reason:
+    a dispersion measured from one sample does not exist.
     """
     frame = pl.DataFrame(
         {
-            "s": total.cast(pl.Float64),
-            "q": squares.cast(pl.Float64),
+            "total": total.cast(pl.Float64),
+            "squares": squares.cast(pl.Float64),
             "n": counts.cast(pl.Float64),
         }
     )
-    return frame.select(
-        pl.when(pl.col("n") > 1)
-        .then(
-            ((pl.col("q") - (pl.col("s") * pl.col("s")) / pl.col("n")) / (pl.col("n") - 1))
-            .clip(0.0, None)
-            .sqrt()
-        )
-        .otherwise(None)
-        .alias(VALUE)
-    )[VALUE]
+    return frame.select(_sample_std_expression().alias(VALUE))[VALUE]
 
 
 def _windowed(
@@ -939,13 +1004,12 @@ def _score_expression(shape: str) -> pl.Expr:
 
     Mean and dispersion come from the running totals rather than a second window, and a
     zero-spread or single-observation history returns null: a z of 0.0 would read as
-    "perfectly typical" when the truth is "nothing to compare against".
+    "perfectly typical" when the truth is "nothing to compare against". The same guard makes
+    a dispersion the subtraction could not resolve null rather than zero, so a large-account
+    row whose residue was destroyed never reaches the scorecard looking measured.
     """
     mean = pl.when(pl.col("n") > 0).then(pl.col("total") / pl.col("n")).otherwise(None)
-    variance = (pl.col("squares") - (pl.col("total") * pl.col("total")) / pl.col("n")) / (
-        pl.col("n") - 1
-    )
-    std = pl.when(pl.col("n") > 1).then(variance.clip(0.0, None).sqrt()).otherwise(None)
+    std = _sample_std_expression()
     if shape == "z":
         combined = (pl.col("own") - mean) / std
     elif shape == "cv":

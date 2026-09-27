@@ -34,6 +34,7 @@ Three special bin kinds are structural, not incidental:
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, replace
 from itertools import pairwise
 from typing import Final
@@ -209,10 +210,49 @@ def _solver_time_limit_ms(cfg: BinningConfig) -> int | None:
     argument 2 of type 'int64_t'` inside `_numeric_edges`, and until this existed that
     TypeError was swallowed by its bare `except Exception`, so every numeric feature
     silently took the quantile fallback and `enforce_monotonic_trend` never ran.
+
+    This bounds `Solve()` and nothing else. The MIP solver's model *build* is not under
+    it; `_effective_max_n_prebins` is what bounds that.
     """
     if cfg.time_limit_seconds <= 0:
         return None
     return int(round(cfg.time_limit_seconds * 1000))
+
+
+def _effective_max_n_prebins(cfg: BinningConfig) -> int:
+    """The candidate cap the build budget actually allows, at or below the declared one.
+
+    `time_limit_seconds` reads like a bound on the whole feature fit and is not one.
+    Measured on this host with `solver: mip`, 1200 rows, build time against the
+    candidate count optbinning produced:
+
+        candidates=20 ->  0.60 s      candidates=48 ->  7.35 s
+        candidates=32 ->  2.28 s      candidates=64 -> 13.85 s
+
+    which is quadratic -- `add_constraint_monotonic_descending` is a double loop issuing
+    one IPC call per candidate pair -- at 1.5-3.4 ms per pair. `SetTimeLimit` bounds only
+    `Solve()`, so before this the build was unbounded by any config value: the 300-row
+    scorecard unit test spent 13.7 s building against 9.9 s solving, and a wider frame ran
+    until pytest's own 300 s timeout with the stack parked in `mip.py`. A stage budget
+    that a config key claims to enforce and does not is worse than no key at all, because
+    it is read as the protection it is not.
+
+    The cap is solved for rather than measured at runtime, and `measured_ms_per_candidate_pair`
+    is the *worst* rate observed, so the projection is conservative. That matters more than
+    it looks: a wall-clock abort mid-build would make the same feature produce different
+    bin tables on a loaded machine, and the bin table is written into the artefact that
+    the audit chain hashes. A deterministic cap keeps the fit reproducible; a feature that
+    genuinely needs more candidates than the budget allows falls back to the quantile
+    table and says so in `boundary_source`, which is a recorded outcome rather than a hang.
+    """
+    if cfg.build_budget_seconds <= 0 or cfg.measured_ms_per_candidate_pair <= 0:
+        return cfg.max_n_prebins
+    affordable = math.sqrt(
+        (cfg.build_budget_seconds * 1000.0) / cfg.measured_ms_per_candidate_pair
+    )
+    # A cap below 2 admits no split at all, which would turn every numeric feature into a
+    # single bin. 4 is the floor: enough for optbinning to find a boundary.
+    return max(4, min(cfg.max_n_prebins, int(affordable)))
 
 
 def _splits_to_list(raw: object) -> list[float]:
@@ -253,6 +293,7 @@ def _numeric_edges(
     if np.unique(x).size < 2:
         return [], BOUNDARY_SOURCE_SINGLE, None
     min_bin_size = float(np.clip(cfg.min_bin_pct / max(ordinary_share, 1e-6), 1e-4, 0.5))
+    candidate_cap = _effective_max_n_prebins(cfg)
     try:
         binner = OptimalBinning(
             dtype="numerical",
@@ -260,7 +301,7 @@ def _numeric_edges(
             monotonic_trend="auto_asc_desc" if cfg.enforce_monotonic_trend else "auto",
             max_n_bins=cfg.max_bins,
             min_bin_size=min_bin_size,
-            max_n_prebins=cfg.max_n_prebins,
+            max_n_prebins=candidate_cap,
             min_prebin_size=cfg.min_prebin_size,
             prebinning_method=cfg.prebinning_method,
             split_digits=cfg.split_digits,

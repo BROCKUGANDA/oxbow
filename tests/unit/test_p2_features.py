@@ -992,3 +992,24 @@ def test_a_running_total_keeps_the_units_of_its_own_source() -> None:
     assert ratio.to_list() == [0.5, 0.75, 0.875, 0.75], (
         "the running total was truncating a fractional source toward zero -- 0.75 arrived as 0"
     )
+
+    # The same mistake one layer up, and the one that actually stopped the build: the
+    # window total is a difference of two running totals, so it inherits their dtype or
+    # invents an overflow the sources never had.
+    from oxbow.features.kinds import _window_totals
+
+    windows = _window_totals(
+        rows,
+        rows,
+        groups=["entity"],
+        sources=["amount_minor", SQUARES, "ratio"],
+        window=timedelta(days=30),
+    )
+    assert windows["amount_minor"].dtype == pl.Int64, windows["amount_minor"].dtype
+    assert windows[SQUARES].dtype == pl.Float64, windows[SQUARES].dtype
+    assert windows[SQUARES].to_list() == [1.0e19, 3.0e19, 6.0e19, 4.0e18], (
+        "the 30-day window total of the squares is the same quantity as the running total "
+        "here, because every partition's rows fall inside the window"
+    )
+    assert windows["ratio"].to_list() == [0.5, 0.75, 0.875, 0.75]
+    assert windows["amount_minor"].to_list() == [100, 300, 600, 50]

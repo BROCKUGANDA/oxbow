@@ -173,8 +173,26 @@ class Fold:
         )
 
     def test_mask(self, ts_column: str = TS_COLUMN) -> pl.Expr:
-        """The scored period: strictly after the training cutoff, up to the fold's end."""
-        return (pl.col(ts_column) > self.train_end_ts) & (pl.col(ts_column) <= self.test_end_ts)
+        """The scored period: after ``test_start_ts``, up to and including ``test_end_ts``.
+
+        THE WINDOW OPENS AT THE TEST START, NOT AT THE TRAINING CUTOFF. config/splits.yaml
+        states the ladder as "train, then an embargo gap equal to the longest feature
+        lookback (30 days), then test", and ``embargo_band`` names ``(train_end_ts,
+        test_start_ts)`` the band "withheld from training and validation" — i.e. belonging
+        to neither side. Opening the scored window at ``train_end_ts`` instead scored that
+        band, which is what collapsed the fold's honest gap to nothing: on the 2026-09-27
+        corpus it put 5,556 embargo-band accounts into fold 0's scored set (28,588 rows
+        where the embargo-respecting window holds 23,032), and the first "test" row then sat
+        0.0029 d after the last fit row instead of 30 d. The harness's
+        ``assert_fold_discipline`` caught exactly that and refused; this predicate is the
+        fix on this side of the boundary.
+
+        The boundary instant itself goes to the EARLIER fold, which is what
+        :meth:`SplitPlan.fold_for` already decides (``test_start < moment <= test_end``) and
+        what :meth:`SplitPlan.fold_of_row` stamps onto the feature table, so the two masks
+        and the per-row fold id cannot disagree.
+        """
+        return (pl.col(ts_column) > self.test_start_ts) & (pl.col(ts_column) <= self.test_end_ts)
 
     def as_dict(self) -> dict[str, object]:
         """JSON-safe description for the run's split_def record. No wall clock."""
@@ -412,11 +430,26 @@ def build_walk_forward(
     registry: FeatureRegistry,
     config_dir: Path | None = None,
     ts_column: str = TS_COLUMN,
+    observed_window: tuple[datetime, datetime] | None = None,
 ) -> SplitPlan:
     """Resolve the configured fractional fold boundaries against the observed timeline.
 
     ``timeline`` needs only a timestamp column — the canonical event frame or the
     feature frame both work, because the split is temporal.
+
+    ``observed_window`` is the timeline the fractions are resolved *against*, stated by the
+    caller rather than inferred from the frame handed in. It exists because the fractions in
+    config/splits.yaml are fractions of a specific observed window, and a downstream stage
+    that re-derives that window from a narrower frame silently moves every boundary. Measured
+    on 2026-09-27: the score stage resolved them against the event window
+    ``2014-01-02T01:30:57.117619Z..2016-01-01T01:24:02.347054Z`` and printed fold 0 as
+    ``train <= 2014-07-09T18:16:52.686449Z``, while the account-grain corpus it landed ends at
+    ``2015-12-20T16:45:37.523020Z`` — re-deriving from that put fold 0's cutoff at
+    ``2014-07-06T08:29:21Z``, three days earlier, and no fold boundary matched the run that
+    produced the bytes. Passing the recorded window reproduces the printed plan to the
+    microsecond. This is a *wiring* argument, not a knob: it supplies the observation, and
+    every boundary is still derived here. The window must contain the frame's own span, and a
+    frame with rows outside it is a named refusal rather than rows that fall in no fold.
     """
     root = config_dir if config_dir is not None else find_repo_root() / "config"
     raw = load_split_config(root)
@@ -473,6 +506,23 @@ def build_walk_forward(
         pl.col(ts_column).min().alias("start"), pl.col(ts_column).max().alias("end")
     ).row(0)
     start, end = bounds[0], bounds[1]
+    if observed_window is not None:
+        recorded_start, recorded_end = observed_window
+        if recorded_start is None or recorded_end is None:
+            raise SplitError("observed_window must give both ends of the recorded timeline")
+        if start is not None and recorded_start > start:
+            raise SplitError(
+                f"the recorded timeline starts at {recorded_start}, before the frame's own "
+                f"{start}; the frame holds rows outside the window the fractions resolve "
+                "against, which would leave them in no fold"
+            )
+        if end is not None and recorded_end < end:
+            raise SplitError(
+                f"the recorded timeline ends at {recorded_end}, before the frame's own {end}; "
+                "the frame holds rows outside the window the fractions resolve against, "
+                "which would leave them in no fold"
+            )
+        start, end = recorded_start, recorded_end
     if start is None or end is None or not start < end:
         raise SplitError(f"the timeline {start}..{end} cannot be split into folds")
     span_seconds = (end - start).total_seconds()

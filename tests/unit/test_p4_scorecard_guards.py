@@ -610,6 +610,74 @@ def test_binning_reaches_the_mip_solver_and_not_the_quantile_fallback() -> None:
     ), f"{limit} ms is not cfg.time_limit_seconds={cfg.time_limit_seconds} s"
 
 
+def test_the_build_budget_bounds_the_mip_build_and_not_only_the_solve() -> None:
+    """`time_limit_seconds` bounds `Solve()`. Nothing bounded the model build, and it hung.
+
+    This is the second defect in `_numeric_edges` that the test above is the sibling of.
+    The first was a unit error in the value handed to the solver; this one is that
+    ortools' `SetTimeLimit` does not cover the whole fit, so a config key that reads like a
+    per-feature time limit was bounding only the solve and nothing else. The MIP solver
+    spends most of its time *building* the model: `add_constraint_monotonic_descending` is
+    a double loop issuing one IPC call per candidate pair.
+
+    Measured on this host, `solver: mip`, 1200 rows, build against candidates:
+
+        20 -> 0.60 s     32 -> 2.28 s     48 -> 7.35 s     64 -> 13.85 s
+
+    which is quadratic at 1.5-3.4 ms per pair, and dominant (300 rows: build 13.7 s vs
+    solve 9.9 s). With `max_n_prebins: 100` unbounded by the build, the 300-row
+    `test_p4_scorer.py` case ran until pytest's own 300 s timeout with the stack parked in
+    `mip.py`, and it took the whole `tests/unit` run down with it at 68%.
+
+    Three things are asserted, because the failure mode is a silent un-bounded build:
+    the declared cap is genuinely larger than the effective one, the effective cap is the
+    budget's own arithmetic, and the value that reaches the solver is the effective cap
+    rather than `cfg.max_n_prebins`.
+    """
+    from oxbow.scoring.binning import _effective_max_n_prebins
+
+    cfg = _scorecard().binning
+    cap = _effective_max_n_prebins(cfg)
+
+    assert cap < cfg.max_n_prebins, (
+        f"the effective candidate cap is {cap}, at or above the declared "
+        f"max_n_prebins={cfg.max_n_prebins}, so the build budget is not bounding the MIP "
+        "build at all. time_limit_seconds covers Solve() only, and the build is the "
+        "dominant cost."
+    )
+    assert cap == max(
+        4,
+        min(
+            cfg.max_n_prebins,
+            int(
+                math.sqrt(
+                    (cfg.build_budget_seconds * 1000.0) / cfg.measured_ms_per_candidate_pair
+                )
+            ),
+        ),
+    ), f"{cap} is not the budget's own arithmetic for {cfg.build_budget_seconds} s"
+
+    # And the number that matters is the one the solver is actually told.
+    rng = _rng()
+    values = np.sort(rng.normal(0.0, 1.0, 400))
+    labels = (values + rng.normal(0.0, 1.2, 400) > 1.2).astype(np.int32)
+    requested: list[object] = []
+    real = OptimalBinning
+
+    def _recording(**kwargs: object) -> OptimalBinning:
+        requested.append(kwargs.get("max_n_prebins"))
+        return real(**kwargs)  # type: ignore[call-arg]
+
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr("oxbow.scoring.binning.OptimalBinning", _recording)
+        _numeric_binning(cfg, "monotone_signal", values, labels)
+
+    assert requested, "the solver was never constructed, so the cap was never applied"
+    assert requested[-1] == cap, (
+        f"the solver was told max_n_prebins={requested[-1]!r} but the budget's cap is {cap}"
+    )
+
+
 def test_iv_admission_band() -> None:
     """0.02 <= IV <= 0.5: below the floor is excluded, above the ceiling is suspected leakage.
 

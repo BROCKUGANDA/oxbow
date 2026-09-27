@@ -28,6 +28,7 @@ Two failure disciplines run through the file.
 
 from __future__ import annotations
 
+import gc
 import importlib.util
 import json
 import sys
@@ -1119,6 +1120,118 @@ def _load_p4_configs(root: Path) -> object:
     }
 
 
+def run_walk_forward_folds(
+    runner: Any,
+    training: Any,
+    frame: pl.DataFrame,
+    fold_pairs: Sequence[tuple[int, Sequence[bool], Sequence[bool], Sequence[bool]]],
+    *,
+    embargo_days: int,
+    echo: Callable[..., None] | None = None,
+    observe: Callable[[str, int], None] | None = None,
+) -> tuple[list[pl.DataFrame], list[dict[str, object]]]:
+    """Score every fold through ``runner.run_fold``, releasing each fold before the next.
+
+    The one thing this function owns that the caller cannot get wrong: a fold's
+    :class:`~oxbow.models.run.FoldRun` keeps the *full* train+validation+test scored frame
+    (with the per-row SHAP JSON on every row, not only the test rows) plus the fitted
+    LightGBM booster and the Isolation Forest. A naive loop that rebinds ``run`` only when
+    the next ``run_fold`` returns leaves fold *k*'s whole object resident *while* fold
+    *k+1* fits, so peak memory is fold-k-plus-fold-(k+1) rather than one fold. That is
+    exactly what landed fold 0 and starved folds 1-4 with ``LightGBMError: bad allocation``
+    on a 79,998-row corpus on 2026-09-27 -- the failure was per-fold accumulation, not
+    corpus size.
+
+    Encapsulating one fold's fit here makes the retention structurally impossible: the
+    ``FoldRun`` is local, only its test-row slice (an independent Polars frame, verified --
+    ``filter`` materialises and does not view the parent) and a plain summary dict survive
+    the call, and the ``gc.collect()`` at the end of each iteration clears any transient
+    cyclic reference before the next fold's allocation. It changes no number a fold
+    produces; it only frees what the fold no longer needs.
+
+    ``observe`` (a test seam, unused in production) is called as ``observe("before_fit",
+    fold_index)`` immediately before each fold fits, so a regression test can assert that no
+    prior fold's model objects are still resident at that point.
+    """
+    from oxbow.models.scorer import FixedFoldSlicesProvider
+    from oxbow.scoring.frame import ROLE_TEST, ROLE_TRAIN, ROLE_VALIDATION
+
+    def say(message: str, *, err: bool = False) -> None:
+        if echo is not None:
+            echo(message, err=err)
+
+    # SHAP must be imported once, OUTSIDE any fold's call stack, before the first fit.
+    # ``import shap`` runs optional-dependency probes (cv2 / pyspark / the CUDA ``_cext_gpu``
+    # extension) that raise ModuleNotFoundError / ImportError and keep those exception objects
+    # alive on a module-level structure. CPython retains the whole traceback of a live
+    # exception, and the traceback's frames reach back up the stack that first imported shap:
+    # ``_explainer_values -> explain_and_report -> _explain -> run_fold``. Imported lazily from
+    # inside ``run_fold``, that pins the *first* fitted fold's frame locals -- the full
+    # train+validation+test scored frame (every row's SHAP JSON), the booster and the
+    # Isolation Forest -- for the rest of the run. This was the measured accumulator: with
+    # SHAP on, one fold's model objects stayed resident across every later fold; with the
+    # import hoisted to here (a neutral frame holding no fold), they did not. Importing shap
+    # now costs nothing on the folds themselves.
+    try:
+        import shap  # noqa: F401  (warm the optional-import probes at a neutral frame)
+    except Exception:  # pragma: no cover - shap missing degrades SHAP, must not break scoring
+        pass
+
+    scored_frames: list[pl.DataFrame] = []
+    runs_summary: list[dict[str, object]] = []
+    for fold_index, train_mask, validation_mask, test_mask in fold_pairs:
+        if observe is not None:
+            observe("before_fit", fold_index)
+        train = frame.filter(pl.Series(train_mask)).with_columns(
+            pl.lit(ROLE_TRAIN).alias("role")
+        )
+        validation = frame.filter(pl.Series(validation_mask)).with_columns(
+            pl.lit(ROLE_VALIDATION).alias("role")
+        )
+        scored = frame.filter(pl.Series(test_mask)).with_columns(pl.lit(ROLE_TEST).alias("role"))
+        if scored.height == 0:
+            runs_summary.append({"fold": fold_index, "skipped": "empty test window"})
+            continue
+        provider = FixedFoldSlicesProvider(
+            train, validation, scored, embargo_days=embargo_days
+        )
+        try:
+            run = runner.run_fold(training, fold_index, provider=provider, evaluation_role=ROLE_TEST)
+        except Exception as exc:  # a fold the corpus cannot fit is reported by name, not faked
+            runs_summary.append(
+                {"fold": fold_index, "skipped": f"{type(exc).__name__}: {str(exc)[:300]}"}
+            )
+            say(
+                f"[score] fold {fold_index}: SKIPPED — the fit population is not "
+                f"defensible ({type(exc).__name__}: {exc})",
+                err=True,
+            )
+            del train, validation, scored, provider
+            gc.collect()
+            continue
+        test_rows = run.scored.filter(pl.col("role") == ROLE_TEST)
+        scored_frames.append(test_rows)
+        runs_summary.append(
+            {
+                "fold": fold_index,
+                "mode": run.mode,
+                "calibrated": run.calibrated,
+                "rows": test_rows.height,
+                "channel_skips": dict(run.channel_skips),
+            }
+        )
+        say(
+            f"[score] fold {fold_index}: mode={run.mode} scored={test_rows.height} "
+            f"calibrated={run.calibrated}"
+        )
+        # Release the fold's models and its full scored frame before the next fold starts.
+        # ``scored_frames`` holds only ``test_rows`` (independent of ``run``), so dropping
+        # every name bound in this iteration frees the fold's footprint now, not on rebind.
+        del run, test_rows, train, validation, scored, provider
+        gc.collect()
+    return scored_frames, runs_summary
+
+
 def _score_models_and_land(
     ctx: StageContext,
     handle: StageHandle,
@@ -1142,14 +1255,11 @@ def _score_models_and_land(
     from oxbow.features.bridge import build_account_frame
     from oxbow.features.fold_providers import fold_providers
     from oxbow.models.run import FoldModelRunner
-    from oxbow.models.scorer import FixedFoldSlicesProvider, FrameRuleHitProvider
+    from oxbow.models.scorer import FrameRuleHitProvider
     from oxbow.quant.economics import load_economics
     from oxbow.scoring.frame import (
         COL_FOLD,
         PROVENANCE_REAL,
-        ROLE_TEST,
-        ROLE_TRAIN,
-        ROLE_VALIDATION,
         build_training_frame,
     )
 
@@ -1197,56 +1307,23 @@ def _score_models_and_land(
         root=ctx.root,
     )
     fold_provider = SplitsFoldProvider(plan, as_of_column="as_of_ts")
-    scored_frames: list[pl.DataFrame] = []
-    runs_summary: list[dict[str, object]] = []
-    for fold, harness_fold in zip(plan.folds, fold_provider.folds(frame), strict=True):
-        train = frame.filter(pl.Series(harness_fold.train_mask)).with_columns(
-            pl.lit(ROLE_TRAIN).alias("role")
+    fold_pairs = [
+        (
+            fold.index,
+            harness_fold.train_mask,
+            harness_fold.validation_mask,
+            harness_fold.test_mask,
         )
-        validation = frame.filter(pl.Series(harness_fold.validation_mask)).with_columns(
-            pl.lit(ROLE_VALIDATION).alias("role")
-        )
-        scored = frame.filter(pl.Series(harness_fold.test_mask)).with_columns(
-            pl.lit(ROLE_TEST).alias("role")
-        )
-        if scored.height == 0:
-            runs_summary.append({"fold": fold.index, "skipped": "empty test window"})
-            continue
-        provider = FixedFoldSlicesProvider(
-            train, validation, scored, embargo_days=plan.embargo_days
-        )
-        try:
-            run = runner.run_fold(
-                training, fold.index, provider=provider, evaluation_role=ROLE_TEST
-            )
-        except Exception as exc:  # a fold the corpus cannot fit is reported by name, not faked
-            runs_summary.append(
-                {
-                    "fold": fold.index,
-                    "skipped": f"{type(exc).__name__}: {str(exc)[:300]}",
-                }
-            )
-            ctx.echo(
-                f"[score] fold {fold.index}: SKIPPED — the fit population is not "
-                f"defensible ({type(exc).__name__}: {exc})",
-                err=True,
-            )
-            continue
-        test_rows = run.scored.filter(pl.col("role") == ROLE_TEST)
-        scored_frames.append(test_rows)
-        runs_summary.append(
-            {
-                "fold": fold.index,
-                "mode": run.mode,
-                "calibrated": run.calibrated,
-                "rows": test_rows.height,
-                "channel_skips": dict(run.channel_skips),
-            }
-        )
-        ctx.echo(
-            f"[score] fold {fold.index}: mode={run.mode} scored={test_rows.height} "
-            f"calibrated={run.calibrated}"
-        )
+        for fold, harness_fold in zip(plan.folds, fold_provider.folds(frame), strict=True)
+    ]
+    scored_frames, runs_summary = run_walk_forward_folds(
+        runner,
+        training,
+        frame,
+        fold_pairs,
+        embargo_days=plan.embargo_days,
+        echo=lambda message, *, err=False: ctx.echo(message, err=err),
+    )
 
     if not scored_frames:
         ctx.echo("[score] REFUSED: no fold produced a scored test window", err=True)

@@ -34,12 +34,26 @@ binning:
   enforce_monotonic_trend: true    # optbinning monotonic_trend="auto_asc_desc"
   solver: mip                      # optbinning solver: mip | cp | ls
   prebinning_method: quantile      # candidate boundaries before the optimum is solved
-  max_n_prebins: 100               # measured on this host: 100 candidates solve in ~0.1 s
+  max_n_prebins: 100               # the declared cap; the effective cap is the build
+                                   # budget below, which is far smaller in practice
   min_prebin_size: 0.05            # per feature §10's 5% rule is re-enforced by the merge
                                    # pass afterwards; this bounds the candidate count so
                                    # the solver stays inside the 90-second stage budget
   split_digits: 4                  # boundary precision written into the artefact
-  time_limit_seconds: 20.0         # per feature; the quantile fallback fires past it
+  time_limit_seconds: 20.0         # bounds ortools Solve() only -- see build_budget
+  # The MIP solver's *model build* is where the time actually goes, and SetTimeLimit
+  # does not touch it. Measured on this host, solver=mip, 1200 rows:
+  #   candidates=20 -> build 0.60s | 32 -> 2.28s | 48 -> 7.35s | 64 -> 13.85s
+  # i.e. build ~ candidates^2 at 1.5-3.4 ms per candidate pair, and it is the dominant
+  # term (at 300 rows: build 13.7s vs solve 9.9s). An earlier comment here claimed
+  # "100 candidates solve in ~0.1 s", which was measured on the default 5-fold corpus
+  # and is off by two orders of magnitude here; it is replaced by the numbers above.
+  # time_limit_seconds is therefore load-bearing only for Solve(). This budget bounds
+  # the build by capping the candidate count, and the cap is a recorded, deterministic
+  # function of the config -- not a wall-clock abort, which would make the same input
+  # produce different bin tables on a loaded machine.
+  build_budget_seconds: 6.0        # per feature; caps candidates so build stays under it
+  measured_ms_per_candidate_pair: 3.4   # the worst measured rate, used to size the cap
   # Special bins, because a missing value is evidence and a structural zero is
   # not the same thing as a small number.
   special_bins:
