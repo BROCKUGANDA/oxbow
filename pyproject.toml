@@ -2,6 +2,7 @@
 name = "oxbow"
 version = "0.1.0"
 description = "OXBOW - quantitative risk scoring and financial-crime intelligence for mobile-money networks"
+license = "MIT"
 requires-python = ">=3.12,<3.13"
 dependencies = [
   # --- dataframes / contracts (01 D: Polars 1.x, DuckDB 1.1, Pandera 0.20) ---
