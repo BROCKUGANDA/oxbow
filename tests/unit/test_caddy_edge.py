@@ -99,18 +99,20 @@ def test_the_api_route_flushes_every_frame() -> None:
     is an implementation detail of a proxy version, and a silent regression there turns the live
     pipeline banner into one block of text at the end of the run.
     """
-    assert "flush_interval -1" in _api_route_body(_caddyfile_code()), (
-        "the /api route has no `flush_interval -1`, so run-progress frames may be buffered"
-    )
+    assert "flush_interval -1" in _api_route_body(
+        _caddyfile_code()
+    ), "the /api route has no `flush_interval -1`, so run-progress frames may be buffered"
 
 
 def test_the_route_scoped_checks_reject_the_shapes_they_exist_to_catch() -> None:
     """Mutation cases, so a check that matches nothing cannot pass for the wrong reason."""
-    buffered = "handle /api/* {\n\t\treverse_proxy api:8000\n\t}\nhandle {\n\t\tflush_interval -1\n\t}\n"
-    body = _api_route_body(buffered)
-    assert "flush_interval -1" not in body, (
-        "the per-route check fell back to reading the whole file, which is the bug it guards"
+    buffered = (
+        "handle /api/* {\n\t\treverse_proxy api:8000\n\t}\nhandle {\n\t\tflush_interval -1\n\t}\n"
     )
+    body = _api_route_body(buffered)
+    assert (
+        "flush_interval -1" not in body
+    ), "the per-route check fell back to reading the whole file, which is the bug it guards"
 
     stripped = "handle_path /api/* {\n\t\treverse_proxy api:8000\n\t}\n"
     assert "handle_path" in _code(stripped), "the strip detector no longer sees a stripped route"
@@ -130,10 +132,12 @@ def test_the_route_scoped_checks_reject_the_shapes_they_exist_to_catch() -> None
 def test_compose_publishes_the_port_caddy_binds() -> None:
     """One variable for both halves, or `OXBOW_EDGE_PORT=9080` maps a port nothing listens on."""
     service = _caddy_service()
-    assert "{$OXBOW_EDGE_PORT:8080}" in _caddyfile_code(), "the Caddyfile hard-codes its listen port"
-    assert "OXBOW_EDGE_PORT: ${OXBOW_EDGE_PORT:-8080}" in service, (
-        "the caddy service must pass the same variable the Caddyfile interpolates"
-    )
+    assert (
+        "{$OXBOW_EDGE_PORT:8080}" in _caddyfile_code()
+    ), "the Caddyfile hard-codes its listen port"
+    assert (
+        "OXBOW_EDGE_PORT: ${OXBOW_EDGE_PORT:-8080}" in service
+    ), "the caddy service must pass the same variable the Caddyfile interpolates"
     assert re.search(
         r'ports:\s*\["\$\{OXBOW_EDGE_PORT:-8080\}:\$\{OXBOW_EDGE_PORT:-8080\}"\]', service
     ), "host port and container port must both come from OXBOW_EDGE_PORT"
@@ -146,12 +150,12 @@ def test_the_caddyfile_is_mounted_read_only_and_the_image_is_digest_pinned() -> 
     reviewer is about to audit, and the audit would then describe different bytes than the commit.
     """
     service = _caddy_service()
-    assert re.search(r"image:\s*caddy:[^\s@]+@sha256:[0-9a-f]{64}", service), (
-        "the caddy image is not pinned by tag and digest"
-    )
-    assert re.search(r"config/caddy/Caddyfile:/etc/caddy/Caddyfile:ro", service), (
-        "the Caddyfile is not mounted, or is mounted writable"
-    )
+    assert re.search(
+        r"image:\s*caddy:[^\s@]+@sha256:[0-9a-f]{64}", service
+    ), "the caddy image is not pinned by tag and digest"
+    assert re.search(
+        r"config/caddy/Caddyfile:/etc/caddy/Caddyfile:ro", service
+    ), "the Caddyfile is not mounted, or is mounted writable"
 
 
 def test_the_edge_healthcheck_does_not_borrow_an_upstreams_health() -> None:
@@ -165,7 +169,7 @@ def test_the_edge_healthcheck_does_not_borrow_an_upstreams_health() -> None:
     assert "healthcheck" in service, "every service in this stack has a healthcheck (03 J)"
     probe = re.search(r"test:\s*(\[.*?\])", service, re.DOTALL)
     assert probe, "the caddy healthcheck has no `test:` entry to inspect"
-    assert "2019" in probe.group(1), (
-        "the probe should hit Caddy's own admin endpoint, which answers only when a config loaded"
-    )
+    assert "2019" in probe.group(
+        1
+    ), "the probe should hit Caddy's own admin endpoint, which answers only when a config loaded"
     assert "/api" not in probe.group(1), "the edge's own health must not depend on the API's health"

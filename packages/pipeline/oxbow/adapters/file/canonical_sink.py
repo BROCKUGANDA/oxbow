@@ -223,7 +223,9 @@ class CanonicalSink:
         # written inside a container (/srv) is still readable from the host. Derived from
         # interim_root when not given, but that derivation is only valid for the default
         # layout -- `for_repo` passes the real root because --out relocates interim_root.
-        self.repo_root = Path(repo_root) if repo_root is not None else _repo_root_for(self.interim_root)
+        self.repo_root = (
+            Path(repo_root) if repo_root is not None else _repo_root_for(self.interim_root)
+        )
 
     @classmethod
     def for_repo(

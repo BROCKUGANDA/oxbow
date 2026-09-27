@@ -168,9 +168,11 @@ def whoami(
     container: Container = Depends(get_container),
     principal: Principal = Depends(authenticate),
 ) -> dict[str, Any]:
-    from api.security import LOCAL_ISSUER as _local
+    from api.security import LOCAL_ISSUER
 
-    claims_issuer = _local if principal.source == "local-jwt" else container.settings.oidc_issuer
+    claims_issuer = (
+        LOCAL_ISSUER if principal.source == "local-jwt" else container.settings.oidc_issuer
+    )
     try:
         bearer_token(request.headers.get("authorization"))
     except Exception as exc:  # already authenticated, so this is a header-shape oddity

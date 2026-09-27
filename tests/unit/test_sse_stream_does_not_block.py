@@ -134,7 +134,8 @@ def sleeps(monkeypatch: pytest.MonkeyPatch) -> dict[str, int]:
         )
 
     monkeypatch.setattr(
-        getattr(events, "asyncio", None) or pytest.fail(
+        getattr(events, "asyncio", None)
+        or pytest.fail(
             "api.events does not import asyncio, so the stream's wait cannot be awaited "
             "and it holds a worker thread between polls"
         ),
@@ -187,9 +188,9 @@ def test_the_poll_sleeps_by_awaiting_not_by_blocking(sleeps: dict[str, int]) -> 
     body = asyncio.run(_drain(stream))
     assert body.startswith(f"retry: {SSE_RETRY_MS}\n\n"), "the reconnect directive is gone"
     assert record["blocked"] == 0
-    assert record["awaited"] >= 1, (
-        "the stream never awaited a sleep, so it polls as fast as the loop allows"
-    )
+    assert (
+        record["awaited"] >= 1
+    ), "the stream never awaited a sleep, so it polls as fast as the loop allows"
 
 
 def test_every_poll_reads_the_ledger_with_a_limit(sleeps: dict[str, int]) -> None:
@@ -259,8 +260,10 @@ def test_the_served_frames_are_unchanged(sleeps: dict[str, int]) -> None:
 
 
 def _json(event_id: int, stage: str, status: str) -> str:
+    # Percent formatting on purpose: the payload is JSON, and an f-string would have to double
+    # every brace in it, which hides the frame shape this test exists to pin.
     return (
-        '{"id":%d,"run_id":"%s","stage":"%s","status":"%s","rows":%d,"elapsed_ms":%d,'
+        '{"id":%d,"run_id":"%s","stage":"%s","status":"%s","rows":%d,"elapsed_ms":%d,'  # noqa: UP031
         '"detail":null,"emitted_at":"2026-01-15T12:00:00Z"}'
         % (event_id, RUN_ID, stage, status, 10 * event_id, 100 * event_id)
     )

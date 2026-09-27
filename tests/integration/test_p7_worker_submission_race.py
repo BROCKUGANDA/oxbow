@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import secrets
 import sys
+from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -134,6 +135,7 @@ def _open_container() -> Any:
     from api.deps import build_container
 
     return build_container()
+
 
 KIND = "pipeline"
 STAGES = ("ingest", "graph")
@@ -546,9 +548,7 @@ def test_a_short_silence_and_a_silent_queue_are_both_refused(
         # id `_abandoned_run` returned, and a run id never equals a job id, so the predicate
         # as first written was never true: every row answered `started`, all three were
         # condemned, and the test that names the abort rule proved nothing about it.
-        probe=lambda job_id: (
-            None if job_id == "p7r-refuse-mute" else api_worker.JOB_STARTED
-        ),
+        probe=lambda job_id: (None if job_id == "p7r-refuse-mute" else api_worker.JOB_STARTED),
         beats=lambda _job_id: _minutes_ago(999),
     )
     assert aborted == [], "an unanswered question stopped nothing, so rows were written"

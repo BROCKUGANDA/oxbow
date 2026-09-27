@@ -53,9 +53,7 @@ def _fold_frame(*, full_stack: bool, drop: tuple[str, ...] = ()) -> pl.DataFrame
     produced = _FULL_CHANNELS if full_stack else _DEGRADED_CHANNELS
     others = tuple(c for c in (*_FULL_CHANNELS, *_DEGRADED_CHANNELS) if c not in produced)
     columns: dict[str, Any] = {
-        name: [None, None]
-        for name in SCORED_ROW_COLUMNS
-        if name not in (*others, *drop)
+        name: [None, None] for name in SCORED_ROW_COLUMNS if name not in (*others, *drop)
     }
     columns["account_key"] = ["ACC-A", "ACC-B"]
     columns["fold"] = [0, 0]
@@ -117,9 +115,10 @@ def test_divergent_folds_persist_as_one_artifact(tmp_path: Path) -> None:
     full_rows = back.filter(pl.col("scoring_mode") == "full_model_stack")
     degraded_rows = back.filter(pl.col("scoring_mode") == "scorecard_and_rules_only")
     assert full_rows.get_column("p_gbm").to_list() == [0.55, 0.81]
-    assert degraded_rows.get_column("p_gbm").to_list() == [None, None], (
-        "a degraded fold's missing channel must be null, never a number the model did not produce"
-    )
+    assert degraded_rows.get_column("p_gbm").to_list() == [
+        None,
+        None,
+    ], "a degraded fold's missing channel must be null, never a number the model did not produce"
     assert degraded_rows.get_column("drift_banner").to_list() == [
         "drift action taken",
         "drift action taken",

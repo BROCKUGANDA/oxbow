@@ -39,7 +39,7 @@ ECON_COLS = ("exposure_minor", "amount_minor", "review_minutes", "review_cost_mi
 
 
 class PMC(ctypes.Structure):
-    _fields_ = [
+    _fields_ = [  # noqa: RUF012 -- ctypes requires a plain class attribute
         ("cb", ctypes.wintypes.DWORD),
         ("PageFaultCount", ctypes.wintypes.DWORD),
         ("PeakWorkingSetSize", ctypes.c_size_t),
@@ -61,14 +61,16 @@ def _ws(peak: bool = False) -> float:
     ok = ctypes.windll.psapi.GetProcessMemoryInfo(
         ctypes.c_void_p(k32.GetCurrentProcess()), ctypes.byref(pmc), ctypes.wintypes.DWORD(pmc.cb)
     )
-    return float("nan") if not ok else (
-        (pmc.PeakWorkingSetSize if peak else pmc.WorkingSetSize) / (1024 * 1024)
+    return (
+        float("nan")
+        if not ok
+        else ((pmc.PeakWorkingSetSize if peak else pmc.WorkingSetSize) / (1024 * 1024))
     )
 
 
 def free_gb() -> float:
     class STATUSEX(ctypes.Structure):
-        _fields_ = [
+        _fields_ = [  # noqa: RUF012 -- ctypes requires a plain class attribute
             ("dwLength", ctypes.wintypes.DWORD),
             ("dwMemoryLoad", ctypes.wintypes.DWORD),
             ("ullTotalPhys", ctypes.c_ulonglong),
@@ -99,7 +101,9 @@ def fold_slices(fold_index: int) -> tuple[pl.DataFrame, pl.DataFrame]:
     from oxbow.features.compute import registry_from_repo
 
     frame = pl.read_parquet(CORPUS)
-    frame = frame.drop([c for c in ECON_COLS if c in frame.columns]).sort(["as_of_ts", "account_key"])
+    frame = frame.drop([c for c in ECON_COLS if c in frame.columns]).sort(
+        ["as_of_ts", "account_key"]
+    )
     registry = registry_from_repo(str(REPO))
     timeline = pl.concat(
         [
@@ -109,7 +113,9 @@ def fold_slices(fold_index: int) -> tuple[pl.DataFrame, pl.DataFrame]:
             ),
             pl.DataFrame(
                 {
-                    "event_ts_utc": pl.Series([frame.get_column("as_of_ts").max()]).dt.offset_by("1us"),
+                    "event_ts_utc": pl.Series([frame.get_column("as_of_ts").max()]).dt.offset_by(
+                        "1us"
+                    ),
                     "entity": [str(frame.get_column("account_key")[0])],
                 }
             ),
@@ -127,7 +133,9 @@ def fold_slices(fold_index: int) -> tuple[pl.DataFrame, pl.DataFrame]:
     raise SystemExit(f"no fold {fold_index} in the plan")
 
 
-def matrix(frame: pl.DataFrame, features: list[str], categorical: tuple[str, ...], coding: str) -> np.ndarray:
+def matrix(
+    frame: pl.DataFrame, features: list[str], categorical: tuple[str, ...], coding: str
+) -> np.ndarray:
     """The model input matrix, coded the way the branch names says it was."""
     if coding == "postfix":
         from oxbow.models.inputs import feature_matrix
@@ -186,7 +194,9 @@ def main() -> int:
     )
     mark("matrices built")
     if int(y_train.sum()) < MIN_POSITIVES_FOR_FIT or int(y_valid.sum()) == 0:
-        raise SystemExit(f"fold {args.fold} has no fit population ({int(y_train.sum())}/{int(y_valid.sum())})")
+        raise SystemExit(
+            f"fold {args.fold} has no fit population ({int(y_train.sum())}/{int(y_valid.sum())})"
+        )
 
     params = dict(model_cfg.gbm.lgb_params)
     params["seed"] = model_cfg.seed
@@ -242,7 +252,9 @@ def main() -> int:
     return 0
 
 
-def categorical_for_lightgbm_names(matrix: np.ndarray, features: list[str], declared: tuple[str, ...]) -> tuple[str, ...]:
+def categorical_for_lightgbm_names(
+    matrix: np.ndarray, features: list[str], declared: tuple[str, ...]
+) -> tuple[str, ...]:
     """The declared categoricals whose codes are admissible LightGBM category indices."""
     from oxbow.models.inputs import MAX_CATEGORY_INDEX
 

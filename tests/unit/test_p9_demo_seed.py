@@ -109,9 +109,9 @@ def test_every_gate_the_verify_script_defines_names_a_file_that_exists() -> None
 def test_the_demo_target_points_at_a_seeder_that_exists() -> None:
     """`make demo` is advertised by `make help`, so its command must resolve."""
     recipe = _target_recipe("demo")
-    assert "scripts/demo_seed.py" in recipe, (
-        f"the demo target no longer calls the seeder; it reads {recipe!r}"
-    )
+    assert (
+        "scripts/demo_seed.py" in recipe
+    ), f"the demo target no longer calls the seeder; it reads {recipe!r}"
     assert SEEDER.is_file()
 
 
@@ -128,9 +128,9 @@ def test_the_demo_target_advertises_a_budget_and_the_plan_agrees() -> None:
     source = SEEDER.read_text(encoding="utf-8")
     default = re.search(r'"--boot-budget",[\s\S]{0,80}?default=([0-9.]+)', source)
     assert default is not None, "the seeder does not state a default boot budget"
-    assert float(default.group(1)) == 90.0, (
-        f"the seeder's default budget is {default.group(1)}s, but plan §15 requires 90s"
-    )
+    assert (
+        float(default.group(1)) == 90.0
+    ), f"the seeder's default budget is {default.group(1)}s, but plan §15 requires 90s"
 
 
 def test_the_seeder_refuses_a_warehouse_with_no_evidence() -> None:
@@ -178,8 +178,13 @@ def test_the_evidence_tables_are_the_warehouse_s_own_names() -> None:
     nobody would understand, so the names are checked against the migration that creates
     them.
     """
-    migration = REPO_ROOT / "apps" / "api" / "alembic" / "versions" / (
-        "0001_7907d04c69bc_warehouse_read_model.py"
+    migration = (
+        REPO_ROOT
+        / "apps"
+        / "api"
+        / "alembic"
+        / "versions"
+        / ("0001_7907d04c69bc_warehouse_read_model.py")
     )
     source = migration.read_text(encoding="utf-8")
     for table, _label in EVIDENCE_TABLES:

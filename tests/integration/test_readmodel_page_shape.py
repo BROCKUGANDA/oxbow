@@ -48,6 +48,7 @@ for _extra in (REPO_ROOT / "apps", REPO_ROOT / "apps" / "api"):
 
 from api.readmodel import Base, PostgresSource, ReadModel  # noqa: E402
 from api.settings import reset_settings_cache  # noqa: E402
+
 from oxbow.adapters.warehouse.postgres import new_run_id  # noqa: E402
 
 TEST_DB_NAME = f"oxbow_read_shape_{os.getpid()}_{secrets.token_hex(3)}"
@@ -110,9 +111,7 @@ class _Ledger:
         self.entries.clear()
 
     def describe(self) -> str:
-        return (
-            "; ".join(f"{entry.kind}[{entry.rows} rows]" for entry in self.entries) or "nothing"
-        )
+        return "; ".join(f"{entry.kind}[{entry.rows} rows]" for entry in self.entries) or "nothing"
 
 
 class _RecordingResult:
@@ -152,9 +151,7 @@ class _RecordingSession:
 
     def execute(self, statement: Any, *args: Any, **kwargs: Any) -> _RecordingResult:
         sql = str(statement)
-        return _RecordingResult(
-            self._inner.execute(statement, *args, **kwargs), self._ledger, sql
-        )
+        return _RecordingResult(self._inner.execute(statement, *args, **kwargs), self._ledger, sql)
 
     def close(self) -> None:
         self._inner.close()
@@ -439,9 +436,9 @@ def test_live_rank_last_page_reads_one_page(
         range(N_ACCOUNTS - PAGE_SIZE + 1, N_ACCOUNTS + 1)
     )
     assert total == N_ACCOUNTS
-    assert max((entry.rows for entry in ledger.wide_reads), default=0) <= PAGE_SIZE, (
-        f"the last page read {ledger.describe()}"
-    )
+    assert (
+        max((entry.rows for entry in ledger.wide_reads), default=0) <= PAGE_SIZE
+    ), f"the last page read {ledger.describe()}"
 
 
 @pytest.mark.parametrize(
@@ -475,14 +472,14 @@ def test_paged_assembly_equals_one_unpaginated_read(
             page, total = _live(
                 source, warehouse, run_id, sort=sort, order=order, limit=step, offset=offset
             )
-            assert total == whole_total, (
-                f"total moved between pages: {total} at offset {offset} vs {whole_total}"
-            )
+            assert (
+                total == whole_total
+            ), f"total moved between pages: {total} at offset {offset} vs {whole_total}"
             assembled.extend(str(row["account_key"]) for row in page)
             offset += step
-        assert assembled == [str(row["account_key"]) for row in whole], (
-            f"{sort}/{order} paged in {step}s does not assemble to the whole read for {run_id}"
-        )
+        assert assembled == [
+            str(row["account_key"]) for row in whole
+        ], f"{sort}/{order} paged in {step}s does not assemble to the whole read for {run_id}"
         assert len(set(assembled)) == len(assembled), f"{sort}/{order} served a row twice"
 
 
@@ -510,9 +507,9 @@ def test_rank_order_keeps_unranked_accounts_last_either_way(
         assert total == N_ACCOUNTS, f"{order}: total {total}, the join holds {N_ACCOUNTS}"
         assert len(rows) == N_ACCOUNTS
         tail = [str(row["account_key"]) for row in rows][-3:]
-        assert sorted(tail) == warehouse["unpriced"], (
-            f"{order}: unpriced accounts landed at {tail}, not last"
-        )
+        assert (
+            sorted(tail) == warehouse["unpriced"]
+        ), f"{order}: unpriced accounts landed at {tail}, not last"
         assert all(row["rank"] is None for row in rows[-3:])
         present = sorted(int(value["rank"]) for value in priced.values())
         assert [int(row["rank"]) for row in rows[:-3]] == (
@@ -536,9 +533,9 @@ def test_unpriced_accounts_are_paged_like_any_other_row(
         )
         assert len(rows) == PAGE_SIZE
         assert total == N_ACCOUNTS
-        assert max((entry.rows for entry in ledger.wide_reads), default=0) <= PAGE_SIZE, (
-            f"offset {offset} on the gapped run read {ledger.describe()}"
-        )
+        assert (
+            max((entry.rows for entry in ledger.wide_reads), default=0) <= PAGE_SIZE
+        ), f"offset {offset} on the gapped run read {ledger.describe()}"
         assert ledger.narrow_reads, (
             f"offset {offset}: nothing in the database decided this window, so total cannot "
             f"be the queue size ({ledger.describe()})"
@@ -561,9 +558,9 @@ def test_side_of_cutoff_page_reads_one_page_of_wide_rows(
             limit=PAGE_SIZE,
         )
         assert len(rows) == PAGE_SIZE and total == SELECTED_COUNT
-        assert max((entry.rows for entry in ledger.wide_reads), default=0) <= PAGE_SIZE, (
-            f"sort={sort} above the cutoff read {ledger.describe()}"
-        )
+        assert (
+            max((entry.rows for entry in ledger.wide_reads), default=0) <= PAGE_SIZE
+        ), f"sort={sort} above the cutoff read {ledger.describe()}"
 
 
 def test_side_of_cutoff_pages_without_fetching_the_other_side(
@@ -618,7 +615,9 @@ def test_filters_narrow_the_page_and_the_total_together(
         source, warehouse, warehouse["run_full"], bands=["D"], sort="rank", limit=PAGE_SIZE
     )
     assert {row["band"] for row in band_rows} == {"D"}
-    expected_band = sum(1 for key in warehouse["ordered_keys"] if warehouse["band_by_key"][key] == "D")
+    expected_band = sum(
+        1 for key in warehouse["ordered_keys"] if warehouse["band_by_key"][key] == "D"
+    )
     assert band_total == expected_band, f"band total {band_total}, expected {expected_band}"
     assert len(band_rows) == PAGE_SIZE
     exposure_rows, exposure_total = _live(
@@ -701,7 +700,9 @@ def test_run_summary_costs_four_counts_and_no_empty_row_reads(
     assert summary["scored_count"] == N_ACCOUNTS
     assert summary["quarantine_count"] == 0
     assert len(ledger.counts) == 4, f"expected four aggregates, saw {ledger.describe()}"
-    assert not ledger.row_reads, f"run_summary fetched rows in order to count them ({ledger.describe()})"
+    assert (
+        not ledger.row_reads
+    ), f"run_summary fetched rows in order to count them ({ledger.describe()})"
 
 
 def test_list_runs_statement_budget_is_the_page_plus_four_per_row(
@@ -746,9 +747,9 @@ def test_paging_a_table_still_reports_the_real_total(
         "score", where={"run_id": warehouse["run_full"]}, limit=5, with_count=False
     )
     assert len(uncounted) == 5
-    assert absent is None, (
-        "a read that asked not to count still reported a total; the opt-out is not real"
-    )
+    assert (
+        absent is None
+    ), "a read that asked not to count still reported a total; the opt-out is not real"
     assert not ledger.counts, f"the opt-out still issued a COUNT: {ledger.describe()}"
 
 
@@ -788,17 +789,16 @@ def _configure_env(monkeypatch: pytest.MonkeyPatch, **overrides: str | None) -> 
 @pytest.fixture(scope="module")
 def queue_client(warehouse: dict[str, Any]) -> Any:
     """The real app over the scratch warehouse, so the served body is the artifact."""
-    from fastapi.testclient import TestClient
-
     from api.deps import build_container
     from api.main import create_app
+    from fastapi.testclient import TestClient
 
     monkeypatch = pytest.MonkeyPatch()
     _configure_env(monkeypatch, DATABASE_URL=warehouse["url"], OXBOW_WAREHOUSE="postgres")
     container = build_container()
-    assert container.backend == "postgres", (
-        f"the fixture asked for OXBOW_WAREHOUSE=postgres and got {container.backend}"
-    )
+    assert (
+        container.backend == "postgres"
+    ), f"the fixture asked for OXBOW_WAREHOUSE=postgres and got {container.backend}"
     app = create_app()
     with TestClient(app, raise_server_exceptions=False) as client:
         app.state.container = container
@@ -848,9 +848,9 @@ def test_the_served_queue_pages_with_a_total_and_no_recomputed_money(
         "/api/alerts", params={"run_id": warehouse["run_full"], "offset": 50}
     ).json()
     assert second["meta"]["total"] == N_ACCOUNTS
-    assert set(first_page).isdisjoint({row["account_key"] for row in second["data"]["rows"]}), (
-        "two pages of the same queue share a row: the page boundary moved"
-    )
+    assert set(first_page).isdisjoint(
+        {row["account_key"] for row in second["data"]["rows"]}
+    ), "two pages of the same queue share a row: the page boundary moved"
     ranks = [int(row["rank"]) for row in data["rows"]]
     assert ranks == sorted(ranks), f"sort=rank served {ranks}"
 

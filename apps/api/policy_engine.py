@@ -443,9 +443,7 @@ def frontier_points(
                     assumptions.currency,
                     decimals=decimals,
                 ),
-                "max_drawdown": money(
-                    0, assumptions.currency, decimals=decimals
-                ),
+                "max_drawdown": money(0, assumptions.currency, decimals=decimals),
                 "var95": money(0, assumptions.currency, decimals=decimals),
                 "es975": money(0, assumptions.currency, decimals=decimals),
                 "current_point": point.capacity_minutes == operating_capacity,

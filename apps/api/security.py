@@ -248,8 +248,8 @@ def _only_key(keys: Mapping[str, tuple[int, int]]) -> tuple[int, int] | None:
 def _peek_issuer(payload_raw: str) -> Any:
     try:
         payload = json.loads(b64url_decode(payload_raw))
-    except (TokenError, json.JSONDecodeError):
-        raise TokenError("token payload is unreadable")
+    except (TokenError, json.JSONDecodeError) as exc:
+        raise TokenError("token payload is unreadable") from exc
     return payload.get("iss") if isinstance(payload, Mapping) else None
 
 
@@ -306,12 +306,12 @@ def principal_from_claims(claims: Mapping[str, Any], *, source: str) -> Principa
     """
     roles: list[str] = []
     explicit = claims.get(ROLE_CLAIM)
-    if isinstance(explicit, Sequence) and not isinstance(explicit, (str, bytes)):
+    if isinstance(explicit, Sequence) and not isinstance(explicit, str | bytes):
         roles.extend(str(role) for role in explicit)
     realm = claims.get(KEYCLOAK_ROLES_CLAIM)
     if isinstance(realm, Mapping):
         realm_roles = realm.get("roles")
-        if isinstance(realm_roles, Sequence) and not isinstance(realm_roles, (str, bytes)):
+        if isinstance(realm_roles, Sequence) and not isinstance(realm_roles, str | bytes):
             roles.extend(str(role) for role in realm_roles)
     known = [role for role in ROLES if role in set(roles)]
     if not known:

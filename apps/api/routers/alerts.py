@@ -155,7 +155,9 @@ def list_alerts(
                     # would quietly drop.
                     "case_id": row.get("case_id"),
                     "case_status": row.get("case_status"),
-                    "first_seen_at": _required_datetime(row, "first_seen_at", key=row["account_key"]),
+                    "first_seen_at": _required_datetime(
+                        row, "first_seen_at", key=row["account_key"]
+                    ),
                     "last_seen_at": _required_datetime(row, "last_seen_at", key=row["account_key"]),
                     "txn_count": _required_int(row, "txn_count", key=row["account_key"]),
                     "capacity_minutes": capacity,
@@ -331,7 +333,7 @@ def _required_int(row: dict[str, Any], field: str, *, key: str) -> int:
     and saying so beats a number that reads as measured.
     """
     value = row.get(field)
-    if isinstance(value, bool) or not isinstance(value, (int, float)):
+    if isinstance(value, bool) or not isinstance(value, int | float):
         raise BadRequest(
             f"alert row for account {key!r} has no usable {field!r} "
             f"(got {value!r}); the queue cannot rank a row it cannot position"

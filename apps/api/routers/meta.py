@@ -646,7 +646,9 @@ def _run_provenance(read_model: ReadModel, run_id: str) -> str:
 # ------------------------------------------------------------- /api/meta/run ---
 
 
-def _served_run(read_model: ReadModel, run_id: str | None) -> tuple[dict[str, Any] | None, str | None]:
+def _served_run(
+    read_model: ReadModel, run_id: str | None
+) -> tuple[dict[str, Any] | None, str | None]:
     """The run this response describes, and why there is not one.
 
     A named run that does not exist is a 404 — ``run_row`` raises it, because the caller

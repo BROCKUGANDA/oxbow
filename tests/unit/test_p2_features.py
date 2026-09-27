@@ -985,13 +985,19 @@ def test_a_running_total_keeps_the_units_of_its_own_source() -> None:
     assert money.to_list() == [100, 300, 600, 50], "money must still accumulate in minor units"
     squares = totals[f"c_{SQUARES}"]
     assert squares.dtype == pl.Float64, squares.dtype
-    assert squares.to_list() == [1.0e19, 3.0e19, 6.0e19, 4.0e18], (
-        "a sum of squares past i64::MAX is the normal case for large transfers, not an error"
-    )
+    assert squares.to_list() == [
+        1.0e19,
+        3.0e19,
+        6.0e19,
+        4.0e18,
+    ], "a sum of squares past i64::MAX is the normal case for large transfers, not an error"
     ratio = totals["c_ratio"]
-    assert ratio.to_list() == [0.5, 0.75, 0.875, 0.75], (
-        "the running total was truncating a fractional source toward zero -- 0.75 arrived as 0"
-    )
+    assert ratio.to_list() == [
+        0.5,
+        0.75,
+        0.875,
+        0.75,
+    ], "the running total was truncating a fractional source toward zero -- 0.75 arrived as 0"
 
     # The same mistake one layer up, and the one that actually stopped the build: the
     # window total is a difference of two running totals, so it inherits their dtype or

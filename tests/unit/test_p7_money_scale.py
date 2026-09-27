@@ -61,6 +61,7 @@ def test_the_composed_container_serves_the_exponent_whose_base_is_the_configured
 
 def test_a_served_money_object_renders_the_hand_computed_major_amount() -> None:
     from api.deps import _money_decimals
+
     api_readmodel = __import__("api.readmodel", fromlist=["money"])
 
     wire = api_readmodel.money(1_234_567, "UGX", decimals=_money_decimals())
@@ -141,10 +142,10 @@ def test_the_gap_view_that_holds_no_read_model_still_renders_at_the_exponent() -
         )
         # The client renders `minor / 10 ** decimals`; the true major amount comes from the
         # base. Asserting the two agree is what fails when `decimals` holds the base itself.
-        rendered = figure["minor"] / 10**figure["decimals"]
-        assert rendered == figure["minor"] / cfg.minor_units_per_major, (
-            f"{field}: rendered {rendered} but the base says {figure['minor'] / cfg.minor_units_per_major}"
-        )
+        rendered = figure["minor"] / 10 ** figure["decimals"]
+        assert (
+            rendered == figure["minor"] / cfg.minor_units_per_major
+        ), f"{field}: rendered {rendered} but the base says {figure['minor'] / cfg.minor_units_per_major}"
 
 
 def test_the_frontier_points_function_actually_runs() -> None:

@@ -990,7 +990,9 @@ __all__ = [
     "assert_labels_absent",
     "assert_no_label_leakage",
     "assert_single_currency_per_account",
-    "build_feature_table",
+    # Resolved by this module's PEP 562 ``__getattr__`` (see above) to dodge the import cycle;
+    # ruff reads a lazy attribute as an undefined export, and the import does work.
+    "build_feature_table",  # noqa: F822
     "cycle_eligible_edges",
     "edge_frame_for_fold",
     "entity_event_frame",

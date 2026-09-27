@@ -1823,11 +1823,10 @@ def run_eval(root: Path, *, write_docs: bool = True) -> dict[str, Any]:
 
 
 def _section_gaps(payload: Mapping[str, Any]) -> list[str]:
-    gaps = [
+    return [
         f"{item['path']} — stage {item['stage']}, produced by {item['producer']}"
         for item in payload["missing_artifacts"]
     ]
-    return gaps
 
 
 # --------------------------------------------------------------------------
@@ -2305,7 +2304,7 @@ def render_model_card(payload: Mapping[str, Any]) -> str:
             row["label"],
             row["corpus"],
             _v(row["pr_auc"]),
-            f"{row['pr_auc_ci'][0]:.4f}–{row['pr_auc_ci'][1]:.4f}",
+            f"{row['pr_auc_ci'][0]:.4f}-{row['pr_auc_ci'][1]:.4f}",
             str(row["auroc_comparability_only"]),
             str(row["brier"]),
             f"{row['net_benefit_total_minor']:,} {row['currency']}",

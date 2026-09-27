@@ -42,7 +42,11 @@ def _landed_corpus() -> Path | None:
     if not root.is_dir():
         return None
     candidates = sorted(
-        (directory / "backtest_corpus.parquet" for directory in root.iterdir() if directory.is_dir()),
+        (
+            directory / "backtest_corpus.parquet"
+            for directory in root.iterdir()
+            if directory.is_dir()
+        ),
         key=lambda path: path.stat().st_mtime if path.is_file() else 0,
     )
     return next((path for path in reversed(candidates) if path.is_file()), None)
@@ -81,7 +85,9 @@ def plan_and_corpus(corpus: pl.DataFrame) -> tuple[SplitPlan, pl.DataFrame]:
     return plan, corpus
 
 
-def test_no_scored_row_sits_in_a_withheld_band(plan_and_corpus: tuple[SplitPlan, pl.DataFrame]) -> None:
+def test_no_scored_row_sits_in_a_withheld_band(
+    plan_and_corpus: tuple[SplitPlan, pl.DataFrame],
+) -> None:
     """The defect, stated as bytes: a fold's scored set must not contain its own embargo band.
 
     Also checks the scored set agrees row-for-row with ``SplitPlan.fold_for``, so the mask and
@@ -110,7 +116,7 @@ def test_no_scored_row_sits_in_a_withheld_band(plan_and_corpus: tuple[SplitPlan,
 
 
 def test_the_landed_fold_column_matches_the_plan_it_was_scored_under(
-    plan_and_corpus: tuple[SplitPlan, pl.DataFrame]
+    plan_and_corpus: tuple[SplitPlan, pl.DataFrame],
 ) -> None:
     """The corpus records which fold's scoring cutoff built each row; the plan must reproduce it.
 
@@ -126,7 +132,7 @@ def test_the_landed_fold_column_matches_the_plan_it_was_scored_under(
 
 
 def test_every_fold_clears_the_embargo_it_was_configured_with(
-    plan_and_corpus: tuple[SplitPlan, pl.DataFrame]
+    plan_and_corpus: tuple[SplitPlan, pl.DataFrame],
 ) -> None:
     """The guard, on real bytes: fit-to-score gap >= the embargo, which equals the lookback."""
     plan, corpus = plan_and_corpus
@@ -150,7 +156,9 @@ def test_every_fold_clears_the_embargo_it_was_configured_with(
 def test_money_is_integer_minor_units_and_the_label_is_not_a_float(corpus: pl.DataFrame) -> None:
     """DEV-005 on landed bytes: no amount ever became a float on the way to disk."""
     floats = sorted(
-        name for name, dtype in corpus.schema.items() if name.endswith("_minor") and dtype in FLOAT_DTYPES
+        name
+        for name, dtype in corpus.schema.items()
+        if name.endswith("_minor") and dtype in FLOAT_DTYPES
     )
     assert not floats, f"money columns stored as floats: {floats}"
     assert corpus.get_column("label_is_fraud").dtype in {pl.Int8, pl.Int16, pl.Int32, pl.Int64}

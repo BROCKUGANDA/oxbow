@@ -125,8 +125,7 @@ def test_the_scan_actually_reads_something() -> None:
     assert len(files) > 200, f"only {len(files)} files scanned — the file walk is broken"
     # The point of the walk is the citations, so prove it can see at least one.
     cited_any = any(
-        CITED.search(path.read_text(encoding="utf-8", errors="replace"))
-        for path in files[:400]
+        CITED.search(path.read_text(encoding="utf-8", errors="replace")) for path in files[:400]
     )
     assert cited_any, "no DEV citation found in the scanned files; the regex or the walk is wrong"
 
@@ -137,7 +136,7 @@ def test_the_decision_that_started_this(tag: str) -> None:
     assert tag in _declared(), f"{tag} is not declared in DECISIONS.md"
     text = DECISIONS.read_text(encoding="utf-8")
     body = text.split(f"## {tag}", 1)[1].split("\n## DEV-", 1)[0]
-    assert "ingested_at" in body and "run_id" in body, (
-        f"{tag} lost the two columns the rule is about"
-    )
+    assert (
+        "ingested_at" in body and "run_id" in body
+    ), f"{tag} lost the two columns the rule is about"
     assert "verify-determinism" in body, f"{tag} no longer names the gate it exists to make work"

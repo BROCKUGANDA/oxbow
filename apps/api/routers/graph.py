@@ -324,9 +324,7 @@ def _in_window(edge: dict[str, Any], start: datetime | None, end: datetime | Non
     last = _as_dt(edge["last_ts"])
     if start is not None and last < start:
         return False
-    if end is not None and first > end:
-        return False
-    return True
+    return not (end is not None and first > end)
 
 
 def _as_dt(value: Any) -> datetime:

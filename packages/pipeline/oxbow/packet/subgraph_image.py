@@ -222,11 +222,15 @@ def _sum_text(minor: int, currency: str, per_major: int) -> str:
 def render_subgraph_svg(
     view: SubgraphView,
     *,
-    per_major: int,
     band_letter: str,
     title: str,
 ) -> SubgraphImage:
-    """Draw ``view`` and return the SVG plus the caption the page must carry."""
+    """Draw ``view`` and return the SVG plus the caption the page must carry.
+
+    No money figure is drawn: edge widths are a relative weight over ``total_value_minor``,
+    and the amounts themselves belong to :func:`value_basis_lines`, which prints them with
+    the currency they were recorded in.
+    """
     positions = _positions(view)
     node_by_id = {node.node_id: node for node in view.nodes}
     parts: list[str] = [

@@ -41,7 +41,9 @@ class RunSourceFileCard(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     file_name: str
-    sha256: str = Field(description="Recorded at verification time by the ingest run, not declared.")
+    sha256: str = Field(
+        description="Recorded at verification time by the ingest run, not declared."
+    )
 
 
 class RunSourceCard(BaseModel):
@@ -148,11 +150,15 @@ class RuntimeRun(BaseModel):
     # --- the run record beside the contract fields --------------------------
     run_state: RunStateName | None = Field(default=None, description="The run row's own state.")
     provenance: str | None = Field(
-        default=None, description="The run row's provenance, verbatim: pipeline | fixture | demo_snapshot."
+        default=None,
+        description="The run row's provenance, verbatim: pipeline | fixture | demo_snapshot.",
     )
-    seed: int | None = Field(default=None, description="The run's seed; reproducibility, not decoration.")
+    seed: int | None = Field(
+        default=None, description="The run's seed; reproducibility, not decoration."
+    )
     config_hash: str | None = Field(
-        default=None, description="run.config_hash — the digest of the config directory that produced it."
+        default=None,
+        description="run.config_hash — the digest of the config directory that produced it.",
     )
     artifact_hashes: dict[str, str] | None = Field(
         default=None,
@@ -169,7 +175,8 @@ class RuntimeRun(BaseModel):
         description="postgres or null-file, from the container that is answering."
     )
     sources: list[RunSourceCard] = Field(
-        default_factory=list, description="Ascending by source_id — a total order, not directory order."
+        default_factory=list,
+        description="Ascending by source_id — a total order, not directory order.",
     )
     degradations: list[FieldDegradation] = Field(
         default_factory=list,

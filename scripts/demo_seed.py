@@ -129,7 +129,16 @@ def _table_counts() -> dict[str, int]:
     trade for a manifest that only has to detect a warehouse that has emptied out.
     """
     raw = _compose(
-        "psql", "-U", DEFAULT_USER, "-d", DEFAULT_DB, "-t", "-A", "-F", "\t", "-c",
+        "psql",
+        "-U",
+        DEFAULT_USER,
+        "-d",
+        DEFAULT_DB,
+        "-t",
+        "-A",
+        "-F",
+        "\t",
+        "-c",
         "select relname, n_live_tup from pg_stat_user_tables order by relname;",
     )
     counts: dict[str, int] = {}
@@ -143,7 +152,14 @@ def _table_counts() -> dict[str, int]:
 def _alembic_revision() -> str:
     """The migration revision the warehouse is at, recorded so a restore can be compared."""
     raw = _compose(
-        "psql", "-U", DEFAULT_USER, "-d", DEFAULT_DB, "-t", "-A", "-c",
+        "psql",
+        "-U",
+        DEFAULT_USER,
+        "-d",
+        DEFAULT_DB,
+        "-t",
+        "-A",
+        "-c",
         "select version_num from alembic_version limit 1;",
     )
     return raw.strip() or "unknown"
@@ -178,9 +194,8 @@ def create_dump(*, snapshot_dir: Path, service: str) -> list[Outcome]:
         return [
             Outcome(
                 STATUS_FAIL,
-                "the warehouse holds no evidence to snapshot: " + "; ".join(
-                    o.detail for o in missing
-                ),
+                "the warehouse holds no evidence to snapshot: "
+                + "; ".join(o.detail for o in missing),
             ),
             Outcome(
                 STATUS_FAIL,
@@ -192,8 +207,17 @@ def create_dump(*, snapshot_dir: Path, service: str) -> list[Outcome]:
     # --clean because the target file is a rebuild, and --if-exists because a re-create
     # after the first snapshot is the normal case rather than an error.
     _compose(
-        "pg_dump", "-U", DEFAULT_USER, "-d", DEFAULT_DB, "--format=custom", "--clean",
-        "--if-exists", "-f", _container_path(dump), service=service,
+        "pg_dump",
+        "-U",
+        DEFAULT_USER,
+        "-d",
+        DEFAULT_DB,
+        "--format=custom",
+        "--clean",
+        "--if-exists",
+        "-f",
+        _container_path(dump),
+        service=service,
     )
     if not dump.is_file():
         raise SeederError(
@@ -263,7 +287,8 @@ def _wait_for_healthz(base_url: str, budget_seconds: float) -> tuple[float, str]
         elapsed = budget_seconds - (deadline - time.monotonic())
         done = subprocess.run(
             [
-                sys.executable, "-c",
+                sys.executable,
+                "-c",
                 "import json,sys,urllib.request\n"
                 "try:\n"
                 f"    r=urllib.request.urlopen({base_url!r}, timeout=5)\n"
@@ -271,7 +296,9 @@ def _wait_for_healthz(base_url: str, budget_seconds: float) -> tuple[float, str]
                 "except Exception as exc:\n"
                 "    print(f'UNREACHABLE: {exc}')\n",
             ],
-            capture_output=True, text=True, check=False,
+            capture_output=True,
+            text=True,
+            check=False,
         )
         raw = (done.stdout or "").strip()
         if raw.startswith("{") and '"status"' in raw:
@@ -307,8 +334,17 @@ def restore_dump(
     results = [_verify_digest(dump, manifest)]
 
     _compose(
-        "pg_restore", "-U", DEFAULT_USER, "-d", DEFAULT_DB, "--clean", "--if-exists",
-        "--no-owner", "--single-transaction", _container_path(dump), service=service,
+        "pg_restore",
+        "-U",
+        DEFAULT_USER,
+        "-d",
+        DEFAULT_DB,
+        "--clean",
+        "--if-exists",
+        "--no-owner",
+        "--single-transaction",
+        _container_path(dump),
+        service=service,
     )
     results.append(Outcome(STATUS_OK, f"restored {dump.name} into {DEFAULT_DB}"))
 

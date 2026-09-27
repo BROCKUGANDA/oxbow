@@ -13,17 +13,32 @@ from __future__ import annotations
 
 import re
 import subprocess
-from pathlib import Path
-
 import tomllib
+from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
 # Text only: reading 500 MB of parquet into a regex is not a check, it is an outage.
 TEXT_SUFFIXES = frozenset(
     {
-        ".py", ".ts", ".tsx", ".js", ".mjs", ".json", ".yaml", ".yml", ".toml",
-        ".md", ".txt", ".css", ".html", ".sh", ".ps1", ".cfg", ".ini", ".example",
+        ".py",
+        ".ts",
+        ".tsx",
+        ".js",
+        ".mjs",
+        ".json",
+        ".yaml",
+        ".yml",
+        ".toml",
+        ".md",
+        ".txt",
+        ".css",
+        ".html",
+        ".sh",
+        ".ps1",
+        ".cfg",
+        ".ini",
+        ".example",
     }
 )
 SKIP_NAMES = frozenset({"uv.lock", "pnpm-lock.yaml", "bun.lock"})
@@ -82,14 +97,14 @@ def test_the_repository_declares_a_license_and_says_which() -> None:
     assert "Copyright (c)" in head, "LICENSE carries no copyright line"
 
     pyproject = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
-    assert pyproject["project"].get("license") == "MIT", (
-        "pyproject does not declare MIT, so the packaged metadata contradicts the LICENSE file"
-    )
+    assert (
+        pyproject["project"].get("license") == "MIT"
+    ), "pyproject does not declare MIT, so the packaged metadata contradicts the LICENSE file"
 
     web = REPO_ROOT / "apps" / "web" / "package.json"
-    assert '"license": "MIT"' in web.read_text(encoding="utf-8"), (
-        "apps/web/package.json declares no license while the LICENSE file covers it"
-    )
+    assert '"license": "MIT"' in web.read_text(
+        encoding="utf-8"
+    ), "apps/web/package.json declares no license while the LICENSE file covers it"
 
 
 def test_the_code_licence_agrees_everywhere_it_is_stated() -> None:
@@ -109,7 +124,16 @@ def test_the_code_licence_agrees_everywhere_it_is_stated() -> None:
     # boundaries written as literal backspace bytes by a scripted edit, matched nothing,
     # and reported green over a file that still said Apache-2.0. A gate that cannot fire
     # is worse than no gate, because it is trusted.
-    forbidden = ["Apache-2.0", "Apache-1", "GPL-2", "GPL-3", "AGPL-3", "LGPL-", "BSD-3-Clause", "Unlicense"]
+    forbidden = [
+        "Apache-2.0",
+        "Apache-1",
+        "GPL-2",
+        "GPL-3",
+        "AGPL-3",
+        "LGPL-",
+        "BSD-3-Clause",
+        "Unlicense",
+    ]
     # This file names the strings it forbids; the decision record quotes a rejected
     # proposal on purpose.
     skip = {"LICENSE", "DECISIONS.md", "STATE.md", "BACKLOG.md", "test_publication_preflight.py"}
@@ -126,14 +150,6 @@ def test_the_code_licence_agrees_everywhere_it_is_stated() -> None:
     )
 
 
-def test_no_developer_home_path_is_committed() -> None:
-    """`C:\\Users\\name\\...` is a username, and it is a path that exists on one machine.
-
-    Found here for real: apps/web/playwright.config.ts defaulted its browser binary to one
-    author's cache directory, which leaked the username into a tree meant for judges and
-    broke the suite for everyone else. The config now searches the platform's Playwright
-    cache and honours OXBOW_CHROME_PATH.
-    """
 def _carries_developer_path(name: str, text: str) -> bool:
     """Would this file be a leak if it were pushed publicly?
 
@@ -143,7 +159,9 @@ def _carries_developer_path(name: str, text: str) -> bool:
     an image, not a path on the author's laptop, which is what this gate is for. The Windows and
     macOS branches still apply everywhere, which `test_the_home_path_rule_is_narrow` proves.
     """
-    if re.search(r"(?:[A-Za-z]:[\\/](?:Users|Documents and Settings)[\\/]\w+|/Users/\w{3,}/)", text):
+    if re.search(
+        r"(?:[A-Za-z]:[\\/](?:Users|Documents and Settings)[\\/]\w+|/Users/\w{3,}/)", text
+    ):
         return True
     return bool(re.search(r"/home/\w{3,}/", text)) and not name.startswith("Dockerfile")
 
@@ -156,8 +174,9 @@ def test_no_developer_home_path_is_committed() -> None:
     broke the suite for everyone else. The config now searches the platform's Playwright
     cache and honours OXBOW_CHROME_PATH.
     """
-    offenders = [path for path, text in tracked_text().items()
-                 if _carries_developer_path(path.name, text)]
+    offenders = [
+        path for path, text in tracked_text().items() if _carries_developer_path(path.name, text)
+    ]
     assert not offenders, (
         f"tracked files carry an absolute developer path: {rel(offenders)}. "
         "Derive it at runtime (os.path.expanduser, LOCALAPPDATA, XDG_CACHE_HOME) or read it "
@@ -180,7 +199,9 @@ def test_the_home_path_rule_is_narrow_but_still_catches() -> None:
     drive = lambda rest: "C:" + rest  # noqa: E731 -- keeps the colon off the path in source text
     assert _carries_developer_path("Dockerfile", drive("\\Users\\someone\\repo"))
     assert _carries_developer_path("Dockerfile", drive("\\Documents and Settings\\someone"))
-    assert _carries_developer_path("playwright.config.ts", "/" + "Users/someone/Library/Caches/ms-playwright")
+    assert _carries_developer_path(
+        "playwright.config.ts", "/" + "Users/someone/Library/Caches/ms-playwright"
+    )
     assert _carries_developer_path("settings.py", "/" + "home/someone/.cache/pip")
     # The one shape exempted: a container-internal home, in the file kind that defines containers.
     assert not _carries_developer_path("Dockerfile", "/home/" + "bun/app")
@@ -196,9 +217,7 @@ def test_no_private_key_or_pem_material_is_committed() -> None:
     pem_open = "-" * 5 + "BEGIN "
     pem_close = "PRIVATE KEY" + "-" * 5
     offenders = [
-        path
-        for path, text in tracked_text().items()
-        if pem_open in text and pem_close in text
+        path for path, text in tracked_text().items() if pem_open in text and pem_close in text
     ]
     assert not offenders, f"tracked files contain private key material: {rel(offenders)}"
     this = Path(__file__).read_text(encoding="utf-8")
@@ -228,8 +247,21 @@ def test_no_secret_shaped_literal_is_committed() -> None:
         r"\s*[:=]\s*[\"'](?P<value>[^\"'\s<>]{12,})[\"']"
     )
     fake_markers = (
-        "example", "placeholder", "changeme", "dummy", "sample", "test-", "invalid",
-        "wrong", "not-", "not_", "other-", "other_", "bad-", "bad_", "no-secret",
+        "example",
+        "placeholder",
+        "changeme",
+        "dummy",
+        "sample",
+        "test-",
+        "invalid",
+        "wrong",
+        "not-",
+        "not_",
+        "other-",
+        "other_",
+        "bad-",
+        "bad_",
+        "no-secret",
     )
     shipped: list[str] = []
     test_files: list[str] = []
@@ -279,9 +311,11 @@ def test_the_run_salt_value_is_not_in_the_tree() -> None:
 
 def test_env_file_itself_is_never_tracked() -> None:
     tracked = tracked_files()
-    assert not [p for p in tracked if p.name == ".env" or p.name.startswith(".env.") and p.name != ".env.example"], (
-        "a dot-env file is tracked; .env holds RUN_SALT and belongs in .gitignore"
-    )
+    assert not [
+        p
+        for p in tracked
+        if p.name == ".env" or (p.name.startswith(".env.") and p.name != ".env.example")
+    ], "a dot-env file is tracked; .env holds RUN_SALT and belongs in .gitignore"
 
 
 def test_the_licensed_corpora_stay_out_of_the_repository() -> None:
@@ -313,7 +347,9 @@ def test_every_licensed_source_is_declared_in_the_license_notice() -> None:
     """
     sources = (REPO_ROOT / "config" / "sources.yaml").read_text(encoding="utf-8")
     declared = set(re.findall(r"^\s+license:\s*[\"']([^\"']+)[\"']", sources, re.M))
-    assert declared, "config/sources.yaml declares no licenses at all — the pattern stopped matching"
+    assert (
+        declared
+    ), "config/sources.yaml declares no licenses at all — the pattern stopped matching"
     notice = (REPO_ROOT / "LICENSE").read_text(encoding="utf-8")
     missing = sorted(licence for licence in declared if licence.split()[0] not in notice)
     assert not missing, (

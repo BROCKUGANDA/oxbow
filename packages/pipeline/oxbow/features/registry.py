@@ -383,7 +383,7 @@ class FeatureRegistry:
 
     @property
     def matrix_ids(self) -> tuple[str, ...]:
-        """The ids published as model columns — the count plan §8 bounds at 60–75."""
+        """The ids published as model columns — the count plan §8 bounds at 60-75."""
         return tuple(entry.id for entry in self.entries if entry.role == "feature")
 
     @property
@@ -483,7 +483,7 @@ def _optional_number(mapping: Mapping[str, object], key: str, where: str) -> flo
     value = mapping.get(key)
     if value is None:
         return None
-    if isinstance(value, bool) or not isinstance(value, (int, float)):
+    if isinstance(value, bool) or not isinstance(value, int | float):
         raise RegistryError(f"{where}: field {key!r} must be a number, got {value!r}")
     return float(value)
 
@@ -659,9 +659,11 @@ def _validate_entry(
             f"{where}: winsorise is declared only for int64 money or count columns; a score is "
             "already bounded"
         )
-    if entry.kind in {"row_flag", "row_value", "event_field", "graph_node", "rule_field"}:
-        if entry.winsorise and entry.kind in {"row_flag", "event_field"}:
-            problems.append(f"{where}: a flag or a code is not winsorised")
+    if entry.winsorise and entry.kind in {"row_flag", "event_field"}:
+        # The outer kind set is a superset of these two, so one condition says what the
+        # nested pair said: a flag or a rule code is a category, and a category has no
+        # tail to clip.
+        problems.append(f"{where}: a flag or a code is not winsorised")
 
     def check_reference(label: str, ref: str | None, required: bool) -> bool:
         if ref is None:

@@ -124,9 +124,7 @@ def _alert_order_by(
     happened to write (or not write) ``policy_allocation`` rows. Postgres puts NULLs first
     when descending, which renders "not priced" as "most urgent".
     """
-    term = (
-        order_column.asc().nulls_last() if order != "desc" else order_column.desc().nulls_last()
-    )
+    term = order_column.asc().nulls_last() if order != "desc" else order_column.desc().nulls_last()
     return [term, tie_column.asc()]
 
 
@@ -641,9 +639,11 @@ class PostgresSource(WarehouseSource):
         ]
         statement = select(*projection).select_from(join).where(*clauses)
         count_statement = select(func.count()).select_from(join).where(*clauses)
-        statement = statement.order_by(
-            *_alert_order_by(order_column, score.c.account_key, order)
-        ).limit(limit).offset(offset)
+        statement = (
+            statement.order_by(*_alert_order_by(order_column, score.c.account_key, order))
+            .limit(limit)
+            .offset(offset)
+        )
         session = self._session_provider()
         try:
             rows = [_row_to_dict(dict(m)) for m in session.execute(statement).mappings()]
@@ -826,8 +826,8 @@ class PostgresSource(WarehouseSource):
         before it can be ranked. The narrow read is a single column; the wide projection is
         never fetched for more rows than the page holds.
         """
-        ranked = None if narrowed or side_of_cutoff is not None else _contiguous_rank_order(
-            allocations
+        ranked = (
+            None if narrowed or side_of_cutoff is not None else _contiguous_rank_order(allocations)
         )
         if ranked is not None:
             total = self._execute_count(
@@ -855,9 +855,10 @@ class PostgresSource(WarehouseSource):
     def _queue_keys(self, join: Any, clauses: list[ColumnElement[bool]], score: Any) -> list[str]:
         """Every account the queue's filter matches, as one column, in key order."""
         rows = self._execute(
-            select(score.c.account_key).select_from(join).where(*clauses).order_by(
-                score.c.account_key.asc()
-            ),
+            select(score.c.account_key)
+            .select_from(join)
+            .where(*clauses)
+            .order_by(score.c.account_key.asc()),
             error="alert queue key read (live rank) failed",
         )
         return [str(row["account_key"]) for row in rows]
@@ -905,7 +906,9 @@ class PostgresSource(WarehouseSource):
     def _execute(self, statement: Any, *, error: str) -> list[dict[str, Any]]:
         session = self._session_provider()
         try:
-            return [_row_to_dict(dict(mapping)) for mapping in session.execute(statement).mappings()]
+            return [
+                _row_to_dict(dict(mapping)) for mapping in session.execute(statement).mappings()
+            ]
         except Exception as exc:
             raise DependencyUnavailable(f"{error}: {exc}") from exc
         finally:

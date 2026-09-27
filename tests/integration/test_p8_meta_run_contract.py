@@ -144,9 +144,9 @@ def assert_decodes(value: Any, decoder: str, path: str) -> None:
         assert_decodes(value, decoder[len("nullable(") : -1], path)
         return
     if decoder == "string":
-        assert isinstance(value, str), (
-            f"{path}: the client decodes string, the server sent {type(value).__name__}"
-        )
+        assert isinstance(
+            value, str
+        ), f"{path}: the client decodes string, the server sent {type(value).__name__}"
         assert value.strip(), f"{path}: an empty string is a padded field, not a value"
         return
     if decoder == "integer":
@@ -159,9 +159,9 @@ def assert_decodes(value: Any, decoder: str, path: str) -> None:
         assert isinstance(value, bool), f"{path}: the client decodes boolean, got {value!r}"
         return
     if decoder == "record(scalarOrNumber)":
-        assert isinstance(value, dict), (
-            f"{path}: the client decodes an object, the server sent {value!r}"
-        )
+        assert isinstance(
+            value, dict
+        ), f"{path}: the client decodes an object, the server sent {value!r}"
         for key, item in value.items():
             assert isinstance(item, str) or (
                 isinstance(item, int | float) and not isinstance(item, bool)
@@ -211,7 +211,9 @@ def _client(monkeypatch: pytest.MonkeyPatch, repo_root: Path | None) -> Iterator
     """
     _configure(monkeypatch, repo_root)
     container: Container = build_container()
-    assert container.backend == "null-file", f"expected the null-file warehouse, got {container.backend}"
+    assert (
+        container.backend == "null-file"
+    ), f"expected the null-file warehouse, got {container.backend}"
     app = create_app()
     with TestClient(app, raise_server_exceptions=False) as client:
         app.state.container = container
@@ -258,25 +260,26 @@ def _token(client: TestClient) -> dict[str, str]:
 def _run_payload(client: TestClient) -> dict[str, Any]:
     """A 200 whose body is an envelope, or a failure that says what arrived instead."""
     response = client.get(RUN_ROUTE, headers=_token(client))
-    assert response.status_code == 200, (
-        f"{RUN_ROUTE} answered {response.status_code}: {response.text[:400]}"
-    )
+    assert (
+        response.status_code == 200
+    ), f"{RUN_ROUTE} answered {response.status_code}: {response.text[:400]}"
     body = response.json()
-    assert set(body) == {"data", "meta"}, (
-        f"the envelope is {{data, meta}} and nothing else; the route served {sorted(body)}"
-    )
+    assert set(body) == {
+        "data",
+        "meta",
+    }, f"the envelope is {{data, meta}} and nothing else; the route served {sorted(body)}"
     for name in ("success", "error", "status_code"):
         assert name not in body, f"a second status channel ({name}) in a 2xx body"
     return body
 
 
 def _assert_problem(response: Any, *, status: int, where: str) -> dict[str, Any]:
-    assert response.status_code == status, (
-        f"{where}: expected {status}, got {response.status_code} {response.text[:300]}"
-    )
-    assert response.headers["content-type"].startswith(PROBLEM_MEDIA_TYPE), (
-        f"{where}: {response.headers.get('content-type')!r} is not {PROBLEM_MEDIA_TYPE!r}"
-    )
+    assert (
+        response.status_code == status
+    ), f"{where}: expected {status}, got {response.status_code} {response.text[:300]}"
+    assert response.headers["content-type"].startswith(
+        PROBLEM_MEDIA_TYPE
+    ), f"{where}: {response.headers.get('content-type')!r} is not {PROBLEM_MEDIA_TYPE!r}"
     body = response.json()
     for name in ("type", "title", "status"):
         assert name in body, f"{where}: RFC 9457 member {name} missing from {body}"
@@ -295,9 +298,9 @@ def test_the_field_list_this_route_is_checked_against_is_the_clients_own() -> No
     assert decoder_fields("RuntimeMetaDecoder") == RUNTIME_META_DECODER
     meta_fields = decoder_fields("MetaDecoder")
     inline = {key: meta_fields[key] for key in sorted(META_INLINE_DECODER)}
-    assert inline == META_INLINE_DECODER, (
-        f"meta's inline decoders moved, so this checker's copy is wrong: {inline}"
-    )
+    assert (
+        inline == META_INLINE_DECODER
+    ), f"meta's inline decoders moved, so this checker's copy is wrong: {inline}"
 
 
 def test_served_run_envelope_decodes_field_by_field(null_client: TestClient) -> None:
@@ -351,9 +354,10 @@ def test_every_served_value_traces_to_something_the_server_holds(null_client: Te
     assert data["minor_units_per_major"] == economics["minor_units_per_major"]
     assert data["economics_source"] == "config/economics.yaml"
     assert data["economics"]["recovery.rate"] == economics["recovery"]["rate"]
-    assert data["economics"]["analyst.cost_per_minute_minor"] == economics["analyst"][
-        "cost_per_minute_minor"
-    ]
+    assert (
+        data["economics"]["analyst.cost_per_minute_minor"]
+        == economics["analyst"]["cost_per_minute_minor"]
+    )
     assert data["economics"]["recovery.sensitivity_band"] == ", ".join(
         str(item) for item in economics["recovery"]["sensitivity_band"]
     )
@@ -368,9 +372,9 @@ def test_every_served_value_traces_to_something_the_server_holds(null_client: Te
         manifest = json.loads(
             (interim / source_id / "run_manifest.json").read_text(encoding="utf-8")
         )
-        assert manifest["source"]["license"] == licence, (
-            f"{source_id}: the served licence is not the one ingest recorded"
-        )
+        assert (
+            manifest["source"]["license"] == licence
+        ), f"{source_id}: the served licence is not the one ingest recorded"
         assert manifest["source"]["name"] == name, f"{source_id}: the name is not the manifest's"
 
 
@@ -385,9 +389,9 @@ def test_money_keys_stay_integer_minor_units(null_client: TestClient) -> None:
     assert money_keys, "config/economics.yaml declares no amount, so this check is vacuous"
     for key in money_keys:
         value = data["economics"][key]
-        assert isinstance(value, int) and not isinstance(value, bool), (
-            f"economics.{key} = {value!r} is not an integer minor unit"
-        )
+        assert isinstance(value, int) and not isinstance(
+            value, bool
+        ), f"economics.{key} = {value!r} is not an integer minor unit"
 
 
 def test_every_served_list_has_one_total_order(null_client: TestClient) -> None:
@@ -414,7 +418,9 @@ def test_every_served_list_has_one_total_order(null_client: TestClient) -> None:
 # ------------------------------------------------------- the degraded half -----
 
 
-def test_an_empty_deployment_says_so_instead_of_padding(empty_deployment_client: TestClient) -> None:
+def test_an_empty_deployment_says_so_instead_of_padding(
+    empty_deployment_client: TestClient,
+) -> None:
     """Nulls the client can render, each with the artifact the value would come from.
 
     DESIGN.md §5 forbids an indefinite content spinner and requires degraded-not-broken.
@@ -435,9 +441,9 @@ def test_an_empty_deployment_says_so_instead_of_padding(empty_deployment_client:
     for name in ("run_id", "model_version", "config_hash", "seed", "provenance", "run_state"):
         assert data[name] is None, f"{name} = {data[name]!r} with no run in the warehouse"
     assert data["artifact_hashes"] is None, "an empty map would be an invented record"
-    assert data["dataset"] is None and data["licence"] is None, (
-        "nothing was ingested here, so neither string may be composed from the declarations"
-    )
+    assert (
+        data["dataset"] is None and data["licence"] is None
+    ), "nothing was ingested here, so neither string may be composed from the declarations"
     assert data["sources"] == []
     assert data["deployment_timezone"], "the zone is non-nullable: config/pipeline.yaml supplies it"
     assert data["timezone_source"] == "config/pipeline.yaml: deployment_timezone"

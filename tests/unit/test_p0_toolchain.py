@@ -431,9 +431,9 @@ def test_bun_lockfile_is_committed() -> None:
     """
     web = REPO_ROOT / "apps" / "web"
     assert (web / "bun.lock").is_file(), "bun.lock must be committed"
-    assert not (web / "pnpm-lock.yaml").exists(), (
-        "two JS lockfiles would disagree about the tree and nothing here would catch it"
-    )
+    assert not (
+        web / "pnpm-lock.yaml"
+    ).exists(), "two JS lockfiles would disagree about the tree and nothing here would catch it"
 
 
 def test_the_declared_js_toolchain_is_the_one_every_recipe_uses() -> None:
@@ -458,9 +458,9 @@ def test_the_declared_js_toolchain_is_the_one_every_recipe_uses() -> None:
     manifest = json.loads((web / "package.json").read_text(encoding="utf-8"))
 
     manager = str(manifest.get("packageManager", ""))
-    assert manager.startswith("bun@"), (
-        f"packageManager is {manager!r}, but DEV-022 put Bun on the pinned chain"
-    )
+    assert manager.startswith(
+        "bun@"
+    ), f"packageManager is {manager!r}, but DEV-022 put Bun on the pinned chain"
     assert "overrides" in manifest and "@tailwindcss/oxide" in manifest["overrides"], (
         "the @tailwindcss/oxide 4.0.0 native-binding pin must be a top-level `overrides` entry; "
         "Bun ignores `pnpm.overrides`"

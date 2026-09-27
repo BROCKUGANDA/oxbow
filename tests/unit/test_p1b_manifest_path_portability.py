@@ -214,9 +214,9 @@ def test_a_missing_batch_is_still_refused_rather_than_skipped(tmp_path: Path) ->
     resolved = _read_lineage(tmp_path, sources=[SOURCE])[0].batches[0].path
 
     assert resolved == tmp_path / "data" / "interim" / SOURCE / "gone.parquet"
-    assert not resolved.is_file(), (
-        "the batch this manifest names exists, so the test is not posing a truncated corpus"
-    )
+    assert (
+        not resolved.is_file()
+    ), "the batch this manifest names exists, so the test is not posing a truncated corpus"
 
 
 def test_repo_root_is_the_parent_of_the_interim_directory(tmp_path: Path) -> None:

@@ -732,13 +732,13 @@ def test_the_warehouse_stage_dispatches_to_the_landing_function() -> None:
 
     from oxbow import cli
 
-    assert callable(getattr(cli, "land_warehouse_rows", None)), (
-        "the CLI no longer exposes the landing function the warehouse stage runs"
-    )
+    assert callable(
+        getattr(cli, "land_warehouse_rows", None)
+    ), "the CLI no longer exposes the landing function the warehouse stage runs"
     source = Path("apps/api/worker.py").read_text(encoding="utf-8")
-    assert '"warehouse": lambda handle: cli.land_warehouse_rows(' in source, (
-        "the warehouse stage has no runner in the worker's dispatch again"
-    )
+    assert (
+        '"warehouse": lambda handle: cli.land_warehouse_rows(' in source
+    ), "the warehouse stage has no runner in the worker's dispatch again"
     assert 'PIPELINE_STAGES: Final = ("ingest", "graph", "score", "warehouse")' in Path(
         "apps/api/jobs.py"
     ).read_text(encoding="utf-8"), "the queue stopped naming the stage it can run"
@@ -757,9 +757,9 @@ def test_every_stage_the_api_will_enqueue_has_a_runner() -> None:
     declared = set(api_jobs.PIPELINE_STAGES) | set(api_jobs.BACKTEST_STAGES)
     verbs = set(cli.STAGES)
     # `warehouse` is the one legitimate exception: a stage, not a verb.
-    assert declared - verbs == {"warehouse"}, (
-        f"queued stages with no CLI verb and no explanation: {sorted(declared - verbs)}"
-    )
+    assert declared - verbs == {
+        "warehouse"
+    }, f"queued stages with no CLI verb and no explanation: {sorted(declared - verbs)}"
 
 
 def test_unknown_kind_and_unknown_stage_are_refused_before_anything_runs(
@@ -1054,9 +1054,9 @@ def test_a_job_sweeps_the_rows_a_killed_horse_left_behind(
     )
 
     dead = _run_row(container, orphan)
-    assert dead["state"] == RunState.FAILED.value, (
-        f"the horse's run is still {dead['state']!r} after another job ran the sweep"
-    )
+    assert (
+        dead["state"] == RunState.FAILED.value
+    ), f"the horse's run is still {dead['state']!r} after another job ran the sweep"
     assert "abandoned" in str(dead["error"])
     assert _job_row(warehouse, "p7w-horse-killed").state == api_worker.JOB_FAILED
     live = _run_row(container, submission.run_id)

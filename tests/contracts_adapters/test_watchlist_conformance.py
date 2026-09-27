@@ -45,8 +45,8 @@ from oxbow.adapters.ofac.watchlist import (
     SnapshotFormatError,
 )
 from oxbow.ports.watchlist import (
-    MAX_CANDIDATES,
     MATCH_BASES,
+    MAX_CANDIDATES,
     ScreeningQuery,
     WatchlistAdapter,
     WatchlistHit,
@@ -179,9 +179,9 @@ def test_null_adapter_reports_zero_records_so_clean_is_never_implied() -> None:
 
     assert version.record_count == 0
     assert "not evidence" in version.source
-    assert NullWatchlistAdapter().screen(
-        ScreeningQuery(query_id="q", display_name=MATCHED_NAME)
-    ) == []
+    assert (
+        NullWatchlistAdapter().screen(ScreeningQuery(query_id="q", display_name=MATCHED_NAME)) == []
+    )
 
 
 # --- OFAC: real screening against the shipped sample -------------------------
@@ -201,9 +201,7 @@ def test_ofac_finds_a_name_in_the_shipped_snapshot() -> None:
 def test_ofac_matches_on_an_identifier_without_a_name() -> None:
     """``account_key`` is a screening label, not a join key; identifiers are."""
     adapter = OfacWatchlistAdapter.from_path(SAMPLE_SNAPSHOT)
-    hits = adapter.screen(
-        ScreeningQuery(query_id="q-id", identifiers=[MATCHED_REFERENCE])
-    )
+    hits = adapter.screen(ScreeningQuery(query_id="q-id", identifiers=[MATCHED_REFERENCE]))
 
     assert len(hits) == 1
     assert hits[0].match_basis == "identifier"

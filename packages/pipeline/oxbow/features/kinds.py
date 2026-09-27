@@ -952,7 +952,7 @@ def _kind_float_stat(work: pl.DataFrame, entry: FeatureSpec, context: KernelCont
             work, base, groups=entry.group_by, sources=["_mantissa_log"], window=window
         )
         pair = pl.DataFrame({"s": totals["_mantissa_log"], "n": totals[ROWS]})
-        scored = pair.select(
+        return pair.select(
             (
                 (
                     (
@@ -967,7 +967,6 @@ def _kind_float_stat(work: pl.DataFrame, entry: FeatureSpec, context: KernelCont
             .clip(0.0, 1.0)
             .alias(entry.id)
         )[entry.id]
-        return scored
     with_squares = population.with_columns(
         (pl.col(stat_source).cast(pl.Float64) ** 2).alias(SQUARES)
     )

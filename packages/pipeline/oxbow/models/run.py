@@ -1626,7 +1626,9 @@ def stack_scored_frames(frames: Sequence[pl.DataFrame]) -> pl.DataFrame:
     column of nulls for the UI to read as a channel that exists and is empty.
     """
     if not len(frames):
-        raise ModelLayerError("no fold frames to stack; the caller decided there was nothing to land")
+        raise ModelLayerError(
+            "no fold frames to stack; the caller decided there was nothing to land"
+        )
     scored = pl.concat(list(frames), how="diagonal_relaxed")
     absent = [column for column in SCORED_ROW_COLUMNS if column not in scored.columns]
     if absent:

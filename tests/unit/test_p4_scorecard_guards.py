@@ -650,9 +650,7 @@ def test_the_build_budget_bounds_the_mip_build_and_not_only_the_solve() -> None:
         min(
             cfg.max_n_prebins,
             int(
-                math.sqrt(
-                    (cfg.build_budget_seconds * 1000.0) / cfg.measured_ms_per_candidate_pair
-                )
+                math.sqrt((cfg.build_budget_seconds * 1000.0) / cfg.measured_ms_per_candidate_pair)
             ),
         ),
     ), f"{cap} is not the budget's own arithmetic for {cfg.build_budget_seconds} s"
@@ -673,9 +671,9 @@ def test_the_build_budget_bounds_the_mip_build_and_not_only_the_solve() -> None:
         _numeric_binning(cfg, "monotone_signal", values, labels)
 
     assert requested, "the solver was never constructed, so the cap was never applied"
-    assert requested[-1] == cap, (
-        f"the solver was told max_n_prebins={requested[-1]!r} but the budget's cap is {cap}"
-    )
+    assert (
+        requested[-1] == cap
+    ), f"the solver was told max_n_prebins={requested[-1]!r} but the budget's cap is {cap}"
 
 
 def test_iv_admission_band() -> None:

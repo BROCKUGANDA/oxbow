@@ -652,9 +652,7 @@ def default_runners(context: StageContext) -> dict[str, Callable[[StageHandle], 
         # The stage the ledger's own vocabulary has always named and nothing implemented: it
         # lands the run's account/score/rule_hit rows into the Postgres warehouse the API reads.
         # Not a CLI verb — 01 §D fixes the four verbs and the P0 gate asserts that tuple.
-        "warehouse": lambda handle: cli.land_warehouse_rows(
-            context, handle, run_id=context.run_id
-        ),
+        "warehouse": lambda handle: cli.land_warehouse_rows(context, handle, run_id=context.run_id),
     }
 
 
@@ -858,7 +856,7 @@ def _sweep_orphans(
         else:
             with _queue_observer(container) as (state_probe, heartbeat_probe):
                 closed = reclaim_orphaned(container, probe=state_probe, beats=heartbeat_probe)
-    except Exception as exc:  # noqa: BLE001 - deliberately broad, and it only logs
+    except Exception as exc:  # deliberately broad, and it only logs
         logger.warning("the per-job orphan sweep was skipped", error=_reason(exc))
         return 0
     if closed:

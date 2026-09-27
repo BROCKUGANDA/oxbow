@@ -96,8 +96,7 @@ def _fixture() -> _RecordingSource:
     the case the index set exists to exclude.
     """
     communities = [
-        {"run_id": RUN_ID, "canonical_index": index, "size": 2}
-        for index in range(N_COMMUNITIES)
+        {"run_id": RUN_ID, "canonical_index": index, "size": 2} for index in range(N_COMMUNITIES)
     ]
     memberships: list[dict[str, Any]] = []
     scores: list[dict[str, Any]] = []
@@ -110,11 +109,15 @@ def _fixture() -> _RecordingSource:
         memberships.append(
             {"run_id": RUN_ID, "community_id": index, "account_key": quiet_key, "degree": 1}
         )
-        scores.append({"run_id": RUN_ID, "account_key": risky_key, "band": "E" if index % 2 else "D"})
+        scores.append(
+            {"run_id": RUN_ID, "account_key": risky_key, "band": "E" if index % 2 else "D"}
+        )
         scores.append({"run_id": RUN_ID, "account_key": quiet_key, "band": "B"})
     # An orphan: a community id nobody wrote a `community` row for.
     orphan_key = "ORPHAN000001"
-    memberships.append({"run_id": RUN_ID, "community_id": N_COMMUNITIES + 7, "account_key": orphan_key})
+    memberships.append(
+        {"run_id": RUN_ID, "community_id": N_COMMUNITIES + 7, "account_key": orphan_key}
+    )
     scores.append({"run_id": RUN_ID, "account_key": orphan_key, "band": "D"})
     return _RecordingSource(
         {"community": communities, "account_membership": memberships, "score": scores}
@@ -135,9 +138,9 @@ def test_the_community_index_is_built_once_not_once_per_community() -> None:
 def test_the_count_is_the_communities_that_hold_a_high_band_account() -> None:
     source = _fixture()
     result = _high_risk_networks(ReadModel(source), RUN_ID)  # type: ignore[arg-type]
-    assert result["count"] == N_COMMUNITIES, (
-        f"counted {result['count']}, expected one per community carrying a band-D/E account"
-    )
+    assert (
+        result["count"] == N_COMMUNITIES
+    ), f"counted {result['count']}, expected one per community carrying a band-D/E account"
     assert result["basis"].startswith("communities (stored Leiden output)")
 
 
@@ -145,9 +148,7 @@ def test_a_membership_without_a_community_row_is_not_counted() -> None:
     """The hoisted set still excludes orphans; a set built once is not a set built wrong."""
     source = _fixture()
     # Drop one stored community: its two memberships must stop counting.
-    remaining = [
-        row for row in source.counted("community") if int(row["canonical_index"]) != 3
-    ]
+    remaining = [row for row in source.counted("community") if int(row["canonical_index"]) != 3]
     source.tables["community"] = _CountedList(remaining)
     result = _high_risk_networks(ReadModel(source), RUN_ID)  # type: ignore[arg-type]
     assert result["count"] == N_COMMUNITIES - 1, (

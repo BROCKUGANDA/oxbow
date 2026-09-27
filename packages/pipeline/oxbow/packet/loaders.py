@@ -354,7 +354,7 @@ def evidence_from_graph_artifact(
     wanted = [str(item) for item in transaction_ids]
     if wanted:
         frame = touched.filter(pl.col("txn_id").is_in(wanted))
-        missing = sorted(set(wanted) - set(str(item) for item in frame["txn_id"].to_list()))
+        missing = sorted(set(wanted) - {str(item) for item in frame["txn_id"].to_list()})
         if missing:
             raise SubgraphArtifactError(
                 f"the decision for {account_key} names transactions {missing}, which are "

@@ -247,9 +247,7 @@ def _effective_max_n_prebins(cfg: BinningConfig) -> int:
     """
     if cfg.build_budget_seconds <= 0 or cfg.measured_ms_per_candidate_pair <= 0:
         return cfg.max_n_prebins
-    affordable = math.sqrt(
-        (cfg.build_budget_seconds * 1000.0) / cfg.measured_ms_per_candidate_pair
-    )
+    affordable = math.sqrt((cfg.build_budget_seconds * 1000.0) / cfg.measured_ms_per_candidate_pair)
     # A cap below 2 admits no split at all, which would turn every numeric feature into a
     # single bin. 4 is the floor: enough for optbinning to find a boundary.
     return max(4, min(cfg.max_n_prebins, int(affordable)))

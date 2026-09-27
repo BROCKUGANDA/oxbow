@@ -196,7 +196,6 @@ def assumption_keys(case: PacketCase) -> str:
     "depends on assumptions" cannot. This is the line printed beside each figure;
     section 8 prints the whole block verbatim.
     """
-    economics = case.economics
     band = case.bundle.score.band
     keys: list[str] = [
         "currency",
@@ -275,7 +274,6 @@ def compose_packet(case: PacketCase) -> ComposedPacket:
     zone = resolve_zone(case.deployment_timezone, at=case.decision.decided_at)
     image = render_subgraph_svg(
         case.subgraph,
-        per_major=case.economics.minor_units_per_major,
         band_letter=case.bundle.score.band,
         title=(
             f"Subgraph for {case.account_key} in case {case.case_id}, " f"run {case.bundle.run_id}"

@@ -123,6 +123,12 @@ ignore = [
 # for every other exception in the repo -- including apps/api/deps.py's `ContainerClosed`,
 # which is a real lifecycle error and is annotated at its definition instead.
 "apps/api/problems.py" = ["N818"]
+# Every feature kernel conforms to `Kernel = Callable[[work, entry, context], Series]`
+# (packages/pipeline/oxbow/features/kinds.py:1139). The row-level kinds genuinely need no
+# window state, and renaming their third parameter would diverge the very signature the
+# registry dispatches on. Same protocol-conformer reason as the apps/api block above,
+# scoped to the one module that holds the kernel family.
+"packages/pipeline/oxbow/features/kinds.py" = ["ARG"]
 
 [tool.ruff.lint.flake8-tidy-imports]
 ban-relative-imports = "parents"

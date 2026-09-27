@@ -33,7 +33,8 @@ import polars as pl
 import pytest
 from lightgbm.basic import LightGBMError
 
-from oxbow.backtest import fakes, run as backtest_run
+from oxbow.backtest import fakes
+from oxbow.backtest import run as backtest_run
 
 ABLATION_ARTIFACT = "ablation_results.json"
 MODEL_CARD_ARTIFACT = "model_card.json"
@@ -76,13 +77,13 @@ def test_a_fold_chain_that_raises_exits_non_zero_and_writes_nothing(
         f"a fold chain that raised exited {code} while writing nothing to {out_dir}; "
         "an empty artifact directory behind a green exit is the failure this gate exists to stop"
     )
-    assert "bad allocation" in captured.err, (
-        "the traceback must reach the operator: the exit code alone re-silences the failure"
-    )
+    assert (
+        "bad allocation" in captured.err
+    ), "the traceback must reach the operator: the exit code alone re-silences the failure"
     assert "wrote NOTHING" in captured.err, captured.err
-    assert not (out_dir / ABLATION_ARTIFACT).is_file(), (
-        "the run failed and still landed an ablation artifact; the artifact would be a lie"
-    )
+    assert not (
+        out_dir / ABLATION_ARTIFACT
+    ).is_file(), "the run failed and still landed an ablation artifact; the artifact would be a lie"
 
 
 def test_declared_artifacts_absent_or_empty_on_disk_exit_non_zero(tmp_path: Path) -> None:
@@ -92,15 +93,17 @@ def test_declared_artifacts_absent_or_empty_on_disk_exit_non_zero(tmp_path: Path
     empty = tmp_path / "empty.json"
     empty.write_text("", encoding="utf-8")
 
-    assert backtest_run._artifacts_written_code({"ablation": written}) == 0  # noqa: SLF001
+    # The private helper is the gate this measures: it is what the run's exit code is computed
+    # from. The composed path is covered by the tests in this file that drive ``main()``.
+    assert backtest_run._artifacts_written_code({"ablation": written}) == 0
 
     missing_path = tmp_path / "never_written.json"
-    assert backtest_run._artifacts_written_code({"ablation": missing_path}) != 0, (  # noqa: SLF001
-        "a declared artifact that is not on disk must not read as a successful run"
-    )
-    assert backtest_run._artifacts_written_code({"ablation": empty}) != 0, (  # noqa: SLF001
-        "a zero-byte artifact is an empty directory wearing a filename"
-    )
+    assert (
+        backtest_run._artifacts_written_code({"ablation": missing_path}) != 0
+    ), "a declared artifact that is not on disk must not read as a successful run"
+    assert (
+        backtest_run._artifacts_written_code({"ablation": empty}) != 0
+    ), "a zero-byte artifact is an empty directory wearing a filename"
 
 
 def test_a_run_that_writes_its_artifacts_still_exits_zero(tmp_path: Path) -> None:

@@ -43,10 +43,10 @@ from oxbow.scoring.frame import (
     COL_ACCOUNT_KEY,
     COL_FOLD,
     COL_ROLE,
+    PROVENANCE_GENERATED,
     ROLE_TEST,
     ROLE_TRAIN,
     ROLE_VALIDATION,
-    PROVENANCE_GENERATED,
     build_training_frame,
 )
 from oxbow.scoring.generated import default_spec, generate_training_frame

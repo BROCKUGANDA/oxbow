@@ -1497,7 +1497,8 @@ def test_every_operational_endpoint_answers_200_with_the_documented_shape(
     """With a real warehouse behind it, none of these may refuse."""
     headers = analyst_headers(wh_client)
     run_id = warehouse["run_id"]
-    paths = list(OPERATIONAL_PATHS) + [
+    paths = [
+        *OPERATIONAL_PATHS,
         f"/api/runs/{run_id}",
         f"/api/runs/{run_id}/progress",
         f"/api/runs/{run_id}/events",
@@ -2037,9 +2038,7 @@ def test_concurrent_append_gives_one_success_and_one_409(warehouse: dict[str, An
             subject=subject, roles=("analyst",), display_name=subject, source="local-jwt"
         )
 
-    def submit(
-        session: Session, case_id: str, subject: str, trace: str
-    ) -> dict[str, Any]:
+    def submit(session: Session, case_id: str, subject: str, trace: str) -> dict[str, Any]:
         case = session.get(Case, case_id)
         assert case is not None
         return api_decisions.record_decision(
@@ -2123,9 +2122,7 @@ def test_concurrent_append_gives_one_success_and_one_409(warehouse: dict[str, An
         # winner must land on the very next link, which is only true if the 409
         # rolled its sequence back with everything else.
         third = container.new_session()
-        again = submit(
-            third, case_ids[1], "p7-operator-third", "p7-concurrency-third-probe"
-        )
+        again = submit(third, case_ids[1], "p7-operator-third", "p7-concurrency-third-probe")
         third.commit()
         third.close()
         assert again["chain_seq"] == result["chain_seq"] + 1
@@ -3048,7 +3045,9 @@ def test_two_unrelated_cases_can_be_decided_at_the_same_instant(
 
         assert outcome["status"] == "ok", (
             "the second writer on an UNRELATED case was refused as "
-            + str(outcome.get("status")) + ": " + repr(outcome.get("error"))
+            + str(outcome.get("status"))
+            + ": "
+            + repr(outcome.get("error"))
         )
         seq_a = int(first["chain_seq"])
         seq_b = int(outcome["receipt"]["chain_seq"])
@@ -3057,7 +3056,7 @@ def test_two_unrelated_cases_can_be_decided_at_the_same_instant(
             "second writer read a stale tip instead of waiting for the first to commit"
         )
 
-                # Both links must exist in the table, not just in the receipts the callers
+        # Both links must exist in the table, not just in the receipts the callers
         # were handed: a refused writer that was quietly swallowed would still have
         # returned a receipt if the exception had been caught in the wrong place.
         both = container.new_session()
@@ -3066,9 +3065,9 @@ def test_two_unrelated_cases_can_be_decided_at_the_same_instant(
                 text("SELECT count(*) FROM decision WHERE trace_id IN (:first, :second)"),
                 {"first": "p7-crosscase-holder", "second": "p7-crosscase-waiter"},
             ).scalar_one()
-            assert int(landed) == 2, (
-                f"the chain receipts said two decisions, the table holds {landed}"
-            )
+            assert (
+                int(landed) == 2
+            ), f"the chain receipts said two decisions, the table holds {landed}"
         finally:
             both.close()
     finally:

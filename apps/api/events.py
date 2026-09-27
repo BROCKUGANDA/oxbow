@@ -152,9 +152,7 @@ def load_backfill(
     return events
 
 
-def _initial_backfill(
-    read_model: ReadModel, run_id: str, cursor: ResumeCursor
-) -> list[StageEvent]:
+def _initial_backfill(read_model: ReadModel, run_id: str, cursor: ResumeCursor) -> list[StageEvent]:
     """The rows already stored when the client arrived, in one bounded-free read.
 
     The whole remainder is fetched here on purpose: a reconnecting client must be caught up
@@ -165,9 +163,7 @@ def _initial_backfill(
     return load_backfill(read_model, run_id, cursor, verify_run=False)
 
 
-def _poll_once(
-    read_model: ReadModel, run_id: str, after_id: int
-) -> tuple[str, list[StageEvent]]:
+def _poll_once(read_model: ReadModel, run_id: str, after_id: int) -> tuple[str, list[StageEvent]]:
     """One bounded poll: the run's state and the ledger rows strictly after the cursor.
 
     Synchronous on purpose — it is warehouse I/O, and it runs on a worker thread for the

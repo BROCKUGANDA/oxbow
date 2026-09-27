@@ -28,6 +28,7 @@ Two failure disciplines run through the file.
 
 from __future__ import annotations
 
+import contextlib
 import gc
 import importlib.util
 import json
@@ -1172,19 +1173,15 @@ def run_walk_forward_folds(
     # SHAP on, one fold's model objects stayed resident across every later fold; with the
     # import hoisted to here (a neutral frame holding no fold), they did not. Importing shap
     # now costs nothing on the folds themselves.
-    try:
+    with contextlib.suppress(Exception):  # shap missing degrades SHAP, must not break scoring
         import shap  # noqa: F401  (warm the optional-import probes at a neutral frame)
-    except Exception:  # pragma: no cover - shap missing degrades SHAP, must not break scoring
-        pass
 
     scored_frames: list[pl.DataFrame] = []
     runs_summary: list[dict[str, object]] = []
     for fold_index, train_mask, validation_mask, test_mask in fold_pairs:
         if observe is not None:
             observe("before_fit", fold_index)
-        train = frame.filter(pl.Series(train_mask)).with_columns(
-            pl.lit(ROLE_TRAIN).alias("role")
-        )
+        train = frame.filter(pl.Series(train_mask)).with_columns(pl.lit(ROLE_TRAIN).alias("role"))
         validation = frame.filter(pl.Series(validation_mask)).with_columns(
             pl.lit(ROLE_VALIDATION).alias("role")
         )
@@ -1192,11 +1189,11 @@ def run_walk_forward_folds(
         if scored.height == 0:
             runs_summary.append({"fold": fold_index, "skipped": "empty test window"})
             continue
-        provider = FixedFoldSlicesProvider(
-            train, validation, scored, embargo_days=embargo_days
-        )
+        provider = FixedFoldSlicesProvider(train, validation, scored, embargo_days=embargo_days)
         try:
-            run = runner.run_fold(training, fold_index, provider=provider, evaluation_role=ROLE_TEST)
+            run = runner.run_fold(
+                training, fold_index, provider=provider, evaluation_role=ROLE_TEST
+            )
         except Exception as exc:  # a fold the corpus cannot fit is reported by name, not faked
             runs_summary.append(
                 {"fold": fold_index, "skipped": f"{type(exc).__name__}: {str(exc)[:300]}"}
@@ -1227,7 +1224,10 @@ def run_walk_forward_folds(
         # Release the fold's models and its full scored frame before the next fold starts.
         # ``scored_frames`` holds only ``test_rows`` (independent of ``run``), so dropping
         # every name bound in this iteration frees the fold's footprint now, not on rebind.
-        del run, test_rows, train, validation, scored, provider
+        # F821 is ruff reading a `del` at the foot of a loop as a use of names the *previous*
+        # iteration deleted; every one of them is bound above, and a fold that reached this
+        # line had them all. The del is the point: it is what frees the fold's footprint.
+        del run, test_rows, train, validation, scored, provider  # noqa: F821
         gc.collect()
     return scored_frames, runs_summary
 
@@ -1333,9 +1333,7 @@ def _score_models_and_land(
     # ran the full stack carry no `drift_*`. `vertical_relaxed` aligns by position and refuses
     # that with `ComputeError: schema names differ`, which is how a run died after scoring every
     # fold but before landing any of them. See `stack_scored_frames` for the contract check.
-    scored_rows = stack_scored_frames(scored_frames).sort(
-        ["as_of_ts", "account_key", COL_FOLD]
-    )
+    scored_rows = stack_scored_frames(scored_frames).sort(["as_of_ts", "account_key", COL_FOLD])
 
     economics = load_economics(ctx.root)
     corpus = _attach_corpus_economics(frame, economics)
@@ -1688,13 +1686,13 @@ def land_warehouse_rows(ctx: StageContext, handle: StageHandle, *, run_id: str) 
         return EXIT_FAILED
 
     engine = create_engine(url, pool_pre_ping=True)
-    Session = sessionmaker(bind=engine)  # noqa: N806 - SQLAlchemy's own naming
+    Session = sessionmaker(bind=engine)  # SQLAlchemy's own naming
     with Session() as session:
         sink = PostgresWarehouseSink(session)
         try:
             try:
                 sink.run_state(run_id)
-            except Exception:  # noqa: BLE001 - "no such run" is the normal case here
+            except Exception:  # "no such run" is the normal case here
                 session.rollback()
                 # The same identity the null-file ledger was opened with, so a row in either
                 # warehouse names the seed, the config hash and the model version that produced
@@ -1715,7 +1713,7 @@ def land_warehouse_rows(ctx: StageContext, handle: StageHandle, *, run_id: str) 
             }
             sink.complete_run(run_id, RunState.COMPLETE)
             session.commit()
-        except Exception as exc:  # noqa: BLE001 - a rejected row must not half-land
+        except Exception as exc:  # a rejected row must not half-land
             session.rollback()
             ctx.echo(
                 f"[warehouse] FAILED: {type(exc).__name__}: {str(exc)[:300]} — nothing was "

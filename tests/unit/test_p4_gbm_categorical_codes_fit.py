@@ -49,10 +49,10 @@ import polars as pl
 import pytest
 
 from oxbow.config import find_repo_root
+from oxbow.models.config import load_model_config
 from oxbow.models.errors import FrameContractViolationError
 from oxbow.models.gbm import fit_gbm
 from oxbow.models.inputs import MAX_CATEGORY_INDEX, categorical_for_lightgbm, feature_matrix
-from oxbow.models.config import load_model_config
 from oxbow.scoring.frame import COL_LABEL
 
 REPO_ROOT: Path = find_repo_root()
@@ -96,7 +96,7 @@ def test_integer_categorical_codes_pass_through_unhashed() -> None:
     communities = matrix[:, 1]
     assert hours.max() <= 23.0, f"hour codes were re-encoded, got max {hours.max()}"
     assert communities.max() <= 2498.0, f"community codes were re-encoded, max {communities.max()}"
-    assert set(np.unique(hours)) == set(float(v) for v in range(24)), (
+    assert set(np.unique(hours)) == {float(v) for v in range(24)}, (
         "the coding must be the column's own 24 hour codes: anything else and the tree splits "
         "on a feature space the features layer never published"
     )
@@ -131,9 +131,9 @@ def test_a_hashed_string_is_never_named_to_lightgbm_as_a_category_index() -> Non
     admissible = categorical_for_lightgbm(
         frame, ("channel", "local_hour_code"), ("channel", "local_hour_code")
     )
-    assert admissible == ("local_hour_code",), (
-        f"a 2.4e9-magnitude FNV hash was offered as a category index: {admissible}"
-    )
+    assert admissible == (
+        "local_hour_code",
+    ), f"a 2.4e9-magnitude FNV hash was offered as a category index: {admissible}"
 
 
 def test_an_oversized_integer_category_code_is_refused_not_allocated() -> None:
