@@ -45,30 +45,37 @@ images.
 
 ## 03 — demo video
 
-Narration is generated locally, no download and no cloud voice. Verified: the first beat
-renders **14.9 s** at `Rate = -1`, which fits the 20 s slot in the script.
+Narration is generated locally: no download, no cloud voice, nothing to authenticate.
+`scripts/make_narration.py` reads the beat table out of `SUBMISSION.md` §03 — that table is
+the only copy of the words, so the voice cannot drift from the script the judge reads — and
+synthesizes one WAV per beat through `scripts/speak.ps1`, then pads them onto one timeline at
+their own slot offsets.
 
 ```bash
-# one wav per beat (7 beats, ~3:30 total); keep them under a scratch dir
-powershell -NoProfile -File speak.ps1 \
-  -Text "OXBOW is a financial crime analytics tool…" \
-  -Out "$PWD/narr/beat1.wav"
+uv run python scripts/make_narration.py            # 7 beats + timeline.wav + beats.txt
+uv run python scripts/make_narration.py --check    # re-measure existing waves only
 ```
 
-`speak.ps1` is the working synthesiser (note `SetOutputToWaveFile`, not `SetWaveFile`,
-which does not exist on this API):
+Measured on this host, Microsoft Zira Desktop at `Rate = -1`, 22,050 Hz:
 
-```powershell
-param([string]$Text, [string]$Out)
-Add-Type -AssemblyName System.Speech
-$s = New-Object System.Speech.Synthesis.SpeechSynthesizer
-$s.SelectVoice('Microsoft Zira Desktop')   # or 'Microsoft David Desktop'
-$s.Rate = -1                              # slightly slower than default; measured above
-$s.Volume = 100
-$s.SetOutputToWaveFile($Out)
-$s.Speak($Text)
-$s.Dispose()
-```
+| beat | slot | audio | fits |
+|---|---|---|---|
+| 1 Command strip | 0:00–0:20 | 14.8 s | yes |
+| 2 Scorecard | 0:20–0:50 | 21.8 s | yes |
+| 3 Network | 0:50–1:25 | 17.9 s | yes |
+| 4 Queue + capacity | 1:25–2:00 | 23.5 s | yes |
+| 5 Case workspace | 2:00–2:35 | 27.5 s | yes |
+| 6 Validation / ablation | 2:35–3:00 | 20.0 s | yes |
+| 7 Limitations | 3:00–3:30 | 26.6 s | yes |
+
+Total spoken audio **2:32**; `out/narr/timeline.wav` is **206.6 s** with each beat starting at
+its own slot, so the voiceover is cut against the script's clock rather than re-timed by hand.
+Both are inside the 2–5 minute Devpost ceiling. Every beat was checked for actual signal, not
+just file size: RMS 2,795–3,757 and peak 25,412 of 32,767, and the timeline carries audio at
+all seven slot offsets.
+
+`speak.ps1` uses `SetOutputToWaveFile` — `SetWaveFile` does not exist on this API and fails at
+runtime, not at parse time.
 
 Screen capture: Playwright records per-page video natively, which avoids a full-desktop
 capture and the RAM it costs on this box.
