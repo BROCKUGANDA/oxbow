@@ -105,7 +105,10 @@ def list_alerts(
         policy_id=None if active is None else str(active["policy_id"]),
         allocations=allocations,
     )
-    decimals = container.economics.minor_units_per_major
+    # `Money.decimals` is the EXPONENT whose base is config's minor_units_per_major, and the
+    # client renders `minor / 10**decimals`. Passing the base (100) here made every card on
+    # the queue read as zero; the container converts once, in `read_model.money_decimals`.
+    decimals = read_model.money_decimals
     queue = AlertQueue(
         run_id=rid,
         policy_id=None if active is None else str(active["policy_id"]),
@@ -303,7 +306,10 @@ def _stored_allocations(
     read_model: ReadModel, run_id: str, policy_id: str
 ) -> dict[str, dict[str, Any]]:
     rows, _ = read_model.source.select(
-        "policy_allocation", where={"run_id": run_id, "policy_id": policy_id}, allow_missing=True
+        "policy_allocation",
+        where={"run_id": run_id, "policy_id": policy_id},
+        allow_missing=True,
+        with_count=False,
     )
     return {
         str(row["account_key"]): {

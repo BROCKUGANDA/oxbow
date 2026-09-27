@@ -66,7 +66,11 @@ def dashboard(
     run = read_model.resolve_run(run_id, state="complete" if run_id is None else None)
     rid = str(run["run_id"])
     summaries, _ = read_model.source.select(
-        "policy_summary", where={"run_id": rid}, order="policy_id", allow_missing=True
+        "policy_summary",
+        where={"run_id": rid},
+        order="policy_id",
+        allow_missing=True,
+        with_count=False,
     )
     if not summaries:
         raise DependencyUnavailable(
@@ -76,10 +80,18 @@ def dashboard(
         )
     summary = _preferred_summary(summaries)
     metrics, _ = read_model.source.select(
-        "validation_metric", where={"run_id": rid}, order="name", allow_missing=True
+        "validation_metric",
+        where={"run_id": rid},
+        order="name",
+        allow_missing=True,
+        with_count=False,
     )
     bands, _ = read_model.source.select(
-        "band_definition", where={"run_id": rid}, order="band", allow_missing=True
+        "band_definition",
+        where={"run_id": rid},
+        order="band",
+        allow_missing=True,
+        with_count=False,
     )
     evidence, _ = read_model.source.select(
         "evidence_event",
@@ -88,9 +100,15 @@ def dashboard(
         descending=True,
         limit=8,
         allow_missing=True,
+        with_count=False,
     )
     communities = _high_risk_networks(read_model, rid)
-    decimals = container.economics.minor_units_per_major
+    # `Money.decimals` is the EXPONENT whose base is config's minor_units_per_major (005):
+    # the client renders `minor / 10**decimals`, so wiring the base (100) into this field
+    # divides every figure the dashboard serves by 10^100 and it reads as zero. The
+    # container converts once, in `read_model.money_decimals`, and this is the same field
+    # every other money in the response carries.
+    decimals = read_model.money_decimals
     currency = str(summary["currency"])
     loss_avoided = int(summary["loss_avoided_minor"])
     band_rates = list(container.economics.recovery.band)
@@ -180,6 +198,7 @@ def loss_avoided_over_band(
         "policy_allocation",
         where={"run_id": run_id, "policy_id": policy_id, "selected": True},
         allow_missing=True,
+        with_count=False,
     )
     if not rows:
         return {rate: 0 for rate in rates}
@@ -239,10 +258,9 @@ def _chips(metrics: list[dict[str, Any]]) -> list[ModelChip]:
 
 
 def _band_count(read_model: ReadModel, run_id: str, band: str) -> int:
-    _, total = read_model.source.select(
-        "score", where={"run_id": run_id, "band": band}, limit=1, allow_missing=True
-    )
-    return total
+    # A count, so a count is all that runs: this used to fetch one row *and* aggregate,
+    # once per band row on the landing screen.
+    return read_model.source.count("score", {"run_id": run_id, "band": band})
 
 
 def _cutoff_rank(read_model: ReadModel, run_id: str, policy_id: str) -> int | None:
@@ -253,6 +271,7 @@ def _cutoff_rank(read_model: ReadModel, run_id: str, policy_id: str) -> int | No
         descending=True,
         limit=1,
         allow_missing=True,
+        with_count=False,
     )
     return None if not rows else int(rows[0]["rank"])
 
@@ -265,22 +284,31 @@ def _high_risk_networks(read_model: ReadModel, run_id: str) -> dict[str, Any]:
     and the basis string says which tables the number came out of.
     """
     communities, _ = read_model.source.select(
-        "community", where={"run_id": run_id}, allow_missing=True
+        "community", where={"run_id": run_id}, allow_missing=True, with_count=False
     )
     memberships, _ = read_model.source.select(
-        "account_membership", where={"run_id": run_id}, allow_missing=True
+        "account_membership",
+        where={"run_id": run_id},
+        allow_missing=True,
+        with_count=False,
     )
     risky, _ = read_model.source.select(
-        "score", where={"run_id": run_id, "band": ("D", "E")}, allow_missing=True
+        "score",
+        where={"run_id": run_id, "band": ("D", "E")},
+        allow_missing=True,
+        with_count=False,
     )
     risky_keys = {str(row["account_key"]) for row in risky}
     by_community: dict[int, set[str]] = {}
     for row in memberships:
         by_community.setdefault(int(row["community_id"]), set()).add(str(row["account_key"]))
+    # Built once, outside the loop. This was a set comprehension over every stored
+    # community *inside* the generator that iterates the communities, which made the
+    # landing route O(communities²): the measured runs are 6,150 and 23,646 communities,
+    # so 38 million and 559 million set insertions for one KPI tile.
+    stored_indexes = {int(row["canonical_index"]) for row in communities}
     count = sum(
-        1
-        for index, keys in by_community.items()
-        if keys & risky_keys and index in {int(row["canonical_index"]) for row in communities}
+        1 for index, keys in by_community.items() if keys & risky_keys and index in stored_indexes
     )
     return {
         "count": count,

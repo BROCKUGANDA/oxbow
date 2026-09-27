@@ -25,14 +25,16 @@ pipeline.
 
 from __future__ import annotations
 
+import asyncio
 import time
-from collections.abc import Iterator
+from collections.abc import AsyncIterator, Iterator
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, Final
 
 from fastapi import APIRouter, Depends, Path, Query, Request
 from fastapi.responses import StreamingResponse
+from starlette.concurrency import run_in_threadpool
 
 from api.deps import Container, analyst_or_higher, get_container
 from api.observability import get_logger, trace_id_var
@@ -63,6 +65,10 @@ router = APIRouter(prefix="/api/runs", tags=["events"])
 STREAM_POLL_SECONDS: Final = 1.0
 STREAM_MAX_SECONDS: Final = 900.0
 STREAM_MAX_ROW_RUN: Final = 1000
+# One poll's worth of ledger rows. The bound is on the *query*: a poll that comes back
+# full is drained again at once, so nothing is withheld from the client, while a run with
+# a long ledger no longer makes every second of every open stream re-read the whole of it.
+STREAM_POLL_ROW_LIMIT: Final = 256
 TERMINAL_RUN_STATES: Final = ("complete", "failed", "superseded")
 
 # ``StageEvent`` is imported for the stream's declared schema; the terminal-status
@@ -118,18 +124,63 @@ def read_cursor(last_event_id_header: str | None, last_event_id_query: int | Non
     return ResumeCursor(after_id=0, requested_last_id=None, source="start")
 
 
-def load_backfill(read_model: ReadModel, run_id: str, cursor: ResumeCursor) -> list[StageEvent]:
+def load_backfill(
+    read_model: ReadModel,
+    run_id: str,
+    cursor: ResumeCursor,
+    *,
+    limit: int | None = None,
+    verify_run: bool = True,
+) -> list[StageEvent]:
     """Every stored row after the cursor, in id order — the backfill itself.
 
     The read goes through the warehouse, never through a buffer this process keeps,
     because the guarantee being made is "no duplicates", and a duplicate can only be
     excluded by a cursor that is durable.
+
+    ``verify_run`` is the caller's promise that it has already read the run row. The
+    stream's poll makes that promise: asking twice per second whether a run exists is
+    one more statement per poll for a fact the poll already has.
     """
-    rows = read_model.stage_events(run_id, after_id=cursor.after_id)
+    if verify_run:
+        rows = read_model.stage_events(run_id, after_id=cursor.after_id, limit=limit)
+    else:
+        rows = read_model.stage_event_rows(run_id, after_id=cursor.after_id, limit=limit)
     events: list[StageEvent] = []
     for row in sorted(rows, key=lambda item: int(item["id"])):
         events.append(StageEvent.model_validate(dict(row)))
     return events
+
+
+def _initial_backfill(
+    read_model: ReadModel, run_id: str, cursor: ResumeCursor
+) -> list[StageEvent]:
+    """The rows already stored when the client arrived, in one bounded-free read.
+
+    The whole remainder is fetched here on purpose: a reconnecting client must be caught up
+    before ``event: end`` on a terminal run, and a capped first read would close the stream
+    with rows still undelivered. Only the *poll* is bounded, and a full poll is drained.
+    The route has already read the run row, so this does not ask whether the run exists.
+    """
+    return load_backfill(read_model, run_id, cursor, verify_run=False)
+
+
+def _poll_once(
+    read_model: ReadModel, run_id: str, after_id: int
+) -> tuple[str, list[StageEvent]]:
+    """One bounded poll: the run's state and the ledger rows strictly after the cursor.
+
+    Synchronous on purpose — it is warehouse I/O, and it runs on a worker thread for the
+    few milliseconds a query takes. The stream's *wait* is what must not hold a thread.
+    """
+    run = read_model.run_row(run_id)
+    return str(run["state"]), load_backfill(
+        read_model,
+        run_id,
+        ResumeCursor(after_id, None, "poll"),
+        limit=STREAM_POLL_ROW_LIMIT,
+        verify_run=False,
+    )
 
 
 def frames_for(events: Iterator[StageEvent] | list[StageEvent]) -> Iterator[str]:
@@ -145,13 +196,13 @@ def frames_for(events: Iterator[StageEvent] | list[StageEvent]) -> Iterator[str]
         yield f"id: {frame['id']}\nevent: {frame['event']}\ndata: {frame['data']}\n\n"
 
 
-def stream_events(
+async def stream_events(
     container: Container,
     run_id: str,
     cursor: ResumeCursor,
     *,
     trace: str | None = None,
-) -> Iterator[str]:
+) -> AsyncIterator[str]:
     """The generator behind the route: backfill, then follow, then close.
 
     Emitted ids are tracked against the cursor locally as well as read from the store,
@@ -159,30 +210,35 @@ def stream_events(
     and commits while a poll is in flight) is still delivered once. That is the
     no-duplicate property under a race rather than under a scheduler that happens to
     be nice.
+
+    **The wait is awaited, not slept.** This generator belongs to an ``async def`` route,
+    so between polls it holds no thread at all: ``STREAM_MAX_SECONDS`` of an open
+    dashboard used to be ``STREAM_MAX_SECONDS`` of a checked-out worker from Starlette's
+    ~40-permit pool, which every ``def`` route in the app shares, and forty open streams
+    starved unrelated requests behind them. The warehouse read inside each poll is
+    blocking I/O, so it goes to a worker thread for its own few milliseconds through
+    :func:`run_in_threadpool` rather than running on the event loop.
     """
     read_model = container.read_model
     last = cursor.after_id
     sent = 0
     yield f"retry: {SSE_RETRY_MS}\n\n"
-    for event in load_backfill(read_model, run_id, cursor):
+    # The route read the run row before handing it here, so the backfill does not re-check.
+    for event in await run_in_threadpool(_initial_backfill, read_model, run_id, cursor):
         if event.id <= last:
             continue
         last = event.id
         sent += 1
-        yield from frames_for([event])
+        for frame in frames_for([event]):
+            yield frame
     started = time.monotonic()
     while True:
-        run = read_model.run_row(run_id)
-        state = str(run["state"])
-        fresh = [
-            event
-            for event in load_backfill(read_model, run_id, ResumeCursor(last, None, "poll"))
-            if event.id > last
-        ]
+        state, fresh = await run_in_threadpool(_poll_once, read_model, run_id, last)
         for event in fresh:
             last = event.id
             sent += 1
-            yield from frames_for([event])
+            for frame in frames_for([event]):
+                yield frame
         if state in TERMINAL_RUN_STATES:
             # A terminal run closes the stream: the ledger is finished, and holding the
             # connection open would leave the UI's last row spinning forever.
@@ -204,7 +260,12 @@ def stream_events(
                 trace_id=trace,
             )
             return
-        time.sleep(STREAM_POLL_SECONDS)
+        if len(fresh) >= STREAM_POLL_ROW_LIMIT:
+            # A full page means the ledger is still filling behind the cursor. Drain it
+            # immediately rather than making a client wait a poll interval for rows that
+            # are already stored; the bound is on the query, not on the delivery.
+            continue
+        await asyncio.sleep(STREAM_POLL_SECONDS)
 
 
 def _end_frame(
@@ -277,7 +338,8 @@ def run_event_ledger(
     )
     read_model = container.read_model
     run = read_model.run_row(run_id)
-    events = load_backfill(read_model, run_id, cursor)
+    # The run row is already in hand, so the ledger read does not ask again.
+    events = load_backfill(read_model, run_id, cursor, verify_run=False)
     progress = RunProgress(
         run_id=run_id, state=str(run["state"]), events=[event.model_dump() for event in events]
     )
@@ -303,7 +365,7 @@ def run_event_ledger(
         },
     },
 )
-def run_event_stream(
+async def run_event_stream(
     request: Request,
     run_id: str = Path(min_length=26, max_length=26),
     last_event_id: int | None = Query(
@@ -324,9 +386,10 @@ def run_event_stream(
         )
     trace = trace_id_var.get()
 
-    def generate() -> Iterator[str]:
+    async def generate() -> AsyncIterator[str]:
         try:
-            yield from stream_events(container, run_id, cursor, trace=trace)
+            async for chunk in stream_events(container, run_id, cursor, trace=trace):
+                yield chunk
         except Exception as exc:  # a stream that dies silently is a stalled progress bar
             logger.error(
                 "sse stream failed",
@@ -353,6 +416,7 @@ def run_event_stream(
 
 __all__ = [
     "STREAM_MAX_SECONDS",
+    "STREAM_POLL_ROW_LIMIT",
     "STREAM_POLL_SECONDS",
     "TERMINAL_RUN_STATES",
     "ResumeCursor",

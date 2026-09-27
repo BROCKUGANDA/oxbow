@@ -59,7 +59,7 @@ from contextlib import contextmanager, suppress
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Any, Final, Protocol
 
 # ``python apps/api/worker.py`` puts *this directory* on sys.path, which would leave the
 # ``api`` package unimportable and make RQ's dotted-name lookup of ``api.worker`` fail in
@@ -82,6 +82,8 @@ from redis import Redis
 from rq import Queue, Worker, get_current_job
 from rq.exceptions import NoSuchJobError
 from rq.job import Job, JobStatus
+from rq.scheduler import RQScheduler
+from rq.utils import utcparse
 from sqlalchemy import select, update
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
@@ -123,20 +125,58 @@ CLOSED_JOB_STATES: Final = (JOB_FINISHED, JOB_FAILED)
 DEAD_RQ_STATES: Final = frozenset(
     {JOB_FINISHED, JOB_FAILED, JobStatus.STOPPED.value, JobStatus.CANCELED.value, ""}
 )
-
-#: How long a job may sit ``started`` before the startup sweep may call it dead. Deliberately
-#: an order of magnitude above a full pipeline run: a false positive here fails a live job's
-#: run underneath the worker holding it.
-ABANDON_GRACE_SECONDS: Final = 7200
+#: The answer for a job a worker is inside right now. Not evidence of death on its own — it
+#: only stops being a live claim when the heartbeat that comes with it goes quiet.
+LIVE_RQ_STATES: Final = frozenset({JOB_STARTED})
 
 #: ``submit_job`` cannot know the model version before the model is imported, so it writes
 #: ``pending:{kind}`` and the worker replaces it while the run is still open.
 PENDING_VERSION_PREFIX: Final = "pending:"
 
+#: How long the *queue's own* heartbeat for a job may go silent before the silence counts as
+#: evidence the process holding the job is gone. RQ 2.1.0's parent worker stamps
+#: ``last_heartbeat`` on the job hash every ``DEFAULT_JOB_MONITORING_INTERVAL`` (30 s) and
+#: lets the execution key expire ~90 s later, so 900 s is ten missed beats plus an ingest
+#: measured at 252 s on this stack. Measured, not guessed: a container ``kill`` froze
+#: ``last_heartbeat`` at the moment of death while ``status`` stayed ``started``.
+HEARTBEAT_GRACE_SECONDS: Final = 900
+
+#: How long a job may exist without *any* heartbeat to measure against before the sweep may
+#: call it dead on the submission clock alone. Deliberately an order of magnitude above a
+#: full pipeline run (a 500k-row score did not finish in 1 h 47 m on this host): a row whose
+#: queue says ``started`` but whose heartbeat cannot be read is a row this process must not
+#: condemn, because condemning a live job fails its run underneath the worker holding it.
+#: The grace used to be applied to ``created_at`` for *every* row, which is what this and
+#: :data:`HEARTBEAT_GRACE_SECONDS` now separate.
+ABANDON_GRACE_SECONDS: Final = 7200
+
 #: How far ahead the next outbox drain is scheduled. The retry ladder's shortest rung is 1s
 #: and every pass is stateless, so a minute is responsive without an empty queue dominating
 #: Redis.
 DRAIN_INTERVAL_SECONDS: Final = 60
+
+#: The queue the drain lives on. It cannot share :data:`api.jobs.QUEUE_NAME`: a pipeline job
+#: is enqueued with ``job_timeout="2h"`` and RQ runs one job per worker process at a time, so
+#: a drain booked behind an ingest waits behind the ingest and the :60 s period is
+#: unachievable — the measured full-corpus ingest alone took 252 s here.
+DRAIN_QUEUE_NAME: Final = "oxbow-outbox"
+
+#: A drain pass is a handful of HTTP POSTs, not arithmetic: it gets the timeout the pipeline
+#: jobs get nothing like, and it runs where a two-hour stage cannot reach it.
+DRAIN_JOB_TIMEOUT: Final = "5m"
+
+#: The prefix of the deterministic id each drain appointment is booked under. The id is
+#: derived from the slot rather than minted, so "is the next pass already in the calendar?"
+#: is a question with one answer, and two workers asking it at once cannot each book a pass.
+DRAIN_APPOINTMENT_PREFIX: Final = "outbox-drain-"
+
+#: Answers about an appointment that mean the next pass is still ahead of us. A slot whose job
+#: the queue has forgotten, or has already filed finished, is a hole in the calendar: the
+#: hash a finished pass leaves behind for ``DEFAULT_RESULT_TTL`` (500 s) must not be read as a
+#: booked one, which is why the question is asked of the state and not of the key's existence.
+BOOKED_APPOINTMENT_STATES: Final = frozenset(
+    {JobStatus.SCHEDULED.value, JobStatus.DEFERRED.value, JOB_QUEUED, JOB_STARTED}
+)
 
 #: A detail column is Text with a CHECK on nothing, but every producer in this repo truncates
 #: to 900 (``stage_events.py``, ``pipeline_cmd``); one limit is one behaviour.
@@ -354,20 +394,74 @@ class JobLedger:
         self._move(JOB_FAILED, error=error[:DETAIL_LIMIT], finished_at=datetime.now(UTC))
 
     def _move(self, state: str, **values: Any) -> None:
+        """Book one transition — and book it again if the row moved under this session.
+
+        ``submit_job`` commits this row before it enqueues and then re-keys it to the queue's
+        job id, so a delivery that claimed the job inside that window holds a primary key that
+        has just stopped existing: its ``UPDATE`` matches no row and SQLAlchemy raises instead
+        of writing nothing. Letting that pass would leave the row ``queued`` behind a run that
+        finished — the shape the re-key exists to prevent — so the ledger re-resolves the row
+        by ``run_id`` and books the transition against whatever the key turned out to be.
+        """
         if self.session is None or self.row is None:
             return
-        self.row.state = state
-        for key, value in values.items():
-            setattr(self.row, key, value)
+        self._apply(self.row, state, values)
         try:
             self.session.commit()
+            return
         except SQLAlchemyError as exc:
+            self.session.rollback()
+            if self._book_after_reresolving(state, values):
+                return
             # Bookkeeping must not be the reason a run's verdict is unknown: the run row and
             # the stage ledger are already committed by their own paths, so this is logged as
             # the named loss it is rather than allowed to replace the real failure.
-            self.session.rollback()
             self.notes.append(f"job_run write failed: {type(exc).__name__}: {str(exc)[:200]}")
             logger.error("job_run transition failed", run_id=self.run_id, error=str(exc)[:300])
+
+    def _apply(self, row: JobRun, state: str, values: Mapping[str, Any]) -> None:
+        row.state = state
+        for key, value in values.items():
+            setattr(row, key, value)
+
+    def _book_after_reresolving(self, state: str, values: Mapping[str, Any]) -> bool:
+        """Whether the transition landed once the row was found by ``run_id`` instead of key."""
+        if self.session is None:
+            return False
+        row = (
+            self.session.execute(
+                select(JobRun)
+                .where(JobRun.run_id == self.run_id, JobRun.kind == self.kind)
+                .order_by(JobRun.created_at.desc())
+                .limit(1)
+            )
+            .scalars()
+            .first()
+        )
+        if row is None:
+            return False
+        self.row = row
+        self.job_id = str(row.job_id)
+        try:
+            self._apply(row, state, values)
+            self.session.commit()
+        except SQLAlchemyError as exc:
+            self.session.rollback()
+            logger.error(
+                "job_run transition failed after re-resolving the row",
+                run_id=self.run_id,
+                error=f"{type(exc).__name__}: {str(exc)[:200]}",
+            )
+            return False
+        logger.warning(
+            "job_run transition booked against a re-resolved row",
+            run_id=self.run_id,
+            job_id=self.job_id,
+            state=state,
+            detail="the row was first read under a job id that no longer matches it: "
+            "submit_job re-keys the row to the queue's id straight after the enqueue",
+        )
+        return True
 
 
 def _current_rq_job_id() -> str | None:
@@ -749,12 +843,13 @@ def _sweep_orphans(
     not this stage's business, and a worker that dies of a good intention serves nobody.
     """
     try:
-        observer = probe if probe is not None else _rq_state_probe(container)
-        closed = reclaim_orphaned(container, probe=observer)
+        if probe is not None:
+            closed = reclaim_orphaned(container, probe=probe, beats=_rq_heartbeat_probe(container))
+        else:
+            with _queue_observer(container) as (state_probe, heartbeat_probe):
+                closed = reclaim_orphaned(container, probe=state_probe, beats=heartbeat_probe)
     except Exception as exc:  # noqa: BLE001 - deliberately broad, and it only logs
-        logger.warning(
-            "the per-job orphan sweep was skipped", error=f"{type(exc).__name__}: {exc}"
-        )
+        logger.warning("the per-job orphan sweep was skipped", error=_reason(exc))
         return 0
     if closed:
         logger.warning(
@@ -961,21 +1056,48 @@ def _ledger_has_failure(container: Container, run_id: str) -> bool:
 # --- the outbox drain -------------------------------------------------------
 
 
-def drain_outbox(*, container: Container | None = None, reschedule: bool = True) -> dict[str, Any]:
+class QueueHandle(Protocol):
+    """The queue operations the drain's calendar is expressed through.
+
+    :class:`_DrainCalendar` implements it over ``rq.Queue``. An appointment lost to a killed
+    pass is an interleaving, and an interleaving is only a gate if a test can produce it; a
+    live Redis cannot be driven from one, so the booking code asks an object rather than
+    reaching into Redis itself.
+    """
+
+    def enqueue_in(self, when: timedelta, name: str, **options: Any) -> Any: ...
+
+    def appointment_state(self, job_id: str) -> str: ...
+
+    def get_job_ids(self) -> Sequence[str]: ...
+
+
+def drain_outbox(
+    *,
+    container: Container | None = None,
+    reschedule: bool = True,
+    queue: QueueHandle | None = None,
+) -> dict[str, Any]:
     """One drain pass over the outbox, then the next appointment.
 
     Plan §13 says an RQ worker drains the outbox, and this process is the only one in the
     stack that qualifies as a worker. ``api/outbox.py`` already refuses to remember anything,
     so a pass is stateless by construction and two workers overlapping is the at-least-once
     contract the docs state, not a bug. ``rq-scheduler`` is not a dependency of this build, so
-    the period is carried by the job itself: each pass books its successor. If a pass dies hard
-    enough to skip that, the appointment dies with it and the next worker start re-seeds it —
-    which is why :func:`main` books the first one.
+    the period is carried by the job itself: each pass books its successor, and the successor
+    is booked in a ``finally`` because the pass that loses the appointment is exactly the pass
+    that needs one — an exception out of ``drain_once``, and above all the ``job_timeout`` that
+    turns a hung webhook into an exception raised *inside* the pass, used to end the chain
+    until the next worker restart while every outbox row kept its ``in_flight`` claim.
+    :func:`keep_deliveries_moving` is the second half: the tick that re-books a calendar a
+    ``SIGKILL`` still took away.
     """
     from api.outbox import drain_once
 
     owned = container is None
     resolved = build_container() if owned else container
+    calendar = queue if queue is not None else (_drain_calendar(resolved) if reschedule else None)
+    owe_appointment = False
     try:
         if not resolved.write_path_enabled:
             logger.warning(
@@ -983,9 +1105,9 @@ def drain_outbox(*, container: Container | None = None, reschedule: bool = True)
                 "no outbox rows"
             )
             return {"drained": False, "reason": "no write path"}
+        # From here to the end of the pass, the next pass is owed an appointment.
+        owe_appointment = reschedule
         report = drain_once(resolved)
-        if reschedule:
-            _schedule_next_drain(_queue_for(resolved))
         return {
             "drained": True,
             "claimed": report.claimed,
@@ -995,22 +1117,168 @@ def drain_outbox(*, container: Container | None = None, reschedule: bool = True)
             "rejected_permanently": report.rejected_permanently,
         }
     finally:
+        if owe_appointment:
+            _book_next_drain(calendar)
         if owned:
             resolved.close()
 
 
-def _schedule_next_drain(queue: Queue | None) -> None:
+def _drain_calendar(container: Container) -> QueueHandle | None:
+    """The calendar drain passes are booked on — never the queue the stages occupy."""
+    queue = _queue_for(container, DRAIN_QUEUE_NAME)
+    return None if queue is None else _DrainCalendar(queue)
+
+
+def _appointment_id(due: datetime) -> str:
+    """The deterministic key of the drain slot ``due`` falls in.
+
+    The id names the slot rather than the booking, so "is the next pass already in the
+    calendar?" has one answer, and two workers asking it in the same minute cannot each book
+    a pass: RQ keys the scheduled registry by job id, so the second booking lands on the
+    first. Measured on RQ 2.1.0: booking one id twice leaves one entry and raises nothing.
+    """
+    return f"{DRAIN_APPOINTMENT_PREFIX}{int(due.timestamp()) // DRAIN_INTERVAL_SECONDS}"
+
+
+def _appointment_booked(queue: QueueHandle | None, *, now: datetime | None = None) -> bool:
+    """Whether a pass is already booked for this slot or the next two.
+
+    Two slots of slack because the pass that books slot N+1 runs during slot N, and a tick
+    landing near the boundary would otherwise re-book a calendar that is fine. The question is
+    asked of the appointment's *state* rather than of its existence: a finished pass leaves its
+    job hash behind for ``DEFAULT_RESULT_TTL`` (500 s, measured), and treating that lingering
+    record as a booked slot is how a calendar that lost its chain keeps looking healthy for
+    eight more minutes.
+    """
     if queue is None:
-        logger.warning("outbox drain not rescheduled: the queue is unreachable")
-        return
+        # Nothing to book on and nothing to read: there is no calendar to repair, and saying
+        # so is the worker's only honest answer here.
+        return True
+    reference = now or datetime.now(UTC)
+    slot = int(reference.timestamp()) // DRAIN_INTERVAL_SECONDS
+    return any(
+        queue.appointment_state(f"{DRAIN_APPOINTMENT_PREFIX}{offset + slot}")
+        in BOOKED_APPOINTMENT_STATES
+        for offset in (0, 1, 2)
+    )
+
+
+def _book_drain(
+    queue: QueueHandle | None, due: datetime, *, now: datetime | None = None
+) -> datetime:
+    """Put one appointment in the calendar for the slot ``due`` falls in."""
+    if queue is None:
+        logger.warning("outbox drain not booked: the queue is unreachable")
+        return due
+    reference = now or datetime.now(UTC)
     try:
         queue.enqueue_in(
-            timedelta(seconds=DRAIN_INTERVAL_SECONDS),
+            due - reference,
             "api.worker.drain_outbox",
-            job_timeout="5m",
+            job_id=_appointment_id(due),
+            job_timeout=DRAIN_JOB_TIMEOUT,
         )
     except Exception as exc:  # a missed appointment must not fail the pass that made it
-        logger.error("outbox drain could not be rescheduled", error=str(exc)[:200])
+        logger.error("outbox drain could not be booked", error=str(exc)[:200])
+    return due
+
+
+def _book_next_drain(queue: QueueHandle | None, *, now: datetime | None = None) -> datetime:
+    """The pass's own successor: one interval from now, in the pass's own slot id."""
+    reference = now or datetime.now(UTC)
+    return _book_drain(queue, reference + timedelta(seconds=DRAIN_INTERVAL_SECONDS), now=reference)
+
+
+def promote_due_appointments(container: Container) -> int:
+    """Move drain appointments whose slot has arrived back onto the queue the worker serves.
+
+    ``Queue.enqueue_in`` parks a job in RQ's *scheduled* registry, and the only code in RQ
+    2.1.0 that moves a due scheduled job onto a queue is :class:`rq.scheduler.RQScheduler`.
+    This deployment runs no scheduler: ``docker-compose.yml``'s worker command is
+    ``python apps/api/worker.py``, and ``Worker.work()`` promotes scheduled jobs only when
+    called with ``with_scheduler=True``. Measured on this stack against the Compose Redis — a
+    plain ``Worker`` leaves an ``enqueue_in`` job sitting in ``rq:scheduled:*`` with status
+    ``scheduled`` and never runs it; the same worker with ``with_scheduler=True`` runs it. The
+    compose file is not this module's to change, so the worker process does the promotion
+    itself, through the scheduler's own locking so that two workers never both promote one
+    slot.
+    """
+    queue = _queue_for(container, DRAIN_QUEUE_NAME)
+    if queue is None:
+        return 0
+    scheduler = RQScheduler([queue], connection=queue.connection, interval=DRAIN_INTERVAL_SECONDS)
+    if not scheduler.acquire_locks():
+        return 0
+    registry = queue.scheduled_job_registry
+    due = registry.get_jobs_to_schedule(int(time.time()))
+    try:
+        if due:
+            scheduler.enqueue_scheduled_jobs()
+    finally:
+        scheduler.release_locks()
+    return len(due)
+
+
+def keep_deliveries_moving(
+    container: Container,
+    *,
+    queue: QueueHandle | None = None,
+    now: datetime | None = None,
+    probes: tuple[Callable[[str], str | None], Callable[[str], datetime | None]] | None = None,
+) -> dict[str, Any]:
+    """The periodic bookkeeping a worker without a scheduler has to do for itself.
+
+    Three steps, each covering a failure the other two cannot:
+
+    * repair the calendar — a pass killed outright (``SIGKILL`` after a hard timeout, an
+      OOM-killed horse, a container scaled away) reaches no ``finally`` and leaves no
+      appointment behind, which is a silent outbox until the next boot;
+    * promote what is due — without this the appointment is booked and never kept, because
+      only RQ's scheduler moves a scheduled job onto a queue and this deployment runs none;
+    * close the runs whose worker stopped beating — see :func:`reclaim_orphaned`. This is the
+      only path that does it while the queue stays idle: :func:`_sweep_orphans` runs per job
+      and :func:`main` runs per process, so a killed container with nothing else to run would
+      otherwise leave its run ``running`` until the next deploy.
+
+    It never raises: the caller is RQ's maintenance hook inside the worker's own loop, and a
+    worker that dies of a good intention delivers nothing.
+    """
+    report: dict[str, Any] = {"rebooked": False, "promoted": 0, "abandoned_closed": 0}
+    try:
+        calendar = queue if queue is not None else _drain_calendar(container)
+        if not _appointment_booked(calendar, now=now):
+            reference = now or datetime.now(UTC)
+            # Due now, not due in a minute: a calendar that needed repairing has already lost
+            # the interval it should have fired in, and the promotion below picks it up now.
+            _book_drain(calendar, reference, now=reference)
+            report["rebooked"] = True
+    except Exception as exc:  # a broken calendar must not stop the sweep
+        logger.warning("the drain calendar could not be repaired", error=_reason(exc))
+    if queue is None:
+        try:
+            report["promoted"] = promote_due_appointments(container)
+        except Exception as exc:  # due appointments will still be waited for
+            logger.warning("due drains could not be promoted", error=_reason(exc))
+    try:
+        if probes is not None:
+            report["abandoned_closed"] = len(
+                reclaim_orphaned(container, now=now, probe=probes[0], beats=probes[1])
+            )
+        else:
+            with _queue_observer(container) as (state_probe, heartbeat_probe):
+                report["abandoned_closed"] = len(
+                    reclaim_orphaned(container, now=now, probe=state_probe, beats=heartbeat_probe)
+                )
+    except Exception as exc:  # bookkeeping about nobody else's rows
+        logger.warning("the periodic orphan sweep was skipped", error=_reason(exc))
+    if report["rebooked"] or report["promoted"] or report["abandoned_closed"]:
+        logger.warning("worker maintenance did bookkeeping", **report)
+    return report
+
+
+def _reason(exc: BaseException) -> str:
+    """``Type: message``, bounded, for a log line that must not have to be careful twice."""
+    return f"{type(exc).__name__}: {str(exc)[:200]}"
 
 
 # --- crash recovery ---------------------------------------------------------
@@ -1042,27 +1310,48 @@ def reclaim_orphaned(
     container: Container,
     *,
     now: datetime | None = None,
-    grace_seconds: int = ABANDON_GRACE_SECONDS,
+    grace_seconds: int = HEARTBEAT_GRACE_SECONDS,
+    submission_grace_seconds: int = ABANDON_GRACE_SECONDS,
     probe: Callable[[str], str | None] | None = None,
+    beats: Callable[[str], datetime | None] | None = None,
 ) -> list[AbandonedJob]:
-    """Close jobs a dead worker left ``started``, and the runs they opened.
+    """Close jobs a dead worker left open, and the runs they opened.
 
-    This is the enqueue-side guard of ``api/jobs.py:120-130`` seen from the other end:
-    ``job_run`` must not hold a run that looks live and never advances, and a ``SIGKILL`` —
-    an OOM, a container scaled away, a ``job_timeout`` that killed the horse — reaches no
-    ``except`` block in :func:`run_stages`. So each worker start asks the queue, job by job,
-    whether the job behind an open row still exists.
+    This is the enqueue-side guard of ``api/jobs.py`` seen from the other end: ``job_run`` must
+    not hold a run that looks live and never advances, and a ``SIGKILL`` — an OOM, a container
+    scaled away, a ``job_timeout`` that killed the horse — reaches no ``except`` block in
+    :func:`run_stages`. So the sweep asks the queue, job by job, whether the job behind an open
+    row is still alive.
 
-    Two refusals keep it from doing damage. It never acts on a job the queue cannot answer
-    about — an unreachable Redis is not evidence that a job died, so the whole sweep aborts —
-    and it never touches a row younger than ``grace_seconds``, because another worker may be
-    inside that stage right now. Each row it does close carries the *evidence* in its error
-    text, because "the worker died" and "the queue forgot" are different findings.
+    Two questions get asked, and the first one used to be asked of the wrong clock. *How long
+    has this job been quiet?* is measured from the queue's own heartbeat for the job
+    (:func:`_rq_heartbeat_probe`, stamped by the worker executing it every 30 s and frozen the
+    instant that process dies), floored by the row's submission time. It used to be measured
+    from ``created_at`` alone, which puts a job that is merely *long* — a 500k-row score that
+    did not finish in 1 h 47 m on this host — into the candidate set while it is working, with
+    nothing protecting it but the state probe. *Is it dead?* is answered by either of two
+    evidences: the queue reports a state that can never write again, or the queue still
+    claims ``started`` while its heartbeat has been silent past :data:`HEARTBEAT_GRACE_SECONDS`
+    — the second is the one this deployment needs, because RQ only files an abandoned job as
+    ``failed`` from ``Worker.clean_registries``, which runs on its own clock behind a lock that
+    a dead worker can hold for 899 s, and until it does the first evidence never arrives.
+
+    Two refusals keep it from doing damage. It never acts on a job the queue cannot answer about
+    — an unreachable Redis is not evidence that a job died, so the whole sweep aborts — and it
+    never touches a row quieter than the grace, because another worker may be inside that stage
+    right now. A row with no heartbeat to measure against is judged on the submission clock at
+    :data:`ABANDON_GRACE_SECONDS`, which is the same conservative rule that applied to every row
+    before. Each row it does close carries the *evidence* in its error text, because "the worker
+    died" and "the queue forgot" are different findings.
     """
     if not container.write_path_enabled:
         return []
     observer = probe if probe is not None else _rq_state_probe(container)
-    cutoff = (now or datetime.now(UTC)) - timedelta(seconds=grace_seconds)
+    heartbeats = beats if beats is not None else _rq_heartbeat_probe(container)
+    reference = now or datetime.now(UTC)
+    # A row cannot have been quiet for longer than it has existed, so this narrows the scan
+    # without deciding anything: the per-row test below is the one that condemns.
+    floor = timedelta(seconds=min(grace_seconds, submission_grace_seconds))
     session = container.new_session()
     abandoned: list[AbandonedJob] = []
     rows = []
@@ -1070,7 +1359,7 @@ def reclaim_orphaned(
         rows = list(
             session.execute(
                 select(JobRun)
-                .where(JobRun.state.in_(OPEN_JOB_STATES), JobRun.created_at < cutoff)
+                .where(JobRun.state.in_(OPEN_JOB_STATES), JobRun.created_at < reference - floor)
                 .order_by(JobRun.created_at)
             ).scalars()
         )
@@ -1091,16 +1380,34 @@ def reclaim_orphaned(
                     detail="an unanswered question is not evidence that a job died",
                 )
                 return []
-            if state not in DEAD_RQ_STATES:
+            beat = heartbeats(str(row.job_id))
+            quiet_since = row.created_at if beat is None else max(row.created_at, beat)
+            quiet_for = (reference - quiet_since).total_seconds()
+            allowed = (
+                grace_seconds if beat is not None else max(grace_seconds, submission_grace_seconds)
+            )
+            if quiet_for <= allowed:
+                continue
+            died_by_the_queue = state in DEAD_RQ_STATES
+            went_silent = state in LIVE_RQ_STATES and beat is not None
+            if not died_by_the_queue and not went_silent:
                 continue
             prior = str(row.state)
-            reason = (
-                f"abandoned: job_run recorded {prior!r} but the queue reports "
-                f"{state or 'no such job'!r}; the worker that claimed it is gone"
-            )
+            silence = f"{int(quiet_for)}s without a heartbeat since {quiet_since.isoformat()}"
+            if died_by_the_queue:
+                reason = (
+                    f"abandoned: job_run recorded {prior!r} but the queue reports "
+                    f"{state or 'no such job'!r}; the worker that claimed it is gone ({silence})"
+                )
+            else:
+                reason = (
+                    f"abandoned: job_run recorded {prior!r} and the queue still reports "
+                    f"{state!r}, but that is {silence}; RQ stamps a heartbeat every "
+                    "30s while a worker holds a job, so the worker is gone"
+                )
             row.state = JOB_FAILED
             row.error = reason[:DETAIL_LIMIT]
-            row.finished_at = now or datetime.now(UTC)
+            row.finished_at = reference
             if row.run_id is not None:
                 session.execute(
                     update(Run)
@@ -1108,7 +1415,7 @@ def reclaim_orphaned(
                     .values(
                         state=RunState.FAILED.value,
                         error=reason[:DETAIL_LIMIT],
-                        finished_at=now or datetime.now(UTC),
+                        finished_at=reference,
                     )
                 )
             abandoned.append(
@@ -1139,7 +1446,15 @@ def _rq_state_probe(container: Container) -> Callable[[str], str | None]:
     ``""`` is the answer "this job does not exist" — evidence. ``None`` is "I could not ask",
     which the sweep treats as a reason to stop, not as permission to close rows.
     """
-    connection = _redis_connection(container)
+    return _state_probe_on(_redis_connection(container))
+
+
+def _rq_heartbeat_probe(container: Container) -> Callable[[str], datetime | None]:
+    """A probe reading one job's last heartbeat from Redis."""
+    return _heartbeat_probe_on(_redis_connection(container))
+
+
+def _state_probe_on(connection: Redis | None) -> Callable[[str], str | None]:
     if connection is None:
         return lambda _job_id: None
 
@@ -1153,6 +1468,59 @@ def _rq_state_probe(container: Container) -> Callable[[str], str | None]:
             return None
 
     return probe
+
+
+def _heartbeat_probe_on(connection: Redis | None) -> Callable[[str], datetime | None]:
+    """The queue's own stamp of when a job was last known to be running.
+
+    RQ's worker writes ``last_heartbeat`` on the job hash every monitoring interval while it
+    holds the job, and stops the moment it is killed; the field stays behind, frozen, which is
+    what makes it a clock rather than a flag. A never-started job carries an empty field, and
+    an unreadable one whatever the connection did — both answer ``None``, which is the absence
+    of evidence and not evidence of death.
+    """
+    if connection is None:
+        return lambda _job_id: None
+
+    def probe(job_id: str) -> datetime | None:
+        try:
+            return _parse_beat(connection.hget(Job.key_for(job_id), "last_heartbeat"))
+        except Exception as exc:
+            logger.warning("job heartbeat unknown", job_id=job_id, error=str(exc)[:200])
+            return None
+
+    return probe
+
+
+def _parse_beat(raw: Any) -> datetime | None:
+    """RQ's own timestamp spelling, in UTC, or ``None`` when there is nothing to read."""
+    if not raw:
+        return None
+    text = raw.decode() if isinstance(raw, bytes | bytearray) else str(raw)
+    try:
+        # ``rq.utils.utcparse`` reads the format ``utcformat`` wrote; neither carries an
+        # offset, and the value it stamps is ``now()``, so UTC is the only reading.
+        return utcparse(text).replace(tzinfo=UTC)
+    except ValueError:
+        return None
+
+
+@contextmanager
+def _queue_observer(
+    container: Container,
+) -> Iterator[tuple[Callable[[str], str | None], Callable[[str], datetime | None]]]:
+    """One Redis client's worth of state and heartbeat probes, closed on the way out.
+
+    The periodic tick asks about every open row, so the connection it asks on has to end:
+    ``Redis.from_url`` opens a pool per call, and a pool left behind in the worker's *parent*
+    process is one a later horse inherits across the fork.
+    """
+    connection = _redis_connection(container)
+    try:
+        yield _state_probe_on(connection), _heartbeat_probe_on(connection)
+    finally:
+        if connection is not None:
+            connection.close()
 
 
 # --- process entry ----------------------------------------------------------
@@ -1169,21 +1537,88 @@ def _redis_connection(container: Container) -> Redis | None:
     return client
 
 
-def _queue_for(container: Container) -> Queue | None:
-    """The job queue the worker serves, built exactly the way the API enqueues into it.
+def _queue_for(container: Container, name: str = QUEUE_NAME) -> Queue | None:
+    """A queue of this deployment's, built the way the API builds its own.
 
-    Mirroring ``api/jobs.py:162-183`` rather than inventing a second construction is the
-    point: ``Queue(QUEUE_NAME, connection=Redis.from_url(...))`` is what guarantees the
-    consumer is listening on the same list the producer pushed to.
+    Mirroring ``api/jobs.py``'s ``Queue(QUEUE_NAME, connection=Redis.from_url(...))`` rather
+    than inventing a second construction is the point: it is what guarantees the consumer is
+    listening on the same list the producer pushed to. ``name`` exists because the drain is not
+    served from the stage queue — see :data:`DRAIN_QUEUE_NAME`.
     """
     connection = _redis_connection(container)
     if connection is None:
         return None
-    return Queue(QUEUE_NAME, connection=connection)
+    return Queue(name, connection=connection)
+
+
+def _appointment_state(queue: Queue, job_id: str) -> str:
+    """What the queue says about one appointment id, ``""`` when it has never heard of it.
+
+    Read from the job hash rather than through ``Job.fetch`` because this asks a scheduling
+    question, not a job-state one, and ``fetch`` deserializes the pickled call arguments to
+    answer it. The spelling is RQ's own: ``status`` is the field every ``Job.set_status``
+    writes, and a missing hash is the same "there is no such job" answer
+    :data:`DEAD_RQ_STATES` counts as evidence.
+    """
+    raw = queue.connection.hget(Job.key_for(job_id), "status")
+    if raw is None:
+        return ""
+    return raw.decode() if isinstance(raw, bytes | bytearray) else str(raw)
+
+
+class _DrainCalendar:
+    """The drain queue, narrowed to the two questions the calendar asks.
+
+    :class:`QueueHandle` is the protocol the booking code is written against so that a lost
+    appointment can be produced by a test rather than raced for; ``rq.Queue`` answers neither
+    question in the shape the calendar wants, so this wraps it.
+    """
+
+    def __init__(self, queue: Queue) -> None:
+        self.queue = queue
+
+    def enqueue_in(self, when: timedelta, name: str, **options: Any) -> Any:
+        return self.queue.enqueue_in(when, name, **options)
+
+    def appointment_state(self, job_id: str) -> str:
+        return _appointment_state(self.queue, job_id)
+
+    def get_job_ids(self) -> Sequence[str]:
+        return self.queue.get_job_ids()
+
+
+class _DrainingWorker(Worker):
+    """A worker that keeps its own calendar and its own run rows, because nobody else does.
+
+    RQ's ``Worker.work()`` loop calls :meth:`run_maintenance_tasks` every
+    ``maintenance_interval`` seconds — including while the queue is idle, which is exactly
+    when nothing else in this build would notice that a container died holding a run. Passing
+    it to the parent process (not to a horse) is deliberate: a horse is a job, and a job that
+    sweeps the other jobs running on the box is one more way for a dying stage to take a live
+    one with it.
+    """
+
+    def run_maintenance_tasks(self) -> None:
+        super().run_maintenance_tasks()
+        try:
+            container = build_container()
+        except Exception as exc:  # a hook must not end the worker's loop
+            logger.warning("the periodic tick could not open a container", error=_reason(exc))
+            return
+        try:
+            keep_deliveries_moving(container)
+        finally:
+            # Disposed before the next fork: a psycopg connection inherited across a fork is
+            # one connection in two processes, which is the reason ``main`` closes the
+            # container it built for the boot sweep before ``work()`` too.
+            try:
+                container.close()
+            except Exception as exc:  # the engine is gone whatever this says
+                logger.warning("the tick's container would not close", error=_reason(exc))
 
 
 def _install_logging() -> None:
-    """The processor chain, at process start (``api/observability.py:186``).
+    """The processor chain, at process start (``api/observability.py``).
 
     ``OXBOW_LOG_FORMAT=console`` is the same switch the API's lifespan reads, so one operator
     setting makes both processes human-readable instead of two that drift.
@@ -1193,7 +1628,12 @@ def _install_logging() -> None:
 
 
 def build_worker(container: Container) -> Worker | None:
-    """The RQ worker for this deployment's queue, or ``None`` when the queue is unreachable."""
+    """The RQ worker for this deployment's queues, or ``None`` when the queue is unreachable.
+
+    Two queues, on purpose: the stage jobs ``api/jobs.py`` enqueues and the outbox drain. They
+    cannot share one list, because RQ executes one job per worker process and a stage holds the
+    process for as long as its ``job_timeout`` says.
+    """
     queue = _queue_for(container)
     if queue is None:
         logger.error(
@@ -1202,7 +1642,11 @@ def build_worker(container: Container) -> Worker | None:
             "refuses the same way on the submission side."
         )
         return None
-    return Worker([queue])
+    return _DrainingWorker(
+        [queue, _queue_for(container, DRAIN_QUEUE_NAME)],
+        maintenance_interval=DRAIN_INTERVAL_SECONDS,
+        worker_ttl=DRAIN_INTERVAL_SECONDS + 15,
+    )
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -1239,15 +1683,22 @@ def main(argv: Sequence[str] | None = None) -> int:
         queue = _queue_for(container)
         if queue is None:
             return 2
-        _schedule_next_drain(queue)
+        calendar = _drain_calendar(container)
+        if calendar is None:
+            return 2
+        # The boot appointment, so the first pass is in the calendar before anything can
+        # produce an outbox row. It is booked rather than run because a pass that runs here
+        # holds up the worker's own startup behind every webhook the deployment is behind.
+        _book_next_drain(calendar)
         worker = build_worker(container)
         if worker is None:
             return 2
         logger.info(
             "worker serving",
-            queue=QUEUE_NAME,
+            queues=[QUEUE_NAME, DRAIN_QUEUE_NAME],
             warehouse_backend=container.backend,
             jobs_in_queue=len(list(queue.get_job_ids())),
+            drain_appointments=len(list(calendar.get_job_ids())),
             abandoned_closed=len(swept),
             degraded=container.degraded_components(),
         )
@@ -1266,7 +1717,12 @@ def main(argv: Sequence[str] | None = None) -> int:
 __all__ = [
     "ABANDON_GRACE_SECONDS",
     "CLOSED_JOB_STATES",
+    "DEAD_RQ_STATES",
+    "DRAIN_APPOINTMENT_PREFIX",
     "DRAIN_INTERVAL_SECONDS",
+    "DRAIN_JOB_TIMEOUT",
+    "DRAIN_QUEUE_NAME",
+    "HEARTBEAT_GRACE_SECONDS",
     "JOB_FAILED",
     "JOB_FINISHED",
     "JOB_QUEUED",
@@ -1280,7 +1736,9 @@ __all__ = [
     "build_worker",
     "default_runners",
     "drain_outbox",
+    "keep_deliveries_moving",
     "main",
+    "promote_due_appointments",
     "reclaim_orphaned",
     "run_stages",
     "runner_for",
