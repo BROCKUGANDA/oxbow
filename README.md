@@ -80,11 +80,11 @@ A stale document is detectable: run `make eval` and diff these digests.
 | `data/ibm_cycle_measurement.json` | P3a | present | 4,521 | `7663116be7a271ac…` |
 | `data/processed/ibm_typologies.parquet` | P1b | present | 9,357 | `faf682effbf58107…` |
 | `data/download_manifest.json` | P0 | present | 816 | `7496669571de0af7…` |
-| `out/backtest/model_card.json` | P6 | present | 15,728 | `2cd06143d76f7445…` |
-| `out/backtest/ablation_results.json` | P6 | present | 273,053 | `69ca1437570e77ee…` |
+| `out/backtest/model_card.json` | P6 | present | 13,078 | `5ecbbbf1a85ca3a3…` |
+| `out/backtest/ablation_results.json` | P6 | present | 226,704 | `f6fe7305783ef9b4…` |
 | `out/p4/scored_rows.parquet` | P4b | **absent** | - files | `absent` |
 | `out/warehouse/drift_period` | P4b | **absent** | - files | `absent` |
 | `out/warehouse/curve_point` | P5 | **absent** | - files | `absent` |
 | `out/audit/audit.jsonl` | P7 | **absent** | - files | `absent` |
-| `out/warehouse/runs.jsonl` | P7 | present | 34,179 | `064c1093efdc3da8…` |
+| `out/warehouse/runs.jsonl` | P7 | present | 39,363 | `4322d0c8eaab6875…` |
 

@@ -61,15 +61,15 @@ everything cannot be credited with value that was never there.
 
 ## Threshold policy vs EV policy — pricing the queue, in money
 
-Artifact row `Threshold policy vs EV policy` on corpus `paysim-fake`; provenance `fake_harness`.
+Artifact row `Threshold policy vs EV policy` on corpus `real-corpus`; provenance `real_corpus`.
 
 | policy | allocator | net benefit (minor) | per analyst-hour (minor) | optimality gap (minor) | max drawdown (minor) | zero drawdown labelled |
 | ---| ---| ---| ---| ---| ---| --- |
-| `ev_cpsat` | fake cpsat-exact 0/1 knapsack | -80,962,716 UGX | -206,889 | 179,186,192 | 80962716 | False |
-| `ev_greedy` | fake greedy by EV density | -596,162,716 UGX | -600,970 | n/a | 596162716 | False |
-| `score_threshold` | baseline: score-threshold at the same analyst capacity | -607,012,716 UGX | -610,165 | n/a | 607012716 | False |
+| `ev_cpsat` | CP-SAT exact 0/1 knapsack (optimality proven within the deadline) | 258,670,182 UGX | 129,335,091 | 0 | 0 | True |
+| `ev_greedy` | greedy by EV density (fast approximation; optimal for the fractional relaxation) | 258,670,182 UGX | 129,335,091 | n/a | 0 | True |
+| `score_threshold` | baseline: score-threshold at the same analyst capacity | -6,199,161,801 UGX | -6,199,885 | n/a | 6199161801 | False |
 
-Figures are stored in integer minor units of `UGX` and rendered divided by 100 — for example the headline net benefit is -6,070,127.16 UGX under the assumptions above.
+Figures are stored in integer minor units of `UGX` and rendered divided by 100 — for example the headline net benefit is -61,991,618.01 UGX under the assumptions above.
 
 Greedy by EV density is what a real triage desk would do and answers instantly; CP-SAT
 is the exact 0/1 knapsack under a hard deadline with a labelled fallback when it
@@ -104,16 +104,16 @@ A stale document is detectable: run `make eval` and diff these digests.
 
 | artifact | stage | state | bytes | sha256 |
 | ---| ---| ---| ---| --- |
-| `data/graph_measurement.json` | P1a | present | 2,192 | `8055beaff887d58e…` |
-| `data/ibm_graph_measurement.json` | P1a | present | 2,575 | `829bde0c47214f18…` |
-| `data/ibm_cycle_measurement.json` | P3a | present | 4,661 | `6ddb671dfca36634…` |
+| `data/graph_measurement.json` | P1a | present | 2,073 | `b3b009856c1ef7d0…` |
+| `data/ibm_graph_measurement.json` | P1a | present | 2,431 | `feafd509443283b5…` |
+| `data/ibm_cycle_measurement.json` | P3a | present | 4,521 | `7663116be7a271ac…` |
 | `data/processed/ibm_typologies.parquet` | P1b | present | 9,357 | `faf682effbf58107…` |
-| `data/download_manifest.json` | P0 | present | 841 | `a7368658cfcff07e…` |
-| `out/backtest/model_card.json` | P6 | present | 15,728 | `2cd06143d76f7445…` |
-| `out/backtest/ablation_results.json` | P6 | present | 273,053 | `69ca1437570e77ee…` |
+| `data/download_manifest.json` | P0 | present | 816 | `7496669571de0af7…` |
+| `out/backtest/model_card.json` | P6 | present | 13,078 | `5ecbbbf1a85ca3a3…` |
+| `out/backtest/ablation_results.json` | P6 | present | 226,704 | `f6fe7305783ef9b4…` |
 | `out/p4/scored_rows.parquet` | P4b | **absent** | - files | `absent` |
 | `out/warehouse/drift_period` | P4b | **absent** | - files | `absent` |
 | `out/warehouse/curve_point` | P5 | **absent** | - files | `absent` |
 | `out/audit/audit.jsonl` | P7 | **absent** | - files | `absent` |
-| `out/warehouse/runs.jsonl` | P7 | present | 11,057 | `cc3f13c0c7f4d756…` |
+| `out/warehouse/runs.jsonl` | P7 | present | 39,363 | `4322d0c8eaab6875…` |
 

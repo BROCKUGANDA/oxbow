@@ -846,6 +846,13 @@ def model_section(loaded: Mapping[str, Any]) -> dict[str, Any]:
             card, "metrics_note", artifact="out/backtest/model_card.json"
         ),
         "ablation_rows": rows,
+        # The table above names eight model configurations. If the artifact says those rows
+        # share one fit, the document has to say it too — a rendered table whose row labels
+        # claim a distinction the run did not measure is the failure §18 calls a lie, and the
+        # caveat exists in the JSON precisely so it can be read out here.
+        "ablation_caveat": from_artifact(
+            ablation, "ablation_caveat", artifact="out/backtest/ablation_results.json"
+        ),
         "expected_ablation_row_ids": list(card["expected_ablation_row_ids"]),
         "leakage_control": {
             "detected": from_artifact(
@@ -1565,6 +1572,12 @@ def limitations_section(loaded: Mapping[str, Any], economics: Economics) -> list
         },
     ]
 
+    fake_rows = [
+        variant
+        for variant in ((ablation or {}).get("variants") or [])
+        if str(variant.get("provenance", "")) == PROVENANCE_FAKE
+    ]
+    honest_rows_share_one_fit = bool(ablation) and not fake_rows
     harness_claim = (
         "The statistical and economic numbers currently published come from the "
         "hand-computed fake harness, not from a scored corpus. They exist to prove the "
@@ -1573,6 +1586,18 @@ def limitations_section(loaded: Mapping[str, Any], economics: Economics) -> list
         "they must be replaced by a real `make backtest` run before any of them is "
         "quoted as a result."
     )
+    if honest_rows_share_one_fit:
+        # Named by what the artifact actually did, because the sentence above is now false and
+        # leaving it in would understate the run while the table beside it reads as a model
+        # ablation it was never one.
+        harness_claim = (
+            "The published statistical figures come from a real per-account corpus, so they "
+            "are results. What has NOT been measured is the model ladder: every honest row "
+            "runs the same fitted stack and the rows differ by policy, so no row may be read "
+            "as evidence that the scorecard, the graph features or the GBM each add "
+            "discrimination. Per-row feature subsetting is the missing work and the artifact "
+            "says so in its own `ablation_caveat`."
+        )
     if card is not None and ablation is not None:
         note = str(ablation["provenance_note"])
         harness_claim = (
@@ -1581,14 +1606,21 @@ def limitations_section(loaded: Mapping[str, Any], economics: Economics) -> list
         )
     items.append(
         {
-            "id": "published_metrics_are_harness_self_checks_until_p6_runs_for_real",
+            "id": (
+                "ablation_rows_share_one_fit_until_per_row_subsetting_lands"
+                if honest_rows_share_one_fit
+                else "published_metrics_are_harness_self_checks_until_p6_runs_for_real"
+            ),
             "claim": harness_claim,
             "evidence": [
                 (
                     metric(
                         note,
                         "out/backtest/ablation_results.json#/provenance_note",
-                        provenance=PROVENANCE_FAKE,
+                        # The artifact's own provenance, not a constant: labelling a
+                        # real-corpus note `fake_harness` is how a limitation list starts
+                        # disagreeing with the table two lines above it.
+                        provenance=PROVENANCE_FAKE if fake_rows else PROVENANCE_MEASURED,
                     )
                     if card is not None and ablation is not None
                     else metric(
@@ -1740,7 +1772,14 @@ def build_eval_payload(root: Path) -> dict[str, Any]:
             if not artifact.required and not artifact.path(resolved).exists()
         ],
         "provenance_summary": {
-            "harness_provenance": loaded["backtest_model_card"] is not None,
+            # Read off what the variants declare, not off whether a model card exists at
+            # all: the artifact's presence says nothing about its provenance, and once a
+            # real corpus had been run this line kept reporting every published figure as
+            # a harness self-check.
+            "harness_provenance": any(
+                str(variant.get("provenance", "")) == PROVENANCE_FAKE
+                for variant in ((loaded["backtest_ablation"] or {}).get("variants") or [])
+            ),
             "statement": (
                 "Figures derived from the backtest artifacts carry the provenance those "
                 "artifacts declared for themselves; where that was a fake-harness "
@@ -2331,6 +2370,14 @@ def render_model_card(payload: Mapping[str, Any]) -> str:
         f"({_src(model['provenance_note'])}). Rows the harness expected: "
         + ", ".join(f"`{row}`" for row in model["expected_ablation_row_ids"])
         + ".",
+    ]
+    caveat = _v(model["ablation_caveat"])
+    if caveat != NO_NUMBER:
+        lines += [
+            "",
+            f"**What this table does not measure:** {caveat}",
+        ]
+    lines += [
         "",
         "## The leakage control is a test, not a boast",
         "",

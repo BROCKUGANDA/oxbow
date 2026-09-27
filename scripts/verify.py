@@ -224,11 +224,14 @@ PHASES: tuple[Phase, ...] = (
         name="P6",
         done=False,
         pending_reason=(
-            "the walk-forward over the landed 40k corpus has now been run four times and three "
-            "of them died in it: DEV-026 (a fold booking one account's minutes once per scored "
-            "row) was found by its own capacity postcondition, and the run that clears it is in "
-            "flight. Until ablation_results.json names the real corpus, MODEL_CARD.md and "
-            "ECONOMICS_CARD.md quote provenance=fake_harness."
+            "the walk-forward has now completed on the landed 40k corpus (DEV-026's grain "
+            "defect was what the capacity postcondition refused on), and MODEL_CARD.md and "
+            "ECONOMICS_CARD.md carry provenance=real_corpus with the leakage control "
+            "detecting the lookahead arm. The phase is not claimed because the ablation is "
+            "not yet an ablation: every honest row runs the same fitted stack and the eight "
+            "rows differ by policy ladder, so no row is evidence that the scorecard, the "
+            "graph features or the GBM add discrimination. Per-row feature subsetting is the "
+            "open work; the artifact says so and the generated card prints that sentence."
         ),
         gates=(
             Gate(

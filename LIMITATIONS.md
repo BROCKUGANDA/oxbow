@@ -109,8 +109,8 @@ No demographic fairness claim can be made, because neither corpus carries a prot
 
 **Evidence**
 
-- Neither corpus carries a protected attribute (payee/payer identifiers are salted hashes and no gender, age-band, ethnicity, nationality or account-holder-type field is present in PaySim or IBM-AML), so a demographic fairness table cannot be computed honestly. The check is run anyway against the realistic over-flagging proxies in this domain: transaction amount, account age, activity volume and community size. — source: `out/backtest/model_card.json#/fairness/protected_attributes_note` · provenance: `fake_harness`
-- amount_minor; account_age_days; activity_volume; community_size — source: `out/backtest/model_card.json#/fairness/axes` · provenance: `fake_harness`
+- Neither corpus carries a protected attribute (payee/payer identifiers are salted hashes and no gender, age-band, ethnicity, nationality or account-holder-type field is present in PaySim or IBM-AML), so a demographic fairness table cannot be computed honestly. The check is run anyway against the realistic over-flagging proxies in this domain: transaction amount, account age, activity volume and community size. — source: `out/backtest/model_card.json#/fairness/protected_attributes_note` · provenance: `real_corpus`
+- amount_minor; account_age_days; activity_volume; community_size — source: `out/backtest/model_card.json#/fairness/axes` · provenance: `real_corpus`
 
 **What follows.** Unverifiable claims are not made. Proxy false-positive-rate spread is what ships, and demographic parity is stated as unmeasurable rather than as clean.
 
@@ -137,13 +137,13 @@ Roles and four-eyes ship as decision policy for one investigating team. There is
 
 **What follows.** Building tenancy to hold one tenant was rejected on purpose; the limitation is recorded so nobody reads the auth section as a multi-tenancy claim.
 
-## 11. `published_metrics_are_harness_self_checks_until_p6_runs_for_real`
+## 11. `ablation_rows_share_one_fit_until_per_row_subsetting_lands`
 
-The statistical and economic numbers currently published come from the hand-computed fake harness, not from a scored corpus. They exist to prove the harness computes what it claims — including that a deliberately leaking configuration beats every honest one, which is the leak detector working — and they must be replaced by a real `make backtest` run before any of them is quoted as a result. The artifact says: "Every figure in this file came from the hand-computed fake harness (oxbow.backtest.fakes) and verifies the harness, NOT a corpus result." Model version on the headline row: "fake-full_calibrated".
+The published statistical figures come from a real per-account corpus, so they are results. What has NOT been measured is the model ladder: every honest row runs the same fitted stack and the rows differ by policy, so no row may be read as evidence that the scorecard, the graph features or the GBM each add discrimination. Per-row feature subsetting is the missing work and the artifact says so in its own `ablation_caveat`. The artifact says: "Figures came from a real per-account corpus run through the P4b scorer, the P5 allocator and the ONE splits module; provenance=real_corpus." Model version on the headline row: "d1fe7798e6ff".
 
 **Evidence**
 
-- Every figure in this file came from the hand-computed fake harness (oxbow.backtest.fakes) and verifies the harness, NOT a corpus result. — source: `out/backtest/ablation_results.json#/provenance_note` · provenance: `fake_harness`
+- Figures came from a real per-account corpus run through the P4b scorer, the P5 allocator and the ONE splits module; provenance=real_corpus. — source: `out/backtest/ablation_results.json#/provenance_note` · provenance: `measured`
 - missing_artifact — source: `out/warehouse/drift_period` · provenance: `measured`
 
 **What follows.** Every generated document prints each number's provenance and the digests of the artifacts behind it, so a harness figure cannot quietly become a model result, and a stale document is detectable rather than arguable.
@@ -189,16 +189,16 @@ A stale document is detectable: run `make eval` and diff these digests.
 
 | artifact | stage | state | bytes | sha256 |
 | ---| ---| ---| ---| --- |
-| `data/graph_measurement.json` | P1a | present | 2,192 | `8055beaff887d58e…` |
-| `data/ibm_graph_measurement.json` | P1a | present | 2,575 | `829bde0c47214f18…` |
-| `data/ibm_cycle_measurement.json` | P3a | present | 4,661 | `6ddb671dfca36634…` |
+| `data/graph_measurement.json` | P1a | present | 2,073 | `b3b009856c1ef7d0…` |
+| `data/ibm_graph_measurement.json` | P1a | present | 2,431 | `feafd509443283b5…` |
+| `data/ibm_cycle_measurement.json` | P3a | present | 4,521 | `7663116be7a271ac…` |
 | `data/processed/ibm_typologies.parquet` | P1b | present | 9,357 | `faf682effbf58107…` |
-| `data/download_manifest.json` | P0 | present | 841 | `a7368658cfcff07e…` |
-| `out/backtest/model_card.json` | P6 | present | 15,728 | `2cd06143d76f7445…` |
-| `out/backtest/ablation_results.json` | P6 | present | 273,053 | `69ca1437570e77ee…` |
+| `data/download_manifest.json` | P0 | present | 816 | `7496669571de0af7…` |
+| `out/backtest/model_card.json` | P6 | present | 13,078 | `5ecbbbf1a85ca3a3…` |
+| `out/backtest/ablation_results.json` | P6 | present | 226,704 | `f6fe7305783ef9b4…` |
 | `out/p4/scored_rows.parquet` | P4b | **absent** | - files | `absent` |
 | `out/warehouse/drift_period` | P4b | **absent** | - files | `absent` |
 | `out/warehouse/curve_point` | P5 | **absent** | - files | `absent` |
 | `out/audit/audit.jsonl` | P7 | **absent** | - files | `absent` |
-| `out/warehouse/runs.jsonl` | P7 | present | 11,057 | `cc3f13c0c7f4d756…` |
+| `out/warehouse/runs.jsonl` | P7 | present | 39,363 | `4322d0c8eaab6875…` |
 
