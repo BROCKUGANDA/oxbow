@@ -176,6 +176,47 @@ unresolved choice and 00 §I.3 makes a spec-contradicting finding a halt-and-ask
 
 ---
 
+## DEV-012 — run-stamped columns stay out of the persisted bytes, or determinism is unclaimable. **Written late; the code has carried it since P1b.**
+
+**Status: in force, implemented, and previously missing from this file.** This entry was written
+on 2026-09-27 when `PROMPT.md` was being assembled and the DEV sequence was checked for
+completeness: DEV-011 and DEV-013 have entries, and DEV-012 — cited by name in **27 places across
+17 files**, checked with `grep -rn "DEV-012" packages apps scripts config tests STATE.md` — had
+none. A decision that eight modules point at as
+authority was recorded nowhere a reader would look. The entry below is reconstructed from the code
+that implements it, with the numbers measured rather than copied from the prose.
+
+**The decision.** `ingested_at` and `run_id` are members of the canonical v1 contract and are
+**never written into the Parquet bytes**. Both are sidecar-carried: the batch manifest and the
+warehouse table. Measured against the running code, `CANONICAL_COLUMNS` is 21 wide,
+`SIDECAR_COLUMNS` is `("ingested_at", "run_id")`, and `PERSISTED_CANONICAL_COLUMNS` is therefore 19
+— and both `canonical_v1_schema()` (21) and `canonical_v1_persisted_schema()` (19) are **derived**
+from that one tuple rather than written out twice, so the two shapes cannot silently drift apart.
+
+**Why.** `make verify-determinism` runs the pipeline twice and diffs the artifact digests. A
+wall-clock reading or a random ULID inside the data makes byte-identity arithmetically impossible,
+so the gate would be unimplementable rather than merely failing. The corollary reaches one level
+deeper than the columns: `new_run_identity` takes `batch_id` as a **parameter** rather than calling
+`uuid4()`, because a random batch id embedded in canonical columns would break the same guarantee.
+The caller passes a content-derived id (`batch_id_for_rows`), and the only random value in a run is
+`run_id`, which lives in the manifest sidecar.
+
+**What this deliberately is not.** A loophole in the determinism check. `verify_determinism.py`
+names the excluded set in its own docstring — the identity columns and the batch id, which 01 §A
+rule 8 *requires* to vary per run — and states that excluding them is the reason the
+contract/persisted split exists. The claim being verified is "the same corpus through the same code
+produces the same data bytes"; the run identity is the thing being held out of that comparison
+because it is the thing that legitimately differs.
+
+**The related bug this split once hid.** `adapters/file/source.py` and `ingest/canonical.py`
+disagreed about which of the two column lists the persisted frame used (recorded in `STATE.md`);
+they are reconciled here, and `contracts/canonical_v1.py` is the single source of truth. A test
+that compared at the 21-column shape while the bytes held 19 would have passed by reading the
+sidecar back in — which is why `tests/unit/p2_fixtures.py` re-attaches the two sidecar columns
+explicitly and says so in the fixture, rather than letting the two shapes be confused for each other.
+
+---
+
 ## DEV-013 — the IBM-AML figure was wrong; Module B has its substrate after all
 
 DEV-011 left one item open: IBM-AML at 41.6 GB against available disk, deferred
