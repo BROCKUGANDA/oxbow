@@ -37,6 +37,8 @@ import pytest
 from oxbow.models.config import ReportingConfig
 from oxbow.models.run import SCORED_ROW_COLUMNS, write_run_artifacts
 
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+
 #: The two channels the full stack writes itself, and the two only the degraded path writes.
 #: Each mode swaps two columns for two others, so a run holding both kinds of fold ends up
 #: with frames of the SAME WIDTH and DIFFERENT NAMES — which is exactly the error observed:
@@ -193,3 +195,50 @@ def test_an_empty_fold_list_writes_no_parquet(tmp_path: Path) -> None:
     )
     assert "scored_rows.parquet" not in written["files"]
     assert not (tmp_path / "artifacts" / "scored_rows.parquet").exists()
+
+
+def test_the_live_score_stage_stacks_through_the_shared_helper() -> None:
+    """The stage that runs is `cli.py`, not `write_run_artifacts`.
+
+    `write_run_artifacts` is exported, tested, and has no production caller: the score stage
+    assembles and lands its own frames. So a fix that only changed the writer would stay green in
+    this file while the run still crashed — which is exactly what happened here. This reads the
+    live source and refuses if the fold stack has drifted back to a positional concat.
+    """
+    cli = (_REPO_ROOT / "packages" / "pipeline" / "oxbow" / "cli.py").read_text(encoding="utf-8")
+
+    assert "stack_scored_frames(scored_frames)" in cli, (
+        "the score stage no longer stacks folds through the shared helper, so neither the "
+        "schema alignment nor the SCORED_ROW_COLUMNS refusal is on the path that runs"
+    )
+    # Inside the function that uses it: `oxbow.cli` refuses to load when pyarrow is already
+    # resident (DEV-021), which is why this module imports the model stack lazily.
+    assert "from oxbow.models.run import FoldModelRunner, stack_scored_frames" in cli
+
+    stage = cli.split("def _score_models_and_land", 1)[1].split("\ndef ", 1)[0]
+    assert 'pl.concat(scored_frames, how="vertical_relaxed")' not in stage, (
+        "a positional fold concat is back inside the score stage. Degraded and full-stack folds "
+        "have the same width and different names, so it raises ComputeError only after every "
+        "fold has already been fitted."
+    )
+    assert "stack_scored_frames(scored_frames)" in stage
+
+
+def test_the_shared_helper_refuses_an_empty_frame_list() -> None:
+    """`concat([])` would be a silently empty artifact; the caller means "nothing landed"."""
+    from oxbow.models.errors import ModelLayerError
+    from oxbow.models.run import stack_scored_frames
+
+    with pytest.raises(ModelLayerError, match="no fold frames"):
+        stack_scored_frames([])
+
+
+def test_the_shared_helper_aligns_the_divergent_folds_it_is_called_with() -> None:
+    """The helper itself, not only the writer that now delegates to it."""
+    from oxbow.models.run import stack_scored_frames
+
+    stacked = stack_scored_frames([_fold_frame(full_stack=True), _fold_frame(full_stack=False)])
+    assert stacked.height == 4
+    assert {"p_gbm", "drift_banner"}.issubset(set(stacked.columns))
+    degraded = stacked.filter(pl.col("scoring_mode") == "scorecard_and_rules_only")
+    assert degraded.get_column("p_gbm").to_list() == [None, None]

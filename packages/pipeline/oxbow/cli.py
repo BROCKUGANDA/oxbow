@@ -1254,7 +1254,7 @@ def _score_models_and_land(
     from oxbow.backtest.fold_provider import SplitsFoldProvider
     from oxbow.features.bridge import build_account_frame
     from oxbow.features.fold_providers import fold_providers
-    from oxbow.models.run import FoldModelRunner
+    from oxbow.models.run import FoldModelRunner, stack_scored_frames
     from oxbow.models.scorer import FrameRuleHitProvider
     from oxbow.quant.economics import load_economics
     from oxbow.scoring.frame import (
@@ -1329,7 +1329,11 @@ def _score_models_and_land(
         ctx.echo("[score] REFUSED: no fold produced a scored test window", err=True)
         handle.mark_failed("the walk-forward produced no scored rows to land")
         return EXIT_FAILED
-    scored_rows = pl.concat(scored_frames, how="vertical_relaxed").sort(
+    # The folds do not agree on columns: the ones that degraded carry no `p_gbm`, the ones that
+    # ran the full stack carry no `drift_*`. `vertical_relaxed` aligns by position and refuses
+    # that with `ComputeError: schema names differ`, which is how a run died after scoring every
+    # fold but before landing any of them. See `stack_scored_frames` for the contract check.
+    scored_rows = stack_scored_frames(scored_frames).sort(
         ["as_of_ts", "account_key", COL_FOLD]
     )
 

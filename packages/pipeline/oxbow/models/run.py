@@ -1607,6 +1607,37 @@ def seed_stability_over_folds(
     return seed_stability("validation_pr_auc_pooled_over_folds", seeds, run_for_seed)
 
 
+def stack_scored_frames(frames: Sequence[pl.DataFrame]) -> pl.DataFrame:
+    """Put every fold's scored rows in one frame, aligned on column names.
+
+    Folds do not carry the same channels. A fold that degraded to `scorecard_and_rules_only` has
+    no `p_gbm` and no `anomaly_norm`; a fold that ran the full stack carries no `drift_*`. Each
+    mode swaps two columns for two others, so the frames are the same width with different names,
+    and `vertical_relaxed` aligns by position and refuses that —
+    `ComputeError: schema names differ: got p_gbm, expected p_fused_raw`. On 2026-09-27 that
+    killed a run *after* it had scored all five folds, the most complete fold coverage this repo
+    has produced: every model fitted, and not one number written down.
+
+    Aligning on names makes a channel one fold did not produce a null on that fold's rows, which
+    is what the row already says through `scoring_mode`. It is not a licence to null-fill the
+    contract: a column NO fold produced is a build defect, and `SCORED_ROW_COLUMNS` — documented
+    since P4b as "the columns every persisted scored row carries", and enforced by nothing until
+    now — is checked against the union so a typo becomes a refusal instead of a silent extra
+    column of nulls for the UI to read as a channel that exists and is empty.
+    """
+    if not len(frames):
+        raise ModelLayerError("no fold frames to stack; the caller decided there was nothing to land")
+    scored = pl.concat(list(frames), how="diagonal_relaxed")
+    absent = [column for column in SCORED_ROW_COLUMNS if column not in scored.columns]
+    if absent:
+        raise ModelLayerError(
+            f"no fold produced {absent}; the persisted artifact would not carry the row "
+            "contract SCORED_ROW_COLUMNS that P8's UI reads, so a missing column is a "
+            "build defect and not something to null-fill"
+        )
+    return scored
+
+
 def write_run_artifacts(
     runs: Sequence[FoldRun],
     *,
@@ -1627,23 +1658,7 @@ def write_run_artifacts(
     directory.mkdir(parents=True, exist_ok=True)
     written: dict[str, object] = {}
     if runs:
-        # Folds do not carry the same channels. A fold that degraded to
-        # `scorecard_and_rules_only` has no `p_gbm`; a fold that ran the full stack carries no
-        # `drift_*`. So the union of their names is wider than any one of them, and
-        # `vertical_relaxed` refuses a name mismatch instead of aligning on it —
-        # `ComputeError: schema names differ: got p_gbm, expected p_fused_raw` — which is how a
-        # run died at the persist step after scoring all five folds on 2026-09-27: every fold
-        # was sound, and only the artifact could not be written. Aligning on the names makes a
-        # channel a fold did not produce a null on that fold's rows, which is what the row
-        # already says through `scoring_mode`.
-        scored = pl.concat([run.scored for run in runs], how="diagonal_relaxed")
-        absent = [column for column in SCORED_ROW_COLUMNS if column not in scored.columns]
-        if absent:
-            raise ModelLayerError(
-                f"no fold produced {absent}; the persisted artifact would not carry the row "
-                "contract SCORED_ROW_COLUMNS that P8's UI reads, so a missing column is a "
-                "build defect and not something to null-fill"
-            )
+        scored = stack_scored_frames([run.scored for run in runs])
         parquet_path = directory / reporting.scored_output_filename
         scored.write_parquet(parquet_path)
         written[parquet_path.name] = _artifact_record(parquet_path, reporting, rows=scored.height)
@@ -1711,5 +1726,6 @@ __all__ = [
     "pooled_slice",
     "row_keys",
     "seed_stability_over_folds",
+    "stack_scored_frames",
     "write_run_artifacts",
 ]

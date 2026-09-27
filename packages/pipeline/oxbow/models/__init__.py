@@ -135,6 +135,7 @@ from oxbow.models.run import (
     ordered_queue,
     pooled_gate,
     seed_stability_over_folds,
+    stack_scored_frames,
     write_run_artifacts,
 )
 from oxbow.models.tuning import TuningResult, TuningTrial, fit_gbm_with_best_params, tune_gbm
@@ -238,6 +239,7 @@ __all__ = [
     "scorecard_reference",
     "seed_stability",
     "seed_stability_over_folds",
+    "stack_scored_frames",
     "tune_gbm",
     "write_run_artifacts",
 ]
