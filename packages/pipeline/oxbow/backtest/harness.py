@@ -32,7 +32,7 @@ dicts it emits carry explicit ``_minor`` integer fields.
 from __future__ import annotations
 
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from typing import Any, Final
 
@@ -100,7 +100,8 @@ class FoldResult:
     fold_index: int
     embargo_days: int
     n_fit_rows: int
-    n_test_rows: int
+    n_scored_rows: int
+    n_decisions: int
     n_test_positive: int
     skipped_reason: str | None
     precision: float | None
@@ -368,13 +369,23 @@ def _fold_accounts(
     scorer: Scorer,
     rule_hits: RuleHitsProvider | None,
     seed: int,
-) -> tuple[list[FoldAccount], dict[str, float], str]:
-    """Score one fold's test rows and build the harness's account view.
+) -> tuple[list[FoldAccount], int, dict[str, float], str]:
+    """Score one fold's test rows and build the harness's decision view: (decisions, rows, ...).
 
     The scorer is fitted on the fold's train+validation frames and asked to predict only
     the test frame, so its output never sees a test label it could leak (the honest arms);
     the deliberate-lookahead *control* arm is a different injected scorer that does, which
     is exactly why the control outperforms and why its presence proves the harness bites.
+
+    The corpus is one row per (account, as-of): an account that moved money at four
+    timestamps inside one fold has four rows. The harness's unit is the opposite -- one
+    review decision per account per fold, which is what `ScoreResult.p_of` returns, what
+    the analyst capacity is booked against, and what the warehouse `score` table and the
+    packet both name. So the rows are collapsed here, once, by the rule in
+    :func:`_decisions_per_account`, and the second return value is how many rows the fold
+    actually scored. (DEV-026: collapsing anywhere later double-booked one account's
+    minutes as many times as it had rows, and the capacity postcondition was right to
+    refuse the run.)
     """
     train = corpus.filter(pl.Series(fold.train_mask))
     validation = corpus.filter(pl.Series(fold.validation_mask))
@@ -388,6 +399,7 @@ def _fold_accounts(
         hits = rule_hits.rule_hits(fold_index=fold.index, accounts=accounts_present)
         severity = {key: hit.severity for key, hit in hits.items()}
     rows: list[FoldAccount] = []
+    stamps: list[Any] = []
     columns = test.to_dicts()
     for row in columns:
         account = str(row[COL_ACCOUNT_KEY])
@@ -406,7 +418,53 @@ def _fold_accounts(
                 community_size=_optional_int(row.get(COL_COMMUNITY_SIZE)),
             )
         )
-    return rows, severity, result.model_version
+        stamps.append(row[COL_AS_OF_TS])
+    return (
+        _decisions_per_account(rows, stamps),
+        len(rows),
+        severity,
+        result.model_version,
+    )
+
+
+def _decisions_per_account(rows: list[FoldAccount], stamps: list[Any]) -> list[FoldAccount]:
+    """Collapse a fold's scored rows to one decision per account, by a stated rule.
+
+    * The **latest as-of** row carries the money state (exposure, minutes, cost, amount).
+      A rolling 24-hour exposure is the account's position at that stamp; summing the
+      stamps would count the same euro in four windows, and the oldest stamp is stale by
+      the time the analyst reaches the queue.
+    * The **label is positive if any stamp in the fold was positive**. An account that
+      committed fraud once in the period is a positive for the period; taking the last
+      stamp's label would let a fraud followed by three clean movements grade as clean.
+    * The probability comes from `ScoreResult.p_of`, which is already per account, so it
+      cannot disagree with the row chosen above.
+    * Order is first-appearance, which under the corpus's total order
+      `(as_of_ts, account_key)` is the order the accounts entered the fold.
+
+    The stamps must arrive in non-decreasing order per account; a corpus that does not
+    hold that raises instead of silently choosing the wrong row as "latest".
+    """
+    decisions: dict[str, FoldAccount] = {}
+    last_stamp: dict[str, Any] = {}
+    for row, stamp in zip(rows, stamps, strict=True):
+        previous_stamp = last_stamp.get(row.account_key)
+        if previous_stamp is not None and stamp < previous_stamp:
+            raise FoldError(
+                f"fold rows for {row.account_key!r} arrive out of as-of order "
+                f"({previous_stamp} then {stamp}); 'latest stamp' would name an arbitrary "
+                "row. The corpus is written sorted by (as_of_ts, account_key) -- check the "
+                "score stage's landing order before trusting this fold."
+            )
+        last_stamp[row.account_key] = stamp
+        existing = decisions.get(row.account_key)
+        if existing is None:
+            decisions[row.account_key] = row
+            continue
+        decisions[row.account_key] = replace(
+            row, label=1 if (existing.label == 1 or row.label == 1) else 0
+        )
+    return list(decisions.values())
 
 
 def _optional_str(value: Any) -> str | None:
@@ -424,6 +482,7 @@ def _fold_result(
     accounts: list[FoldAccount],
     outcome: PolicyOutcome,
     *,
+    n_scored_rows: int,
     config: BacktestConfig,
     seed: int,
 ) -> FoldResult:
@@ -469,7 +528,8 @@ def _fold_result(
         fold_index=fold.index,
         embargo_days=fold.embargo_days,
         n_fit_rows=sum(fold.train_mask) + sum(fold.validation_mask),
-        n_test_rows=len(accounts),
+        n_scored_rows=n_scored_rows,
+        n_decisions=len(accounts),
         n_test_positive=n_test_positive,
         skipped_reason=(
             "zero_positive_fold: PR-AUC undefined, reported as skipped not scored"
@@ -617,19 +677,28 @@ def run_variant(
     # Score each fold once (the honest scorer path), reused by every policy over it.
     fold_accounts: dict[int, list[FoldAccount]] = {}
     fold_severity: dict[int, dict[str, float]] = {}
+    fold_scored_rows: dict[int, int] = {}
     model_version = ""
     for fold in folds:
-        accounts, severity, version = _fold_accounts(
+        accounts, scored_rows, severity, version = _fold_accounts(
             corpus, fold, spec_hash=spec_hash, scorer=scorer, rule_hits=rule_hits, seed=base_seed
         )
         fold_accounts[fold.index] = accounts
+        fold_scored_rows[fold.index] = scored_rows
         fold_severity[fold.index] = severity
         model_version = model_version or version
 
     # Threshold baseline tail per fold, computed first so other policies can report
     # their VaR/ES *reduction versus the threshold baseline* (plan §12 tail comparison).
     threshold_fold_results = _run_policies(
-        [POLICY_THRESHOLD], folds, fold_accounts, fold_severity, config, base_seed, allocator
+        [POLICY_THRESHOLD],
+        folds,
+        fold_accounts,
+        fold_severity,
+        fold_scored_rows,
+        config,
+        base_seed,
+        allocator,
     )
     threshold_es = {
         r.fold_index: r.economics.tail.es_minor for r in threshold_fold_results[POLICY_THRESHOLD]
@@ -640,7 +709,14 @@ def run_variant(
     greedy_ev_total = None
     if POLICY_EV_GREEDY in policies and POLICY_EV_CPSAT in policies:
         greedy_fold = _run_policies(
-            [POLICY_EV_GREEDY], folds, fold_accounts, fold_severity, config, base_seed, allocator
+            [POLICY_EV_GREEDY],
+            folds,
+            fold_accounts,
+            fold_severity,
+            fold_scored_rows,
+            config,
+            base_seed,
+            allocator,
         )
         greedy_ev_total = sum(
             r.economics.expected_value_minor for r in greedy_fold[POLICY_EV_GREEDY]
@@ -649,7 +725,14 @@ def run_variant(
     aggregated: dict[str, PolicyAggregate] = {}
     for policy in policies:
         results = _run_policies(
-            [policy], folds, fold_accounts, fold_severity, config, base_seed, allocator
+            [policy],
+            folds,
+            fold_accounts,
+            fold_severity,
+            fold_scored_rows,
+            config,
+            base_seed,
+            allocator,
         )
         fold_results = results[policy]
         pooled = _pooled_rows(fold_accounts, folds)
@@ -702,6 +785,7 @@ def _run_policies(
     folds: list[HarnessFold],
     fold_accounts: dict[int, list[FoldAccount]],
     fold_severity: dict[int, dict[str, float]],
+    fold_scored_rows: dict[int, int],
     config: BacktestConfig,
     seed: int,
     allocator: Allocator | None,
@@ -721,7 +805,16 @@ def _run_policies(
                 friction_cost_minor=config.friction_cost_minor,
                 currency=config.currency,
             )
-            out[policy].append(_fold_result(fold, accounts, outcome, config=config, seed=seed))
+            out[policy].append(
+                _fold_result(
+                    fold,
+                    accounts,
+                    outcome,
+                    n_scored_rows=fold_scored_rows[fold.index],
+                    config=config,
+                    seed=seed,
+                )
+            )
     return out
 
 
@@ -821,7 +914,7 @@ def _seed_stability(
         labels: list[int] = []
         keys: list[str] = []
         for fold in folds:
-            accounts, _severity, _version = _fold_accounts(
+            accounts, _n_rows, _severity, _version = _fold_accounts(
                 corpus,
                 fold,
                 spec_hash=spec_hash,
@@ -944,7 +1037,9 @@ def _policy_to_dict(aggregate: PolicyAggregate) -> dict[str, Any]:
                 "fold_index": fr.fold_index,
                 "embargo_days": fr.embargo_days,
                 "n_fit_rows": fr.n_fit_rows,
-                "n_test_rows": fr.n_test_rows,
+                "n_scored_rows": fr.n_scored_rows,
+                "n_decisions": fr.n_decisions,
+                "rows_collapsed_into_decisions": fr.n_scored_rows - fr.n_decisions,
                 "n_test_positive": fr.n_test_positive,
                 "skipped_reason": fr.skipped_reason,
                 "precision": fr.precision,

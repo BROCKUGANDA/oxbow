@@ -128,7 +128,26 @@ def realized_fold_economics(
     which is exactly the honest comparison the ablation's threshold-vs-EV row makes.
     """
     by_key = {account.account_key: account for account in accounts}
-    reviewed_accounts = [by_key[key] for key in reviewed if key in by_key]
+    if len(by_key) != len(accounts):
+        raise ValueError(
+            f"the fold names {len(accounts)} accounts but only {len(by_key)} distinct keys: a "
+            "scored corpus row is one alert, and booking money per account needs one decision "
+            "per account per fold (harness._decisions_per_account, DEV-026)."
+        )
+    if len(set(reviewed)) != len(reviewed):
+        raise ValueError(
+            f"the policy named {len(reviewed)} reviews over {len(set(reviewed))} accounts: a "
+            "repeated key would book its minutes twice against a capacity the allocator only "
+            "paid once."
+        )
+    unknown = [key for key in reviewed if key not in by_key]
+    if unknown:
+        raise ValueError(
+            f"the policy named {len(unknown)} account(s) the fold never scored "
+            f"(first: {unknown[0]!r}); dropping them would hide an allocator bug behind a "
+            "smaller bill."
+        )
+    reviewed_accounts = [by_key[key] for key in reviewed]
 
     captured_value = 0
     review_cost = 0

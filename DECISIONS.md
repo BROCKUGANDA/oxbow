@@ -1055,3 +1055,63 @@ production caller** — the score stage lands its own frames. It was green in it
 would still have crashed the run. The gate is now a source assertion on `_score_models_and_land`
 itself, mutation-proved by putting the positional concat back.
 
+## DEV-026 — the corpus is one row per alert; the harness books one decision per account. **Fixed; the collapse rule needs the owner's nod.**
+
+The first real-corpus walk-forward ran for 70 minutes and then refused to write anything:
+
+    ValueError: policy booked 12025 minutes over a 12000-minute capacity;
+    the allocator must return a set that fits.
+
+The postcondition was right. The population handed to it was not. Measured on the landed 40k
+corpus (`out/score/01M3H8WG436R394NZT2GS1KG69/backtest_corpus.parquet`): **79,998 rows carry
+77,691 distinct `(account_key, fold)` pairs** — 2,161 accounts appear 2–4 times inside a single
+fold, and every fold holds exactly twice as many rows as it holds as-of stamps. That is not a
+build defect: the features layer emits one row per (account, as-of) because a transaction touches
+two accounts, so each event contributes two entity rows (the 40k run reports `rows_in 40,000 /
+entity_rows 80,000`). The spec's assumption that a fold scores each account once is the thing that
+did not survive contact with the data.
+
+`harness._fold_accounts` turned those rows into a per-row `FoldAccount` list, while
+`ScoreResult.p_of` answers per account and `realized_fold_economics` re-keyed the list through
+`{account_key: account}`. An account the allocator picked on two of its rows therefore appeared
+twice in `outcome.reviewed`, resolved to the same object twice, and was charged its minutes twice
+against a capacity it had been billed for once. The fold's discrimination metrics were computed
+over the row list and its money over the account map — two populations wearing one name.
+
+**The decision: the fold's decision set is one row per account per fold, collapsed once, at the
+place the rows become decisions.** The rule is stated rather than implied:
+
+- the **latest as-of** stamp carries the money state (exposure, minutes, cost, amount) — a rolling
+  24-hour exposure summed across four stamps counts the same euro four times, and the oldest stamp
+  is stale by the time the analyst reaches the queue;
+- the **label is positive if any stamp in the fold was positive** — an account that defrauded once
+  in the period is a positive for the period, and the alternative silently graded a
+  fraud-followed-by-three-clean-movements account as clean. Measured: 108 positives as rows, 105
+  under first-stamp, 106 under latest-stamp, 108 under any-positive; only 5 of the 2,161 repeated
+  groups mix labels, so the rule keeps the count the score stage already reported.
+- the probability is already per account, so it cannot disagree with the row chosen above;
+- stamps must arrive non-decreasing per account or the fold **raises** — "latest" is only a rule
+  if the order is guaranteed, and the corpus is written sorted by `(as_of_ts, account_key)`.
+
+Alternatives considered and rejected:
+
+- **Make the row the unit of decision** (`(account_key, as_of_ts)` as the queue identity). It loses
+  no alert and it is the more literal reading of the corpus, but it contradicts everything the
+  harness already promises: `ScoreResult` is documented per account, plan §11/§12 write the EV and
+  the capacity in accounts, and the warehouse `score` table and the packet both name an account per
+  fold. It would also require re-keying the scorer seam, the fakes and the control arm.
+- **Collapse in the score stage instead**, so the corpus arrives at the harness's grain. The corpus
+  is also the leakage and fold-discipline artifact, and those are per (account, as-of) by design;
+  dropping rows there would weaken the fold checks to serve one consumer.
+- **Let `by_key` keep collapsing and just dedupe `reviewed`.** That is the silent-drop pattern §18
+  names: the account's four rows would resolve to whichever object the dict happened to retain,
+  and the numbers would depend on iteration order.
+
+The re-booking path now refuses instead of tolerating: a population with repeated keys, a policy
+naming a repeated key, and a policy naming an account the fold never scored each raise by name.
+`tests/unit/test_p6_one_decision_per_account.py` asserts the composed fold report separates
+`n_scored_rows` (20) from `n_decisions` (19) on a hand-built corpus; reverting the collapse makes
+it fail with the population-mismatch error rather than quietly reporting the old numbers.
+`ablation_results.json` now carries `rows_collapsed_into_decisions` per fold, so the published
+table says how many alerts became how many reviews.
+
