@@ -23,7 +23,7 @@ const CASE_ID = '01J4Z7M2QK9N7V1C4X6E8G0B2D';
 const SHOTS = [
   ['01-dashboard', '/dashboard'],
   ['02-alerts-queue', '/alerts'],
-  ['03-network-explorer', `/network?account=ACC-00DORM&hops=2`],
+  ['03-network-explorer', '/network?account=ACC-00DORM&hops=2'],
   ['04-scorecard', '/scorecard'],
   ['05-case-workspace', `/cases/${CASE_ID}`],
   ['06-policy-frontier', '/policy'],
@@ -43,7 +43,10 @@ function findCachedChromium() {
     if (!base) continue;
     const root = `${base.replace(/\\/g, '/')}/${sub}`;
     if (!existsSync(root)) continue;
-    const newest = readdirSync(root).filter((n) => /^chromium-\d+$/.test(n)).sort().at(-1);
+    const newest = readdirSync(root)
+      .filter((n) => /^chromium-\d+$/.test(n))
+      .sort()
+      .at(-1);
     if (!newest) continue;
     const candidate = `${root}/${newest}/${exe}`;
     if (existsSync(candidate)) return candidate;

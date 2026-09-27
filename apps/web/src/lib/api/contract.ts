@@ -676,10 +676,22 @@ const CounterfactualDecoder: Decoder<Counterfactual> = object('Counterfactual', 
   statement: string,
 });
 
+/**
+ * The four decision actions the API accepts — `DecisionAction` in
+ * `apps/api/schemas/case.py:27`. There is no fifth: a client-side `revisit` reached
+ * `DecisionCreate` as an unparseable literal and the whole write died at validation.
+ */
+export const DecisionActionDecoder = oneOf('DecisionAction', 'escalate', 'dismiss', 'review', 'reverse');
+export type DecisionAction = 'escalate' | 'dismiss' | 'review' | 'reverse';
+
+/** `four_eyes_state` — `apps/api/schemas/case.py:188` and `:284`. */
+export const FourEyesStateDecoder = oneOf('FourEyesState', 'not_required', 'pending', 'confirmed');
+export type FourEyesState = 'not_required' | 'pending' | 'confirmed';
+
 /** One append-only decision, with its chain position. */
 export type Decision = {
   seq: number;
-  decision: 'review' | 'escalate' | 'dismiss' | 'revisit';
+  decision: DecisionAction;
   reason: string;
   actor: string;
   role: string;
@@ -695,7 +707,7 @@ export type Decision = {
 
 const DecisionDecoder: Decoder<Decision> = object('Decision', {
   seq: integer,
-  decision: oneOf('DecisionKind', 'review', 'escalate', 'dismiss', 'revisit'),
+  decision: DecisionActionDecoder,
   reason: string,
   actor: string,
   role: string,
@@ -738,22 +750,69 @@ export const CasePayloadDecoder: Decoder<CasePayload> = object('CasePayload', {
   ),
 });
 
-/** The write body. An empty reason is refused server-side, so it is refused here first. */
-export type DecisionWrite = {
-  decision: Decision['decision'];
+/**
+ * The write body, field for field from `DecisionCreate` in
+ * `apps/api/schemas/case.py:237-265`.
+ *
+ * Two things this deliberately does NOT carry, because the model is `extra="forbid"`
+ * and an undeclared key is a 422 rather than an ignored hint:
+ * * `decision` — the API's field is `action`;
+ * * `idempotency_key` — the server derives the outbox key itself as
+ *   `sha256(run_id|case_id|decision_seq)` (`apps/api/routers/decisions.py:234`), so a
+ *   client-chosen one would be a second, contradictory claim about the same write.
+ */
+export type DecisionCreateBody = {
+  action: DecisionAction;
   reason: string;
   expected_version: number;
-  idempotency_key: string;
+  reversal_of_decision_id: string | null;
 };
 
-export const DecisionReceiptDecoder: Decoder<{ decision: Decision; version: number; outbox_queued: boolean }> = object(
-  'DecisionReceipt',
-  {
-    decision: DecisionDecoder,
-    version: integer,
-    outbox_queued: boolean,
-  },
-);
+/**
+ * What a successful write returns — `DecisionWriteResult` in
+ * `apps/api/schemas/case.py:268-289`, all twelve fields, as `extra="forbid"`.
+ *
+ * `outbox_queued` plus `four_eyes_state` is the honest four-eyes answer: a decision
+ * above the threshold is stored and hash-chained but no delivery is promised until a
+ * second, different reviewer confirms it, and the client says exactly that rather
+ * than inferring a state from a missing field.
+ */
+export type DecisionWriteResult = {
+  case_id: string;
+  decision_id: string;
+  decision_seq: number;
+  chain_seq: number;
+  row_hash: string;
+  four_eyes_required: boolean;
+  four_eyes_state: FourEyesState;
+  outbox_queued: boolean;
+  case_version: number;
+  decided_on_superseded_run: boolean;
+  audit_seq: number | null;
+  occurred_at: string;
+};
+
+export const DecisionWriteResultDecoder: Decoder<DecisionWriteResult> = object('DecisionWriteResult', {
+  case_id: string,
+  decision_id: string,
+  decision_seq: integer,
+  chain_seq: integer,
+  row_hash: string,
+  four_eyes_required: boolean,
+  four_eyes_state: FourEyesStateDecoder,
+  outbox_queued: boolean,
+  case_version: integer,
+  decided_on_superseded_run: boolean,
+  audit_seq: nullable(integer),
+  occurred_at: TimestampDecoder,
+});
+
+/**
+ * The second reviewer's body — `FourEyesConfirm` in `apps/api/schemas/case.py:292-296`.
+ * The note has the same minimum length as a decision reason, so a confirmation cannot
+ * be a click.
+ */
+export type FourEyesConfirmBody = { expected_version: number; confirmation_note: string };
 
 /* ============================================================ 4. network */
 
@@ -1315,6 +1374,34 @@ export const ROUTES = {
 export const ProblemDecoder = ProblemDetailDecoder;
 
 /**
+ * The case routes are keyed on `case_id`, and `case_id` is a 26-character ULID that
+ * the API's own path parameter enforces: `Path(min_length=26, max_length=26)` at
+ * `apps/api/routers/cases.py:80` and `apps/api/routers/decisions.py:54` and `:138`.
+ *
+ * An account key (`ACC-7F2A19`, 3-12 chars, `Query(min_length=3, max_length=12)` at
+ * `apps/api/routers/graph.py:64`) is a different identifier for a different route. It
+ * is what the queue links used to carry here, and it never reached a handler: FastAPI
+ * rejects the request while validating the path, so the case workspace and the whole
+ * four-eyes flow were unreachable no matter what the response looked like.
+ */
+export const CASE_ID_LENGTH = 26;
+
+/** `GET /api/cases/{case_id}` — the workspace payload. */
+export function casePath(caseId: string): string {
+  return `${ROUTES.case.path}/${encodeURIComponent(caseId)}`;
+}
+
+/** `POST /api/cases/{case_id}/decisions` — the write that gates the four-eyes flow. */
+export function caseDecisionsPath(caseId: string): string {
+  return `${casePath(caseId)}/decisions`;
+}
+
+/** `POST /api/decisions/{decision_id}/confirm` — the second reviewer (`routers/decisions.py:91`). */
+export function decisionConfirmPath(decisionId: string): string {
+  return `/api/decisions/${encodeURIComponent(decisionId)}/confirm`;
+}
+
+/**
  * SEAM(P7) — routes this app codes against that plan §13/§14 describe but which
  * do not exist in `apps/api/` yet. Each entry is the exact shape the app expects;
  * reconciliation is a one-file diff, not a hunt.
@@ -1322,10 +1409,17 @@ export const ProblemDecoder = ProblemDetailDecoder;
 export const SEAMS: { route: string; note: string }[] = [
   { route: 'GET /api/dashboard', note: 'P8a-1 command strip; currency-first figures with r band on each' },
   { route: 'GET /api/alerts', note: 'P8a-2 queue; data.capacity.cutoff_rank drives the capacity line' },
-  { route: 'GET /api/cases/{account_key}', note: 'P8a-3 workspace; contributions carry txn_ids for cross-filter' },
   {
-    route: 'POST /api/cases/{account_key}/decisions',
-    note: 'P8a-3 write; 409 with current_version for the merge view',
+    route: 'GET /api/cases/{case_id} (26-char ULID)',
+    note:
+      'P8a-3 workspace; the server answers this route with CaseDetail, whose field names are ' +
+      "not the client CasePayload decoder's — the read side of the workspace is still unreconciled",
+  },
+  {
+    route: 'POST /api/cases/{case_id}/decisions + POST /api/decisions/{decision_id}/confirm',
+    note:
+      'P8a-3 writes; body is DecisionCreate, receipt is DecisionWriteResult, and a 409 carries ' +
+      'expected_version/current_version/current for the merge view (all three mirrored, not invented)',
   },
   { route: 'GET /api/graph/subgraph', note: 'P8b-4 explorer; edges_by_bucket feeds the time scrubber' },
   {

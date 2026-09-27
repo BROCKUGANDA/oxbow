@@ -10,9 +10,24 @@
 
    useOptimistic. A decision appears in the append-only log at once with a hash chip
    and an explicit "not yet written" marker, reconciles on the receipt, and rolls back
-   to an inline error if the write fails. A 409 keeps the analyst's text in the box and
-   shows what was written instead — the merge view, rather than silently overwriting a
-   colleague.
+   to an inline error if the write fails. The updater is called inside `startTransition`
+   — that wrapper is what makes the revert real: `useOptimistic` state only exists for
+   as long as the transition that created it is open, so a 409 closes the transition,
+   the pending row goes away, and the log shows only what the server actually wrote.
+   A 409 keeps the analyst's text in the box and shows what was written instead — the
+   merge view, read from the `current` row the API hands the loser, rather than silently
+   overwriting a colleague.
+
+   THE WRITE, EXACTLY AS THE API DECLARES IT. `POST /api/cases/{case_id}/decisions`
+   (`apps/api/routers/decisions.py:41-57`), keyed on the 26-character ULID `case_id`,
+   with the `DecisionCreate` body (`schemas/case.py:237-265`) and a `DecisionWriteResult`
+   receipt (`:268-289`). The route used to post to `/api/cases/{account_key}` with a
+   `decision` field and a client-chosen `idempotency_key`: the path parameter is
+   `Path(min_length=26, max_length=26)`, so it never reached a handler, and the model is
+   `extra="forbid"`, so the extra key alone was a 422. A four-eyes decision above the
+   threshold is now followed by its second reviewer's confirm
+   (`POST /api/decisions/{decision_id}/confirm`, `routers/decisions.py:91-128`), which is
+   the only thing that queues its outbox row.
 
    SUSPENSE ORDER. The score header is the persuasive content, so it resolves first and
    the SHAP and evidence panes after it. Each pane reserves its own geometry, so a late
@@ -22,7 +37,7 @@
 'use client';
 
 import { useParams, useSearchParams } from 'next/navigation';
-import { type CSSProperties, type ReactElement, Suspense, useState } from 'react';
+import { type CSSProperties, type ReactElement, Suspense, useState, useTransition } from 'react';
 import { useOptimistic } from 'react';
 
 import { Pane } from '@/components/Pane';
@@ -37,8 +52,16 @@ import {
   type AssumptionLine,
   type CasePayload,
   type Decision,
-  DecisionReceiptDecoder,
+  type DecisionAction,
+  type DecisionCreateBody,
+  type DecisionWriteResult,
+  DecisionWriteResultDecoder,
+  type FourEyesConfirmBody,
+  type ListMeta,
   ROUTES,
+  caseDecisionsPath,
+  casePath,
+  decisionConfirmPath,
 } from '@/lib/api/contract';
 import { useResource, useRuntime, useWrite } from '@/lib/api/hooks';
 import { ApiError, type ApiFailure, failureDetail, failureFields, failureTitle } from '@/lib/api/problem';
@@ -46,10 +69,16 @@ import { compactFromMinor, count } from '@/lib/format/money';
 import { formatDuration } from '@/lib/format/time';
 
 /** What a decision looks like before the server has agreed to it. */
-type DraftDecision = { decision: Decision['decision']; reason: string };
+type DraftDecision = { decision: DecisionAction; reason: string };
 
 /** The queue's `e`/`d` shortcuts land here, so the rail can preselect an action. */
-const DEEP_ACTIONS: readonly string[] = ['review', 'escalate', 'dismiss'];
+const DEEP_ACTIONS: readonly DecisionAction[] = ['review', 'escalate', 'dismiss'];
+
+/** `?decide=` is free text from a URL: an unrecognised word preselects nothing rather
+ *  than being coerced into an action the analyst did not ask for. */
+function deepActionOf(raw: string | null): DecisionAction | null {
+  return DEEP_ACTIONS.find((action) => action === raw) ?? null;
+}
 
 const CONTROL: CSSProperties = {
   ...T_LABEL,
@@ -114,9 +143,13 @@ function CaseRouteSkeleton(): ReactElement {
 function CaseWorkspace(): ReactElement {
   const routeParams = useParams<{ id: string }>();
   const search = useSearchParams();
-  const accountKey = decodeURIComponent(routeParams.id ?? '');
-  const path = `${ROUTES.case.path}/${encodeURIComponent(accountKey)}`;
-  const caseResource = useResource(`case:${accountKey}`, path, ROUTES.case.data);
+  /* The workspace is keyed on `case_id` — the 26-character ULID the API's path parameter
+     demands (`Path(min_length=26, max_length=26)` at apps/api/routers/cases.py:80) — and
+     not on the account key, which is a different identifier for a different route. */
+  const caseId = decodeURIComponent(routeParams.id ?? '');
+  const path = casePath(caseId);
+  const decisionsPath = caseDecisionsPath(caseId);
+  const caseResource = useResource(`case:${caseId}`, path, ROUTES.case.data);
   const runtime = useRuntime();
 
   const [filter, setFilter] = useState<{ feature: string; txnIds: readonly string[] } | null>(null);
@@ -124,16 +157,25 @@ function CaseWorkspace(): ReactElement {
   const [reason, setReason] = useState('');
   const [reasonError, setReasonError] = useState<string | null>(null);
   const [writeFailure, setWriteFailure] = useState<ApiFailure | null>(null);
+  /** The last receipt the server actually issued. Everything the four-eyes panel says
+   *  comes from here, so it never reports a state the API did not report. */
+  const [receipt, setReceipt] = useState<DecisionWriteResult | null>(null);
+  const [note, setNote] = useState('');
+  const [confirming, startConfirming] = useTransition();
 
   const recorded = caseResource.data?.decisions ?? [];
   const [optimistic, applyOptimistic] = useOptimistic<Decision[], DraftDecision>(recorded, (current, draft) => [
     ...current,
     {
-      seq: current.length + 1,
+      /* A pending row carries only what is genuinely known: the action and the text the
+         analyst typed, and the chain head read from the rows already on screen. No seq,
+         no actor, no timestamp, no hash — the receipt supplies all four, and until it
+         arrives the renderer says "not yet written" instead of a value nobody sent. */
+      seq: 0,
       decision: draft.decision,
       reason: draft.reason,
-      actor: 'you',
-      role: 'analyst',
+      actor: '',
+      role: '',
       recorded_at: '',
       hash: 'pending',
       prev_hash: current.at(-1)?.hash ?? null,
@@ -144,13 +186,22 @@ function CaseWorkspace(): ReactElement {
     },
   ]);
 
-  const write = useWrite<
-    { decision: Decision['decision']; reason: string; expected_version: number; idempotency_key: string },
-    { decision: Decision; version: number; outbox_queued: boolean }
-  >(path, DecisionReceiptDecoder, [['case', path]]);
+  const write = useWrite<DecisionCreateBody, DecisionWriteResult>(decisionsPath, DecisionWriteResultDecoder, [
+    ['case', path],
+  ]);
+
+  /* The second reviewer's write. `decision_id` only exists once the first one has been
+     answered, so the path is built from the receipt rather than guessed at. */
+  const confirm = useWrite<FourEyesConfirmBody, DecisionWriteResult>(
+    receipt === null ? decisionsPath : decisionConfirmPath(receipt.decision_id),
+    DecisionWriteResultDecoder,
+    [['case', path]],
+  );
+
+  const [writing, startWriting] = useTransition();
 
   if (caseResource.data === null) {
-    return <CaseSkeleton resource={caseResource} accountKey={accountKey} />;
+    return <CaseSkeleton resource={caseResource} caseId={caseId} />;
   }
 
   const payload = caseResource.data;
@@ -165,7 +216,7 @@ function CaseWorkspace(): ReactElement {
   const transactions =
     filter === null ? payload.transactions : payload.transactions.filter((txn) => txnSet?.has(txn.txn_id) ?? false);
 
-  const submit = async (decision: Decision['decision']): Promise<void> => {
+  const submit = async (decision: DecisionAction): Promise<void> => {
     const text = reason.trim();
     if (text.length === 0) {
       setReasonError('A written reason is required. A decision without one cannot be defended in a packet.');
@@ -173,20 +224,51 @@ function CaseWorkspace(): ReactElement {
     }
     setReasonError(null);
     setWriteFailure(null);
-    applyOptimistic({ decision, reason: text });
-    try {
-      await write.mutateAsync({
-        decision,
-        reason: text,
-        expected_version: payload.decision_version,
-        idempotency_key: `${payload.header.run_id}:${payload.header.account_key}:${String(payload.decision_version + 1)}`,
-      });
-      setReason('');
-    } catch (error) {
-      // The optimistic row is dropped with the rejection and the message renders where
-      // the analyst typed, not in a toast they will have scrolled past.
-      setWriteFailure(error instanceof ApiError ? error.failure : null);
+    setReceipt(null);
+    /* `useOptimistic` keeps its extra row for exactly as long as the transition that
+       created it is open. Called outside one, the updater is refused outright — React
+       logs "An optimistic state update occurred outside a transition" and the pending
+       row never appears — and a rejection then has nothing to roll back, which is how
+       the log came to keep a `pending`/`you`/empty-timestamp row forever. */
+    startWriting(async () => {
+      applyOptimistic({ decision, reason: text });
+      try {
+        const written = await write.mutateAsync({
+          action: decision,
+          reason: text,
+          expected_version: payload.decision_version,
+          reversal_of_decision_id: null,
+        });
+        setReceipt(written.data);
+        setReason('');
+      } catch (error) {
+        // The transition closing is what drops the optimistic row; the message renders
+        // where the analyst typed, not in a toast they will have scrolled past.
+        setWriteFailure(error instanceof ApiError ? error.failure : null);
+      }
+    });
+  };
+
+  const confirmFourEyes = async (): Promise<void> => {
+    const text = note.trim();
+    if (text.length === 0) {
+      setReasonError('The second reviewer signs the confirmation with their own sentence.');
+      return;
     }
+    setReasonError(null);
+    setWriteFailure(null);
+    startConfirming(async () => {
+      try {
+        const confirmed = await confirm.mutateAsync({
+          expected_version: receipt?.case_version ?? 0,
+          confirmation_note: text,
+        });
+        setReceipt(confirmed.data);
+        setNote('');
+      } catch (error) {
+        setWriteFailure(error instanceof ApiError ? error.failure : null);
+      }
+    });
   };
 
   return (
@@ -309,13 +391,19 @@ function CaseWorkspace(): ReactElement {
         <DecisionRail
           payload={payload}
           assumptions={assumptions}
+          meta={caseResource.meta}
           onDecide={submit}
           failure={writeFailure}
-          pending={write.pending}
+          pending={writing || write.pending || confirming || confirm.pending}
           reason={reason}
           setReason={setReason}
           reasonError={reasonError}
-          deepAction={DEEP_ACTIONS.includes(search.get('decide') ?? '') ? search.get('decide') : null}
+          receipt={receipt}
+          note={note}
+          setNote={setNote}
+          onConfirm={confirmFourEyes}
+          confirmFailure={confirm.failure}
+          deepAction={deepActionOf(search.get('decide'))}
         />
 
         <Pane
@@ -336,8 +424,8 @@ function CaseWorkspace(): ReactElement {
 
 function CaseSkeleton({
   resource,
-  accountKey,
-}: { resource: ReturnType<typeof useResource<CasePayload>>; accountKey: string }): ReactElement {
+  caseId,
+}: { resource: ReturnType<typeof useResource<CasePayload>>; caseId: string }): ReactElement {
   const loading = resource.isPending && resource.failure === null;
   return (
     <div
@@ -354,19 +442,25 @@ function CaseSkeleton({
         title="Score"
         operation="Loading the score header"
         failure={resource.failure}
+        pending={resource.isPending}
         onRetry={() => void resource.refetch()}
         attempt={resource.attempts}
         retrying={resource.isFetching}
         skeleton={{ columns: [{ key: 'score', width: '100%' }], rows: 5 }}
       >
         <p style={{ ...T_MICRO, color: 'var(--color-ink-faint)' }}>
-          {loading ? `Reading ${accountKey} from the recorded run.` : 'Nothing returned.'}
+          {loading ? `Reading ${caseId} from the recorded run.` : 'Nothing returned.'}
         </p>
       </Pane>
       <Pane
         id="evidence"
         title="Evidence"
         operation="Loading the evidence pane"
+        failure={resource.failure}
+        pending={resource.isPending}
+        onRetry={() => void resource.refetch()}
+        attempt={resource.attempts}
+        retrying={resource.isFetching}
         skeleton={{ columns: [{ key: 'row', width: '100%' }], rows: 9, rowHeight: 36 }}
       >
         <span />
@@ -375,6 +469,11 @@ function CaseSkeleton({
         id="decision"
         title="Decision"
         operation="Loading the decision rail"
+        failure={resource.failure}
+        pending={resource.isPending}
+        onRetry={() => void resource.refetch()}
+        attempt={resource.attempts}
+        retrying={resource.isFetching}
         skeleton={{ columns: [{ key: 'rail', width: '100%' }], rows: 4 }}
       >
         <span />
@@ -879,25 +978,41 @@ function Narrative({ payload }: { payload: CasePayload }): ReactElement {
 function DecisionRail({
   payload,
   assumptions,
+  meta,
   onDecide,
   failure,
   pending,
   reason,
   setReason,
   reasonError,
+  receipt,
+  note,
+  setNote,
+  onConfirm,
+  confirmFailure,
   deepAction,
 }: {
   payload: CasePayload;
   assumptions: readonly AssumptionLine[];
-  onDecide: (decision: Decision['decision']) => Promise<void>;
+  /** The case response's own provenance block, threaded like every other pane on the
+   *  route. It used to be `null` here *together with a skeleton spec*, and a pane with
+   *  no meta and a skeleton renders the skeleton — so the rail never rendered its own
+   *  children and the decision form was absent from the DOM on a fully-loaded case. */
+  meta: ListMeta | null;
+  onDecide: (decision: DecisionAction) => Promise<void>;
   failure: ApiFailure | null;
   pending: boolean;
   reason: string;
   setReason: (next: string) => void;
   reasonError: string | null;
+  receipt: DecisionWriteResult | null;
+  note: string;
+  setNote: (next: string) => void;
+  onConfirm: () => Promise<void>;
+  confirmFailure: ApiFailure | null;
   deepAction: string | null;
 }): ReactElement {
-  const choices: readonly { id: Decision['decision']; label: string; hint: string }[] = [
+  const choices: readonly { id: DecisionAction; label: string; hint: string }[] = [
     { id: 'review', label: 'Review', hint: 'keep it on the desk' },
     { id: 'escalate', label: 'Escalate', hint: 'send it onward with the evidence attached' },
     { id: 'dismiss', label: 'Dismiss', hint: 'close it, and say why' },
@@ -906,13 +1021,17 @@ function DecisionRail({
   const conflict =
     failure !== null && failure.kind === 'problem' && failure.class === 'conflict' ? failure.problem.conflict : null;
   const exposure = payload.header.economics.exposure.value;
+  /* Four-eyes is a state the server reports, not one the client infers: `pending` means
+     the row is chained but no delivery has been promised (`outbox_queued: false`) until a
+     second, different reviewer confirms it — apps/api/routers/decisions.py:10-15. */
+  const awaitingSecondReviewer = receipt !== null && receipt.four_eyes_state === 'pending';
 
   return (
     <Pane
       id="decision"
       title="Decision"
       operation="Recording the decision"
-      meta={null}
+      meta={meta}
       skeleton={{ columns: [{ key: 'rail', width: '100%' }], rows: 4 }}
     >
       <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
@@ -981,23 +1100,109 @@ function DecisionRail({
         </div>
 
         {conflict !== null ? (
+          /* Every word here is a field of the 409 the API sent: `current_version` and the
+             stored row in `current` (apps/api/problems.py:196-208, decisions.py:803-813).
+             The previous version printed `current_seq` / `decided_by` / `decided_at`,
+             which this API has never sent, so the merge view showed two blanks and told
+             the analyst to read a decision that was not on the screen. */
           <div data-merge-view style={{ ...PANEL_SUNKEN, padding: 10 }}>
             <p style={{ ...T_LABEL, color: 'var(--color-ink)', margin: 0 }}>
-              Another decision was recorded on this case while you were writing: #{String(conflict.current_seq ?? '')}{' '}
-              by {conflict.decided_by ?? 'another analyst'}.
+              {conflict.current === null
+                ? 'This case has moved on since you loaded it, and the server sent no winning row to read.'
+                : `Another decision was recorded while you were writing: ${conflict.current.action} #${count(
+                    conflict.current.decision_seq,
+                  )} by ${conflict.current.actor_id}.`}
             </p>
+            {conflict.current !== null ? (
+              <p style={{ ...T_LABEL, color: 'var(--color-ink-muted)', margin: '4px 0 0', whiteSpace: 'pre-wrap' }}>
+                “{conflict.current.reason}”
+              </p>
+            ) : null}
             <p style={{ ...T_MICRO, color: 'var(--color-ink-muted)', marginTop: 4 }}>
               Your text is still in the box. Nothing was written and nothing was overwritten — retry against version{' '}
               {String(conflict.current_version)} once you have read theirs.
             </p>
+            {conflict.current !== null ? (
+              <p style={{ ...T_MICRO, color: 'var(--color-ink-faint)', marginTop: 4 }}>
+                {conflict.current.four_eyes_state === 'pending'
+                  ? 'that decision is held for a second reviewer, so its delivery has not been promised either'
+                  : `four-eyes state: ${conflict.current.four_eyes_state}`}
+              </p>
+            ) : null}
           </div>
         ) : null}
 
         {failure !== null ? (
           <p role="alert" data-write-error style={{ ...T_MICRO, color: 'var(--color-state-failed)', margin: 0 }}>
             Not written: {failureTitle(failure)} — {failureDetail(failure) ?? 'the server refused the decision'}. The
-            history above rolled back to what is actually recorded.
+            history closed with the request, so it now shows only what is actually recorded.
           </p>
+        ) : null}
+        {confirmFailure !== null ? (
+          <p role="alert" data-write-error style={{ ...T_MICRO, color: 'var(--color-state-failed)', margin: 0 }}>
+            Confirmation not recorded: {failureTitle(confirmFailure)} —{' '}
+            {failureDetail(confirmFailure) ?? 'the second reviewer’s write was refused'}. Nothing was queued.
+          </p>
+        ) : null}
+
+        {receipt !== null ? (
+          <div data-decision-receipt style={{ ...PANEL_SUNKEN, padding: 10 }}>
+            <p style={{ ...T_LABEL, color: 'var(--color-ink)', margin: 0 }}>
+              {`Decision #${count(receipt.decision_seq)} written on case ${receipt.case_id}`}
+            </p>
+            <p style={{ ...T_MICRO, color: 'var(--color-ink-muted)', marginTop: 4 }}>
+              chain #{count(receipt.chain_seq)} · version {String(receipt.case_version)} ·{' '}
+              {receipt.decided_on_superseded_run
+                ? 'decided on a superseded run, stamped as such'
+                : 'decided on the pinned run'}
+            </p>
+            <p style={{ ...T_MICRO, color: 'var(--color-ink-faint)', marginTop: 4 }}>
+              <code style={{ ...T_MONO, fontSize: '0.625rem' }}>{receipt.row_hash.slice(0, 24)}</code>
+            </p>
+          </div>
+        ) : null}
+
+        {/* The four-eyes gate, rendered only when the receipt says it is holding. The
+            note is the second reviewer's own sentence — `confirmation_note` carries the
+            same server-side minimum as a decision reason (schemas/case.py:296). */}
+        {awaitingSecondReviewer ? (
+          <div data-four-eyes style={{ ...PANEL_SUNKEN, padding: 10 }}>
+            <p style={{ ...T_LABEL, color: 'var(--color-ink)', margin: 0 }}>
+              Held for a second reviewer — nothing has been delivered
+            </p>
+            <p style={{ ...T_MICRO, color: 'var(--color-ink-muted)', marginTop: 4 }}>
+              The row is chained and the case is at version {String(receipt?.case_version ?? 0)}, but the outbox carries
+              no promise for it: {receipt?.outbox_queued === true ? 'delivery queued' : 'delivery not queued'}. A
+              second, different reviewer confirming queues it.
+            </p>
+            <label style={{ ...T_LABEL, display: 'flex', flexDirection: 'column', gap: 4, marginTop: 8 }}>
+              Confirmation note — required
+              <textarea
+                value={note}
+                rows={2}
+                aria-label="Confirmation note for the second reviewer"
+                onChange={(event) => setNote(event.target.value)}
+                style={{
+                  ...T_LABEL,
+                  fontFamily: 'var(--font-sans)',
+                  background: 'var(--color-canvas)',
+                  color: 'var(--color-ink)',
+                  border: '1px solid var(--color-hairline-strong)',
+                  borderRadius: 'var(--radius-control)',
+                  padding: 8,
+                  resize: 'vertical',
+                }}
+              />
+            </label>
+            <button
+              type="button"
+              onClick={() => void onConfirm()}
+              disabled={pending}
+              style={{ ...CONTROL, marginTop: 8, cursor: pending ? 'progress' : 'pointer' }}
+            >
+              Confirm as second reviewer
+            </button>
+          </div>
         ) : null}
 
         <MoneyFigure
@@ -1036,9 +1241,13 @@ function DecisionHistory({ decisions, timeZone }: { decisions: Decision[]; timeZ
                 <strong style={{ ...T_LABEL, fontWeight: 600, textTransform: 'capitalize', color: 'var(--color-ink)' }}>
                   {decision.decision}
                 </strong>
-                <span className="u-num" style={{ ...T_MICRO, color: 'var(--color-ink-faint)' }}>
-                  #{count(decision.seq)} · {decision.actor} ({decision.role})
-                </span>
+                {/* A pending row has no sequence, no actor and no role: the server has
+                    not answered yet, so nothing is printed in their place. */}
+                {decision.pending === true ? null : (
+                  <span className="u-num" style={{ ...T_MICRO, color: 'var(--color-ink-faint)' }}>
+                    #{count(decision.seq)} · {decision.actor} ({decision.role})
+                  </span>
+                )}
                 {decision.pending === true ? (
                   <span data-pending-decision style={{ ...T_MICRO, color: 'var(--color-state-running)' }}>
                     not yet written

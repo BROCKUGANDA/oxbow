@@ -215,11 +215,15 @@ const HALF: CSSProperties = {
  */
 function ModelSkeleton({
   failure,
+  pending,
   onRetry,
   attempt,
   retrying,
 }: {
   failure: QueryState<Validation>['failure'];
+  /** Can the shared query still answer? When it cannot, no pane on this route is
+   *  "loading" any more — each one says it has no answer, over the same geometry. */
+  pending: boolean;
   onRetry: () => void;
   attempt: number;
   retrying: boolean;
@@ -231,6 +235,8 @@ function ModelSkeleton({
       operation={PANES[key].operation}
       skeleton={{ columns: PANES[key].columns, rows: PANES[key].rows, rowHeight: PANES[key].rowHeight }}
       reserveHeight={PANES[key].body}
+      pending={pending}
+      onRetry={pending ? null : onRetry}
     >
       <span />
     </Pane>
@@ -296,6 +302,7 @@ export default function ModelPage(): ReactElement {
     ) : (
       <ModelSkeleton
         failure={validation.failure}
+        pending={validation.isPending}
         onRetry={() => void validation.refetch()}
         attempt={validation.attempts}
         retrying={validation.isFetching}
@@ -309,11 +316,20 @@ export default function ModelPage(): ReactElement {
     <div style={PAGE}>
       <div style={HALF}>
         {dataset.data === null ? (
+          /* Its own query, its own tier. This pane is the one place on the route where a
+             second request can fail while the thirteen validation panes above are live,
+             so it carries the failure itself rather than a skeleton that would never
+             stop — and it keeps its reserved geometry either way. */
           <Pane
             id="dataset"
             title={PANES.dataset.title}
             operation={PANES.dataset.operation}
             meta={dataset.meta}
+            failure={dataset.failure}
+            pending={dataset.isPending}
+            onRetry={() => void dataset.refetch()}
+            attempt={dataset.attempts}
+            retrying={dataset.isFetching}
             skeleton={{ columns: PANES.dataset.columns, rows: PANES.dataset.rows }}
             reserveHeight={PANES.dataset.body}
           >

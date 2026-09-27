@@ -49,22 +49,57 @@ export const PROBLEM_STATUSES = [400, 401, 403, 404, 409, 412, 422, 429, 500, 50
 export type ProblemStatus = (typeof PROBLEM_STATUSES)[number];
 
 /**
- * The optimistic-concurrency extension on a 409 decision write (plan §13: "two
- * concurrent decision writes produce one success and one 409"). The UI offers a
- * merge view from these three fields and nothing else.
+ * The winning decision as the API embeds it in a 409 — the `current` mapping built at
+ * `apps/api/decisions.py:803-813`. Declared with plain `string` fields for `action`,
+ * `four_eyes_state` and `status`: the server builds this dict from raw column values
+ * (`str(current.action)`), so narrowing it to the write-side literal unions here would
+ * assert a guarantee the response does not carry.
+ */
+export type StoredDecisionRef = {
+  decision_id: string;
+  decision_seq: number;
+  action: string;
+  reason: string;
+  actor_id: string;
+  occurred_at: string;
+  row_hash: string;
+  four_eyes_state: string;
+  status: string;
+};
+
+const StoredDecisionRefDecoder: Decoder<StoredDecisionRef> = object('StoredDecisionRef', {
+  decision_id: string,
+  decision_seq: integer,
+  action: string,
+  reason: string,
+  actor_id: string,
+  occurred_at: string,
+  row_hash: string,
+  four_eyes_state: string,
+  status: string,
+});
+
+/**
+ * The optimistic-concurrency extension on a 409 decision write — `ProblemDetail`'s
+ * three conflict members in `apps/api/problems.py:100-113`, populated by
+ * `VersionConflict.to_problem()` at `apps/api/problems.py:196-208`. Plan §13's "two
+ * concurrent decision writes produce one success and one 409" is only a merge view if
+ * the loser is handed *what was written instead*, which is what `current` is.
+ *
+ * `current_seq` / `decided_by` / `decided_at` — the names this type used to carry — are
+ * not fields this API ever sends, so the merge view rendered three nulls and called it
+ * a conflict resolution.
  */
 export type VersionConflict = {
+  expected_version: number | null;
   current_version: number;
-  current_seq: number | null;
-  decided_by: string | null;
-  decided_at: string | null;
+  current: StoredDecisionRef | null;
 };
 
 const VersionConflictDecoder: Decoder<VersionConflict> = object('VersionConflict', {
+  expected_version: nullable(integer),
   current_version: integer,
-  current_seq: nullable(integer),
-  decided_by: nullable(string),
-  decided_at: nullable(string),
+  current: nullable(StoredDecisionRefDecoder),
 });
 
 /**

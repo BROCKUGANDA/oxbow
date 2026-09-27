@@ -321,7 +321,10 @@ export const heroCase: CasePayload = {
       'Remove the pass-through ratio and this account drops from band E to band C, below the capacity cutoff: the queue would not have reached it this period.',
   },
   decisions: decisions(),
-  decision_version: 2,
+  // A case opens at `version=1` and every write bumps it (apps/api/decisions.py:174,
+  // :342), so two recorded decisions put it at 3. It said 2, which is a version the API
+  // has never been at — the first write carried a stale token and lost its own 409.
+  decision_version: 3,
   narrative: {
     text: 'Money arrives from eleven senders, moves on inside the hour, and closes a loop back to one of them. No single transfer is unusual; the shape is.',
     source: 'template',
@@ -343,7 +346,9 @@ export const quietCase: CasePayload = {
   },
   counterfactual: null,
   decisions: [],
-  decision_version: 0,
+  // A case with no writes is at version 1, not 0: `version=1` when the case is opened
+  // (`apps/api/decisions.py:174`), and `expected_version` is `Field(ge=1)`
+  // (`schemas/case.py:249`), so a first write carrying 0 was a body the API could not accept.
 };
 
 /** The window-empty case: scored, but no counterparties inside the drawn window. */
@@ -362,6 +367,23 @@ export const isolatedCase: CasePayload = {
   transactions: [],
   contributions: [],
   rule_hits: [],
+};
+
+/**
+ * The `case_id` for each fixture case — the 26-character ULID the case routes are keyed
+ * on (`Path(min_length=26, max_length=26)`, apps/api/routers/cases.py:80 and
+ * routers/decisions.py:54). They sit beside the account keys rather than replacing them
+ * because the queue's `case_href` still carries an account key: the read side of the
+ * workspace is a documented seam (contract.ts `SEAMS`), the write side is not.
+ */
+export const HERO_CASE_ID = '01J4Z7M2QK9N7V1C4X6E8G0B2E';
+export const QUIET_CASE_ID = '01J4Z7M2QK9N7V1C4X6E8G0B2F';
+export const ISOLATED_CASE_ID = '01J4Z7M2QK9N7V1C4X6E8G0B2G';
+
+export const CASE_ID_BY_ACCOUNT_KEY: Record<string, string> = {
+  [HERO]: HERO_CASE_ID,
+  'ACC-4B1C07': QUIET_CASE_ID,
+  'ACC-00DORM': ISOLATED_CASE_ID,
 };
 
 export const CASES: Record<string, CasePayload> = {

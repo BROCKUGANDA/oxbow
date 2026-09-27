@@ -7,7 +7,7 @@ import { type Root, createRoot } from 'react-dom/client';
  * no extra dependencies (nothing new gets installed in this repo). One container
  * per call; `cleanup` unmounts and removes it.
  */
-type RenderResult = {
+export type RenderResult = {
   container: HTMLElement;
   cleanup: () => void;
   rerender: (element: ReactElement) => void;

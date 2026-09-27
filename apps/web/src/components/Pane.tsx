@@ -20,7 +20,7 @@
 
 'use client';
 
-import type { ReactElement, ReactNode } from 'react';
+import type { CSSProperties, ReactElement, ReactNode } from 'react';
 import { ErrorBoundary } from 'react-error-boundary';
 
 import { ErrorPane } from '../design/primitives/ErrorPane';
@@ -64,6 +64,18 @@ export type PaneProps = {
    * react-error-boundary path for a raised render.
    */
   failure?: ApiFailure | null;
+  /**
+   * Whether the query that owns this pane can still answer. Default `true`.
+   *
+   * A skeleton is a claim about the future — "this pane is working on it" — and it is
+   * only honest while that is the truth. `failure === null && meta === null` used to be
+   * the whole test for "still loading", which meant a disabled query, an aborted one, or
+   * a route that answered 200 with a body no decoder accepted all kept saying "is
+   * loading" forever. DESIGN.md §3 bans the default indeterminate spinner and §5 requires
+   * a pane that cannot produce data to say why; `pending={false}` is how the owner says
+   * "asking has stopped", and the pane then refuses instead of waiting.
+   */
+  pending?: boolean;
   /** Retry scoped to this pane's query. The button is disabled while one is in flight. */
   onRetry?: (() => void) | null;
   /** Attempt count carried to the error surface so a repeat failure reads as one. */
@@ -82,6 +94,7 @@ export function Pane({
   reserveHeight,
   padded = true,
   failure = null,
+  pending = true,
   onRetry = null,
   attempt = 1,
   retrying = false,
@@ -147,6 +160,7 @@ export function Pane({
             label={title}
             meta={meta}
             failure={failure}
+            pending={pending}
             onRetry={onRetry}
             attempt={attempt}
             retrying={retrying}
@@ -169,6 +183,7 @@ function MaybeSuspense({
   label,
   meta,
   failure,
+  pending,
   onRetry,
   attempt,
   retrying,
@@ -180,6 +195,7 @@ function MaybeSuspense({
   label: string;
   meta: ListMeta | null;
   failure: ApiFailure | null;
+  pending: boolean;
   onRetry: (() => void) | null;
   attempt: number;
   retrying: boolean;
@@ -200,6 +216,14 @@ function MaybeSuspense({
     );
   }
   if (skeleton === undefined || skeleton.columns.length === 0 || meta !== null) return <>{children}</>;
+  /* Asking has stopped and nothing arrived that this pane may render. It says so, in
+     the same reserved geometry, rather than claiming to still be loading — the one lie
+     a loading state is not allowed to tell (DESIGN.md §3 rule 6, §5 "degraded, not
+     broken"). No value is invented here: the line names the pane and where the report
+     went, and the run id and the reason sit on the page-level surface above. */
+  if (pending === false) {
+    return <Unanswered label={label} onRetry={onRetry} />;
+  }
   return (
     <Skeleton
       columns={skeleton.columns}
@@ -209,6 +233,36 @@ function MaybeSuspense({
     />
   );
 }
+
+/** The terminal, non-spinning state of a pane whose query will not answer. */
+function Unanswered({ label, onRetry }: { label: string; onRetry: (() => void) | null }): ReactElement {
+  return (
+    <div data-pane-unanswered={label} style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+      <p style={{ ...T_LABEL, color: 'var(--color-ink-muted)', margin: 0, maxWidth: '60ch' }}>
+        {label} has no answer. Asking has stopped and nothing arrived that this pane may render, so it is not pretending
+        to be loading.
+      </p>
+      <p style={{ ...T_MICRO, color: 'var(--color-ink-faint)', margin: 0, maxWidth: '60ch' }}>
+        The reason, the run id and a copy button are on the failure report for this route; the pane re-asks from there.
+      </p>
+      {onRetry !== null ? (
+        <button type="button" onClick={onRetry} style={{ alignSelf: 'flex-start', ...CONTROL }}>
+          Retry this route
+        </button>
+      ) : null}
+    </div>
+  );
+}
+
+const CONTROL: CSSProperties = {
+  ...T_LABEL,
+  padding: '4px 10px',
+  border: '1px solid var(--color-hairline-strong)',
+  borderRadius: 'var(--radius-control)',
+  background: 'transparent',
+  color: 'var(--color-ink)',
+  cursor: 'pointer',
+};
 
 /** The pane-level surface for a failed query (as opposed to a raised render). */
 function QueryFailure({

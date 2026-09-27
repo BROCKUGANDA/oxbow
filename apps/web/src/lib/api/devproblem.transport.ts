@@ -63,12 +63,27 @@ export function send(request: TransportRequest): Promise<TransportResponse> {
     case '503-mlflow':
       return Promise.resolve(unavailable('MLflow tracking store', 'the model version stamped on the run record'));
     case '409':
+      /* Field names as `apps/api/problems.py:196-208` actually sends them: the losing
+         write gets `expected_version`, `current_version` and `current` — the winning
+         row verbatim, which is the only way the merge view can show both side by side. */
       return Promise.resolve(
-        problem(409, 'Conflict', 'a decision was recorded on this case while you were writing yours', {
+        problem(409, 'Case changed since you loaded it', 'a decision was recorded while you were writing yours', {
+          // The `type` URI is the error *code*, not a slug of the title
+          // (`apps/api/problems.py:145` — `PROBLEM_TYPE_BASE + self.code`).
+          type: 'https://oxbow.dev/problems/version-conflict',
+          expected_version: 2,
           current_version: 3,
-          current_seq: 3,
-          decided_by: 'reviewer.nabirye',
-          decided_at: '2026-09-25T09:12:00Z',
+          current: {
+            decision_id: '01J4Z7DECISION0000000000A',
+            decision_seq: 3,
+            action: 'escalate',
+            reason: 'Third cycle member identified; escalating with the loop attached.',
+            actor_id: 'reviewer.nabirye',
+            occurred_at: '2026-09-25T09:12:00Z',
+            row_hash: '31b7e0c4d9a2f6510c8b3e5d7f9a1c2e4b6d8f0a2c4e6f80b1d3f5a7c9e0f213',
+            four_eyes_state: 'pending',
+            status: 'escalated',
+          },
         }),
       );
     case '404':
