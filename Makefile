@@ -3,7 +3,7 @@
 # command plus an expected observable.)
 # Spec 14 reproducibility contract + 01 D command table.
 #
-#   make bootstrap   uv sync, pnpm install, pre-commit install
+#   make bootstrap   uv sync, bun install, pre-commit install
 #   make up          docker compose up: Postgres 16, Redis 7, MinIO, MLflow, Keycloak, echo svc
 #   make up-full     the same, plus the application profile: api, worker, web and the caddy edge
 #   make ingest|graph|score|backtest   the four pipeline stages, separately resumable
@@ -50,10 +50,10 @@ help: ## Show this help
 # ---------------------------------------------------------------- bootstrap
 
 .PHONY: bootstrap
-bootstrap: ## uv sync, pnpm install, pre-commit install
+bootstrap: ## uv sync, bun install, pre-commit install
 	uv python pin 3.12
 	uv sync --frozen --all-extras
-	cd $(WEB) && pnpm install --frozen-lockfile
+	cd $(WEB) && bun install --frozen-lockfile
 	uv run pre-commit install
 
 .PHONY: sync
@@ -133,7 +133,7 @@ api: ## FastAPI dev server on :8000
 
 .PHONY: web
 web: ## Next.js dev server on :3000
-	cd $(WEB) && pnpm dev
+	cd $(WEB) && bun run dev
 
 .PHONY: worker
 worker: ## RQ worker for pipeline and backtest jobs
@@ -164,7 +164,7 @@ lint-python:
 
 .PHONY: lint-web
 lint-web:
-	cd $(WEB) && pnpm lint
+	cd $(WEB) && bun run lint
 
 .PHONY: contracts
 contracts: ## import-linter: no adapter imports outside adapters/
@@ -182,16 +182,16 @@ test-python:
 
 .PHONY: test-web
 test-web:
-	cd $(WEB) && pnpm test:unit --run
+	cd $(WEB) && bun run test:unit --run
 
 .PHONY: test-e2e
 test-e2e: ## Playwright: state gallery, axe sweep, CLS, reduced motion
-	cd $(WEB) && pnpm test:e2e
+	cd $(WEB) && bun run test:e2e
 
 .PHONY: audit
 audit: ## Supply chain (02 F)
 	uv run pip-audit
-	cd $(WEB) && pnpm audit --audit-level=high
+	cd $(WEB) && bun audit --audit-level=high
 
 # ---------------------------------------------------------------- gates
 

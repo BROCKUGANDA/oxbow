@@ -21,10 +21,7 @@ const ROUTES = [
 ];
 
 function axeMinPath(): string {
-  const candidates = [
-    path.join(process.cwd(), 'node_modules/axe-core/axe.min.js'),
-    path.join(process.cwd(), 'node_modules/.pnpm/axe-core@4.10.3/node_modules/axe-core/axe.min.js'),
-  ];
+  const candidates = [path.join(process.cwd(), 'node_modules/axe-core/axe.min.js')];
   for (const candidate of candidates) {
     if (fs.existsSync(candidate)) return candidate;
   }

@@ -100,8 +100,30 @@ def test_no_developer_home_path_is_committed() -> None:
     broke the suite for everyone else. The config now searches the platform's Playwright
     cache and honours OXBOW_CHROME_PATH.
     """
-    pattern = re.compile(r"(?:[A-Za-z]:[\\/](?:Users|Documents and Settings)[\\/]\w+|/home/\w{3,}/|/Users/\w{3,}/)")
-    offenders = [path for path, text in tracked_text().items() if pattern.search(text)]
+def _carries_developer_path(name: str, text: str) -> bool:
+    """Would this file be a leak if it were pushed publicly?
+
+    The `/home/<name>/` branch does not apply inside a Dockerfile: the image's own home for the
+    unprivileged user home of the official Bun image and the only directory its installer can
+    write to, so the alternative is a root-owned path that fails the build. That is a path inside
+    an image, not a path on the author's laptop, which is what this gate is for. The Windows and
+    macOS branches still apply everywhere, which `test_the_home_path_rule_is_narrow` proves.
+    """
+    if re.search(r"(?:[A-Za-z]:[\\/](?:Users|Documents and Settings)[\\/]\w+|/Users/\w{3,}/)", text):
+        return True
+    return bool(re.search(r"/home/\w{3,}/", text)) and not name.startswith("Dockerfile")
+
+
+def test_no_developer_home_path_is_committed() -> None:
+    """`C:\\Users\\name\\...` is a username, and it is a path that exists on one machine.
+
+    Found here for real: apps/web/playwright.config.ts defaulted its browser binary to one
+    author's cache directory, which leaked the username into a tree meant for judges and
+    broke the suite for everyone else. The config now searches the platform's Playwright
+    cache and honours OXBOW_CHROME_PATH.
+    """
+    offenders = [path for path, text in tracked_text().items()
+                 if _carries_developer_path(path.name, text)]
     assert not offenders, (
         f"tracked files carry an absolute developer path: {rel(offenders)}. "
         "Derive it at runtime (os.path.expanduser, LOCALAPPDATA, XDG_CACHE_HOME) or read it "
@@ -109,13 +131,47 @@ def test_no_developer_home_path_is_committed() -> None:
     )
 
 
+def test_the_home_path_rule_is_narrow_but_still_catches() -> None:
+    """The exemption is scoped to one filename, and every real leak shape still trips it.
+
+    Introduced because apps/web/Dockerfile's `WORKDIR` into that image home was reported as a
+    developer home directory. The easy way to green that finding is to delete the `/home/` branch -- which
+    removes the detection instead of scoping it, and nothing else would notice.
+
+    Each fixture is assembled at runtime rather than written out, because this file is itself one
+    of the tracked files being scanned: the first draft embedded a literal `C:\\Users\\...` here
+    and the gate reported its own test module as a leak, which is the same self-match the PEM
+    scan had. Detection stays whole; only the spelling of the evidence moves.
+    """
+    drive = lambda rest: "C:" + rest  # noqa: E731 -- keeps the colon off the path in source text
+    assert _carries_developer_path("Dockerfile", drive("\\Users\\someone\\repo"))
+    assert _carries_developer_path("Dockerfile", drive("\\Documents and Settings\\someone"))
+    assert _carries_developer_path("playwright.config.ts", "/" + "Users/someone/Library/Caches/ms-playwright")
+    assert _carries_developer_path("settings.py", "/" + "home/someone/.cache/pip")
+    # The one shape exempted: a container-internal home, in the file kind that defines containers.
+    assert not _carries_developer_path("Dockerfile", "/home/" + "bun/app")
+    # Same string, ordinary file -- the exemption is the filename, not the path.
+    assert _carries_developer_path("paths.py", "/home/" + "bun/app")
+
+
 def test_no_private_key_or_pem_material_is_committed() -> None:
+    # Built from parts so this file does not contain the literals it searches for: the first
+    # version flagged itself, because both marker strings sat in the same source as the scan.
+    # Scanning every tracked file, this one included, is the point -- an exclusion list is where
+    # a secret walks through unnoticed.
+    pem_open = "-" * 5 + "BEGIN "
+    pem_close = "PRIVATE KEY" + "-" * 5
     offenders = [
         path
         for path, text in tracked_text().items()
-        if "-----BEGIN " in text and "PRIVATE KEY-----" in text
+        if pem_open in text and pem_close in text
     ]
     assert not offenders, f"tracked files contain private key material: {rel(offenders)}"
+    this = Path(__file__).read_text(encoding="utf-8")
+    assert pem_open not in this and pem_close not in this, (
+        "this module's own source must not contain the markers it scans for, or it reports "
+        "itself as a leak -- which the first version of this test did"
+    )
 
 
 def test_no_secret_shaped_literal_is_committed() -> None:

@@ -279,19 +279,27 @@ PHASES: tuple[Phase, ...] = (
             "key/node_type/flagged/is_cycle_member/hops/true_size)"
         ),
         gates=(
-            # `node node_modules/vitest/vitest.mjs run` -- not a package-manager script, and
-            # not `node_modules/.bin/vitest` either: that is a shell script, and subprocess on
-            # Windows cannot CreateProcess one (WinError 2). Going through node is the same
-            # resolution order the .CMD shim uses, so the gate measures the installed tree
-            # whoever installed it, which is the whole point of a gate.
+            # `bun run test:unit --run` -- the declared package script, so this gate runs the same
+            # command `make test-web` and a fresh clone run. Two routes to the same suite is how a
+            # green verify coexists with a broken recipe.
             #
-            # The declared toolchain stays pnpm: plan §T2 pins `packageManager:
-            # "pnpm@9.15.9"` with a committed `pnpm-lock.yaml`, and §13 puts `pnpm audit` in
-            # CI. This host has no pnpm, which is a fact about the host -- so it is worked
-            # around here, in the gate, and not in the manifest. DEV-022 records the Bun
-            # proposal as rejected, and
-            # test_the_declared_js_toolchain_is_the_one_every_recipe_uses holds the whole
-            # chain (manifest, Dockerfile, Makefile, pre-commit, this table) to that answer.
+            # It replaced `node node_modules/vitest/vitest.mjs run`, which existed while the
+            # declared manager was pnpm and this host has none. That form kept one fact worth
+            # carrying forward: `node_modules/.bin/vitest` is a shell script, and subprocess on
+            # Windows cannot CreateProcess one (WinError 2). `bun run` resolves the bin itself, so
+            # it never asks Windows to exec a shell script.
+            #
+            # The declared toolchain is now Bun because the owner said so, twice: DEV-022 raised
+            # plan §T2's `pnpm@9.15.9` pin as the conflict it is on this host, and the ruling on
+            # 2026-09-27 was "use bun as package manager". §T2's pin is superseded by that
+            # amendment, not silently ignored -- and
+            # test_the_declared_js_toolchain_is_the_one_every_recipe_uses holds the whole chain
+            # (manifest, Dockerfile, Makefile, pre-commit, this table) to one name, whichever name
+            # is in force, so the next swap has to be an amendment too.
+            #
+            # Bun runs the task, not the tests: the vitest process this produces prints Node's own
+            # DEP0205 and Vite's CJS Node API deprecation -- the evidence the suite executes on
+            # Node, the interpreter `engines.node` names and every prior web gate measured.
             #
             # prerequisite= names the entry point: an uninstalled tree reads SKIPPED with the
             # path in the report rather than crashing, and never reads as a pass.
@@ -301,7 +309,7 @@ PHASES: tuple[Phase, ...] = (
             # relative --config instead breaks esbuild's own path resolution.
             Gate(
                 "unit tests for the design system and state craft",
-                ("node", "node_modules/vitest/vitest.mjs", "run"),
+                ("bun", "run", "test:unit", "--run"),
                 cwd="apps/web",
                 prerequisite="apps/web/node_modules/vitest/vitest.mjs",
             ),
