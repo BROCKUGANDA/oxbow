@@ -190,3 +190,102 @@ The job-handoff agent (H9 enqueue-before-commit, H12 reclaim-after-worker-death,
 drain re-booking) hit its turn cap and said outright: "my gate tests were never actually
 written". Its edits to `apps/api/jobs.py` and `apps/api/worker.py` are uncommitted and
 unverified. Either finish them with tests or revert them — do not commit them as-is.
+
+## Later on 2026-09-27 — the four open items closed, and what they exposed
+
+Everything the three sections above left open is now committed and verified, and each one
+turned out to have a second defect sitting behind it.
+
+**Money scaling: closed.** `optimality_gap_view` was the seventh site, and the reason a
+sweep of `container.economics.minor_units_per_major` could not find it is that it holds no
+read model — it is built from the assumptions, so it had no exponent to borrow. The
+conversion now lives once in `oxbow.quant.money.decimals_for_base`. Immediately next to it,
+`frontier_points` referenced a `decimals` its own scope never bound: five reads of an
+undefined name, so every point on the capacity sweep raised `NameError` on the way out and
+the policy frontier was unreachable rather than mis-scaled. Neither function had a test,
+which is why both survived. Mutation-proved: put the base back and the money test goes red;
+delete the binding and the frontier test fails with the exact `NameError`.
+
+**Null-file warehouse: two defects, found only by mounting the read the stream performs.**
+The `(table, run_id)` cache had nothing to invalidate on, so the first poll of
+`stage_event` filled the dict and every poll after it was served from memory while the
+pipeline appended to the file that had been cached — a run that was advancing looked frozen
+on the exact surface `make demo` and the video depend on. Fixing that exposed a worse one:
+`Gt`, the strictly-after cursor, was translated for SQL and not for the Python matcher,
+where it fell through to an equality test against an int and matched nothing. On the
+null-file deployment every poll returned an empty ledger. The cache gate is 8 tests and both
+halves are mutation-proved (signature check off → 3 red; `Gt` branch out → 5 red), and one
+test counts the actual `read_jsonl` calls so that deleting the cache instead of invalidating
+it also fails.
+
+**The job slice: verified, and its own teardown was the bug.** `jobs.py` and `worker.py`
+are committed with 34 worker tests and 42 API integration tests passing. The race test
+itself could not run: its teardown referenced `StageEventRow`, a class that does not exist,
+and called `delete(Run)` on rows the lifecycle check freezes
+(`run … is complete: its lifecycle state is frozen`). Because teardown errored, rows leaked
+into later tests and three assertions failed on *other* tests' data. One of them was worse
+than pollution: the abort probe compared a **job id** against a **run id**, so it was never
+true, every row was condemned, and the test named "a silent queue is refused" proved nothing
+about a silent queue. After the fix, 10 passed, and mutating the implementation's abort into
+a per-row skip turns it red.
+
+**The persist step refused the best run this repo has produced.** The LightGBM categorical
+fix worked — a 40k run scored all five folds, two of them degraded to
+`scorecard_and_rules_only` because the GBM fit was refused on a thin positive count. Then it
+died writing the artifact: folds that degrade carry different channels than folds that don't,
+`write_run_artifacts` concatenated them with `vertical_relaxed`, which aligns by position and
+refuses a name mismatch. `ComputeError: schema names differ: got p_gbm, expected p_fused_raw`.
+Every model fitted, not one number on disk. It now aligns on names, and
+`SCORED_ROW_COLUMNS` — documented since P4b as "the columns every persisted scored row
+carries" and enforced by nothing until today — is asserted against the union, so an
+all-degraded run refuses instead of shipping a `p_gbm` column of pure nulls.
+
+### The number that gates the model card
+
+Calibration is refusing on arithmetic, not on a defect. The measured 40k slice carries
+**108 positives across 79,998 account-instant rows** (base rate 0.001350). The floors are
+`min_positives_for_calibration: 50` and `isotonic_min_positives: 500`
+(`config/model.yaml:133,141`), applied to the *validation* split, so every fold reports
+`calibrated=False` and says so — which is the documented behaviour, not a bug. At the
+measured base rate the Platt floor needs roughly 110k events and isotonic roughly 1.1M.
+`MODEL_CARD.md` cannot show a fitted reliability curve from a 40k slice, and pretending
+otherwise would be the fabrication this file exists to prevent. Decision pending: after the
+5-fold run lands, whether to spend a ~120k run (~3× the wall time) before 2026-10-01 to get
+a real calibration curve, or ship the numbers with calibration declared refused.
+
+### Runtime capability, measured rather than assumed
+
+The host has 16 GB and was holding **398 MB free** while a score run worked. A second
+`oxbow score --run-id 01M3GQD57G…` — launched by a background agent that then hit its turn
+cap — ran 2h16m at ~75% of a core and produced **zero artifacts** while competing for that
+memory; the run that died mid-fit was memory pressure, not a hang. Two rules follow and both
+bit once already: check `tasklist`/`Get-CimInstance` for a second owner of the machine before
+diagnosing your own change, and never read progress from a redirected Python log — stdout is
+block-buffered to a file, so a stage can print nothing for 45 minutes while working. Judge
+from what lands on disk and from process CPU.
+
+Do not run `ruff check --fix --select RULE`. Scoping the fix makes every *other* rule's
+`# noqa` look unused, and RUF100 deleted the `# noqa: F401` from the osqp-before-pyarrow
+native-load pin — the comment that stops the next plain autofix from removing the import and
+restoring the exit-139 segfault (DEV-021).
+
+### What still stands between here and a submission
+
+1. The 5-fold score run (`out/score/01M3H4P8…`) has to land, then
+   `oxbow backtest --corpus out/score/<run>/backtest_corpus.parquet` for the 8-row ablation
+   including the leaking control, and the tail metrics.
+2. `uv run oxbow eval`, so `MODEL_CARD.md` and `ECONOMICS_CARD.md` lose
+   `provenance: fake_harness`. The four generated cards in the tree right now are stale
+   regenerations of the digest table only; re-generate at the end rather than committing a
+   document that goes stale within the hour.
+3. P6's two corpus-dependent integration tests
+   (`tests/integration/test_p6_real_corpus_folds.py`, `test_p6_landed_corpus_embargo.py`)
+   are still uncommitted because they cannot pass before (1). Run them before committing.
+4. Postgres needs score + fold + decision rows or `demo_seed.py --create` will keep refusing
+   — correctly. Then `--restore --boot-budget 90`, re-capture `docs/screens/`, and only then
+   film.
+5. Owner-only: `gh auth login`, the public repo push, team names for component 05, and
+   rotating the Autonoma credentials pasted into chat on 2026-09-27.
+6. `make lint` is not green: ruff findings remain (some pre-existing, e.g. two `RUF100` on
+   `worker.py` at HEAD) and mypy debt is ~304 across 64 files.
+
