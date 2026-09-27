@@ -43,20 +43,27 @@ The two P0 blockers are cleared: the Docker daemon is running (B1) and disk is s
 (B3), though free disk fell from 104 GB to 81 GB as the corpora and artifacts landed.
 
 `make` still does not exist on this host, so every §16 gate phrased as `make X` has been
-run as the underlying command (see "Two things about this host" below). `pnpm` is absent
-too — plan §T2 pins `pnpm@9.15.9` and this box has never had it — so the web checks run as
-`node node_modules/<pkg>/...` through the installed tree, which is what `verify.py`'s P8
-gates now do. `bun` 1.4.2 *is* installed, and twice an agent treated that as licence to
-migrate the repository's declared toolchain to it; DEV-022 records the proposal as
-rejected, and `test_the_declared_js_toolchain_is_the_one_every_recipe_uses` holds manifest,
-Dockerfile, Makefile, pre-commit recipes and the phase table to the same answer. One
-consequence is still open and real: `apps/web/node_modules` is the hoisted tree the second
-`bun install` wrote (its `.bin` holds `.exe`/`.bunx` shims, not pnpm's `.pnpm` layout), so
-this host's dependency tree matches neither manifest until someone runs
-`pnpm install --frozen-lockfile` on a box that has pnpm. Nothing installed a system
-dependency to make that happen. Playwright is usable without a
-download because a chromium already sits in `~/AppData/Local/ms-playwright` — the config
-points at it by path rather than installing one.
+run as the underlying command (see "Two things about this host" below). The JS toolchain is
+**Bun**: `packageManager: "bun@1.4.2"` with a committed `bun.lock`, and no `pnpm-lock.yaml`.
+That is DEV-022, an amendment the owner ruled on twice rather than a migration an agent
+decided alone, and `test_the_declared_js_toolchain_is_the_one_every_recipe_uses` now holds
+manifest, Dockerfile, Makefile, pre-commit recipes and the phase table to that one name -- so
+a future swap has to be another amendment, whichever direction it goes in. Plan §T2 still
+prints `pnpm@9.15.9`; DEV-022 supersedes it, and quoting §T2 alone gives a stale answer.
+
+Nothing about the swap changed the dependency bytes, and that was measured rather than
+assumed: diffing `bun.lock` against the `pnpm-lock.yaml` it replaced gives **438 resolved
+packages on each side, identical sets, 438/438 matching sha512 integrity hashes, zero version
+drift**, and all 40 declared dependencies resolve to exactly their pin -- which is the check
+that matters for the `pnpm.overrides` -> `overrides` move (Bun ignores the `pnpm` key), since
+`@tailwindcss/oxide`, its `win32-x64-msvc` binary and `@tailwindcss/node` are all locked at
+4.0.0. The earlier open item -- `node_modules` being a tree that matched neither manifest,
+because two sessions whipsawed the declaration while the install stayed Bun's -- is closed:
+`bun install --frozen-lockfile` reports 340 installs across 439 packages, no changes.
+Bun is the runner, not the runtime; `bun run build` and the vitest process it starts execute
+on Node, the interpreter `engines.node` names. Nothing installed a system dependency to get
+any of this. Playwright is usable without a download because a chromium already sits in
+`~/AppData/Local/ms-playwright` -- the config points at it by path rather than installing one.
 
 ## The load-bearing fact: DEV-011
 
@@ -499,7 +506,10 @@ not on this list is *not* verified, regardless of what a package's own tests cla
 | P8's three gates, through the gate runner | `uv run python -c "…verify._run_gate(g) for g in PHASES['P8'].gates"` | `[('unit tests…','PASS'), ('typecheck…','PASS'), ('biome lint and format…','PASS')]` — the same argv the phase table holds, executed rather than hand-run |
 | Full web suite, this session | `node node_modules/@playwright/test/cli.js test` (cached chromium, fixture app on :3100, live app on :3101, uvicorn on :8123) | **24 passed, 1 recorded skip, 1 red** in 16.1m. Separately: axe **10/10 routes clean**, cls **3/3** with `/alerts 0` and `/cases 0`, and the three reworked files **11 passed / 1 skipped / 1 red** in 1.9m |
 | The reduced-motion fix, both paths | `page.emulateMedia({reducedMotion:'reduce'})` and `/dev/states?motion=reduced` | OS path: 49 sweep elements at the first frame → **0** once hydrated, `running=0`. Query path: 49 present, **0 visible, running 0** (`animation-duration: 1e-06s`), `data-motion="reduced"`, document height **4549 unchanged** on both paths. Before this session `data-motion` had **no writer at all**, so the forced path's entire CSS block matched nothing |
-| The JS-toolchain gate can fail | mutation: `packageManager` → `bun@1.4.2`, then restore | red on `assert False where False = 'bun@1.4.2'.startswith('pnpm@')`; **45 passed** restored |
+| The JS-toolchain gate can fail | mutation: `packageManager` → a name that is not the declared one, then restore | **restated after DEV-022.** This row used to record `packageManager` → `bun@1.4.2` turning the gate red, because the guard asserted `startswith("pnpm@")`. The guard's subject moved to Bun, so that mutation now passes and the old entry would have been a stale claim left standing. Re-measured on the current guard: renaming `packageManager` away from `bun@1.4.2`, or renaming the top-level `overrides` key back to `pnpm`, each turns `test_the_declared_js_toolchain_is_the_one_every_recipe_uses` red; so does pointing `make lint-web` at `pnpm lint`. Restored state green |
+| The swap changed no dependency bytes | diff `bun.lock` against the `pnpm-lock.yaml` at `HEAD~1` in git, matched on `name@version` by registry hash | **438 resolved packages each side, identical sets, 438/438 sha512 matches, 0 version drift, 40/40 declared deps at their exact pin**; `@tailwindcss/oxide`, `oxide-win32-x64-msvc`, `@tailwindcss/node` locked at 4.0.0. Only 3 packages declare a lifecycle script (esbuild, sharp, biome) and all three were exercised working; the fresh `bun run build` CSS carries `--tw-` properties, which only the oxide napi binding writes |
+| The edge is the browser's only origin | `COMPOSE_PROFILES=full API_PORT=8011 docker compose up -d --no-build web caddy`, then curl through `:8080` | caddy **healthy** off its 2019 admin probe; `/` → 307 → `/dashboard` 200, `/cases/<id>` and `/dev/states` 200; `/api/runs` 401 `application/problem+json` unauthenticated and 200 with a token minted at the edge; `/api/nope` 400 from FastAPI, i.e. the `/api` prefix arrived unstripped. From inside the web container `api:8000/healthz` → **200** where the previously-baked `127.0.0.1:8000` → **ECONNREFUSED**, which is the defect DEV-023 found and fixed. Not measured: per-frame SSE flushing (see BACKLOG) |
+| Web suite on the Bun toolchain | `bun run test:unit --run`; `bun run typecheck`; fixture build + `next start` on :3100 + `bun run test:e2e` | **51/51 unit over 11 files**, typecheck clean, **e2e 23 passed / 3 skipped / 0 failed** in 2.4m. The vitest process printed Node's DEP0205 and Vite's CJS-API warning, which is the evidence Bun ran the task and Node ran the tests. The 3 skips need the live API origin; Docker was down at that moment |
 | The API served, and the proxy proved | `uv run uvicorn main:app --port 8123 --app-dir apps/api` with `OXBOW_WAREHOUSE=null`; web rebuilt with `OXBOW_API_ORIGIN=:8123` | `/healthz 200`, `/api/meta/dataset 200` and `/api/graph/subgraph 200` **with a minted demo token**, `401 application/problem+json` without one. Host :8000 is Windows `Microsoft-HTTPAPI/2.0` (PID 4), which is why every browser check before this returned a 401 that was not the API's |
 | P4 guardrail tests | `uv run pytest -q tests/unit -k p4` | **16 passed** (9 guards + 6 calibration/fusion/explain + the scorer seam) |
 | 1.5M-row ingest | `uv run oxbow ingest -s paysim --limit 1500000` | **1,500,000 canonical events, 0 quarantined, 0 silently coerced, 69.4s**, window `2014-01-02 → 2014-05-24` = 143 days, which is what makes the 30-day embargo arithmetically satisfiable |
@@ -580,9 +590,11 @@ Two things about this host that the plan's wording hides
    has been run as the underlying command instead (`uv run ruff check .`,
    `uv run pytest -q tests`, `uv run python scripts/verify.py`, `uv run lint-imports`).
    The substance is covered; the literal target names are not executable on this
-   machine, and `make web`/`lint-web` additionally assume `pnpm`, which is also absent
-   (the frontend checks were run as `./node_modules/.bin/tsc --noEmit` and
-   `./node_modules/.bin/biome check .`). A CI runner with GNU make is the place these
+   machine. The web recipes do run once invoked directly, though: `make web`, `lint-web`
+   and `test-web` are `bun run` forms now (DEV-022), and bun is installed, so the only
+   missing layer is `make` itself -- the frontend checks were run as `bun run lint`,
+   `bun run typecheck` and `bun run test:unit --run` rather than as raw
+   `./node_modules/.bin/...`. A CI runner with GNU make is the place these
    become the plan's own commands.
 2. **A worker kept committing to `main` after reporting it had finished, and the
    orchestrator mis-read that as corruption.** Sequence: the webhook/env commit landed,
