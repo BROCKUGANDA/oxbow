@@ -784,6 +784,33 @@ key back, which turns the suite red.
   Bun, reports the identical 35 + 1. So the lint gate's red is pre-existing source lint in the
   working tree's 70 uncommitted files, not a consequence of this swap.
 
+### The switch is byte-neutral, and that is checkable rather than asserted
+
+The question a package-manager swap has to answer is whether the tree changed. Diffing `bun.lock`
+against the `pnpm-lock.yaml` it replaced (taken from git, not from memory), matched on
+`name@version` with the registry's own integrity hash:
+
+- **438 resolved packages on each side; the two sets are identical** -- nothing only in one.
+- **438 of 438 sha512 integrity hashes match**, so every tarball is the same bytes, not merely the
+  same version string.
+- Zero per-name version drift, and every one of the 40 declared dependencies and devDependencies
+  resolves to exactly its pin -- which is what makes the `overrides` move (Bun ignores
+  `pnpm.overrides`) verifiable rather than assumed: `@tailwindcss/oxide`,
+  `@tailwindcss/oxide-win32-x64-msvc` and `@tailwindcss/node` are all locked at 4.0.0, and
+  `bun.lock` records the `overrides` block itself.
+- Of the packages declaring a lifecycle script -- only three, `esbuild`, `sharp`,
+  `@biomejs/biome` -- none needed one: esbuild transforms, sharp encodes a PNG, biome reports
+  1.9.4, and the fresh `bun run build` emitted 41,762 bytes of CSS containing `--tw-` custom
+  properties, which only the oxide native binding can produce.
+- `bun run typecheck` clean; `bun run test:unit --run` 51/51; the Playwright state suite
+  **23 passed, 3 skipped, 0 failed** against a fixture build served by `next start` on Node (the
+  3 skips need the live API origin, and the Docker daemon was down at that moment).
+- `bun audit --json` on the same tree: 53 unique advisories by GHSA (6 critical, 20 high, 23
+  moderate, 4 low), 34 of them on `next@15.1.3`. Identical pin, identical hash in the pnpm lock, so
+  none of it is a migration artifact -- it is the finding the unrunnable gate was hiding, and it is
+  written up in `BACKLOG.md`.
+
+
 Digest pins resolved with `docker buildx imagetools inspect` on 2026-09-27:
 `oven/bun:1.4.2-debian@sha256:4f6e31d1a54d6a3dd312daef655fc998101b5043d52e12592ac293ef04b9bc73`.
 
