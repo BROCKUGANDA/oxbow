@@ -31,6 +31,12 @@ import { join } from 'node:path';
 
 import { expect, test } from '@playwright/test';
 
+// Playwright's own video and trace are not used: video wants the ffmpeg bundle this project
+// does not install, and a trace of a 3:30 take is a larger artifact than the film. These have to
+// sit at module scope — `test.use()` inside a `describe` forces a new worker and Playwright
+// refuses it with a hard error at collection, which is a way to discover that on filming day.
+test.use({ trace: 'off', video: 'off', screenshot: 'off' });
+
 const LIVE_BASE = process.env.OXBOW_LIVE_WEB_BASE_URL;
 const CASE_ID = process.env.OXBOW_DEMO_CASE_ID;
 const FRAMES_DIR = process.env.OXBOW_DEMO_FRAMES_DIR ?? 'out/video/frames';
@@ -72,10 +78,8 @@ const reason = blocked();
 
 test.describe('the demo tour', () => {
   test.skip(reason !== null, reason ?? '');
-  // Playwright's own video and trace are not used: video wants the ffmpeg bundle this project
-  // does not install, and a trace of a 3:30 take is a larger artifact than the film.
-  test.use({ trace: 'off', video: 'off', screenshot: 'off' });
-
+  // One continuous take: a separate file per beat would have to be stitched, and the stitch
+  // is where audio and picture drift.
   test('walks the seven beats on the script clock', async ({ page }) => {
     test.setTimeout(420_000); // 3:30 of screen time, plus navigation and frame latency
 
