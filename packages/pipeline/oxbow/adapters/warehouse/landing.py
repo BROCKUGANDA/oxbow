@@ -55,7 +55,12 @@ from typing import Any, Final
 
 import polars as pl
 
-from oxbow.adapters.warehouse.models import ACCOUNT_KEY_LEN, CURRENCY_LEN, RUN_ID_LEN
+from oxbow.adapters.warehouse.models import (
+    ACCOUNT_KEY_LEN,
+    CURRENCY_LEN,
+    REASON_CODE_LEN,
+    RUN_ID_LEN,
+)
 from oxbow.ports.warehouse import assert_run_id
 
 
@@ -255,6 +260,23 @@ def _current_score_per_account(part: pl.DataFrame) -> pl.DataFrame:
     )
     kept = ordered.unique(subset=["account_key"], keep="last")
     return kept.sort("_landing_row").drop("_landing_row")
+
+
+def _require_out_of_sample(part: pl.DataFrame, *, table: str, role: str) -> pl.DataFrame:
+    """Refuse an empty slice rather than land an empty table.
+
+    ``score_rows`` has always raised on this input, and these tables are read by the same studio
+    panes beside it: the run with no out-of-sample rows would otherwise post a green warehouse
+    stage with a blank band table, a blank scorecard and a blank case rail, and nothing on disk
+    would say which of "no accounts", "wrong role" and "the mapper refused" happened.
+    """
+    if part.height == 0:
+        raise LandingError(
+            f"{table}: no scored rows with role={role!r}, so there is nothing out-of-sample to "
+            "describe; the frame that would carry them is "
+            "out/score/<run>/scored_rows.parquet"
+        )
+    return part
 
 
 def score_rows(
@@ -1395,7 +1417,11 @@ def band_definition_rows(
             raise LandingError(
                 f"the scored frame has no {column!r} column, so the band table cannot be counted"
             )
-    part = _current_score_per_account(scored.filter(pl.col("role") == role))
+    part = _require_out_of_sample(
+        _current_score_per_account(scored.filter(pl.col("role") == role)),
+        table="band_definition",
+        role=role,
+    )
     grouped = part.group_by("band").agg(
         pl.col("score_points").min().alias("lower_points"),
         pl.col("score_points").max().alias("upper_points"),
@@ -1486,7 +1512,7 @@ _BIN_INDEX_KEY: Final = ("woe_descending", "bin_label_ascending")
 
 def _scorecard_entries(
     scored: pl.DataFrame, *, role: str
-) -> tuple[list[tuple[str, int, dict[str, Any]]], list[str]]:
+) -> tuple[list[tuple[str, int, dict[str, Any]]], list[str], dict[str, set[str]]]:
     """(account_key, position, entry) over the run's current out-of-sample rows, plus refusals.
 
     A row whose payload repeats an attribute refuses that whole row: ``uq_scorecard_point`` is
@@ -1497,13 +1523,23 @@ def _scorecard_entries(
     attribute rather than printed per account: one categorical bin label longer than the
     128-character column would otherwise emit a refusal line for every account the scorecard
     touched, and a finding printed 43,046 times is noise, not a finding.
+
+    The third return value maps an account to the attributes dropped from ITS OWN row. It exists
+    because ``scorecard_point_rows`` publishes a per-account list the case page sums against
+    ``band_definition``'s point ranges, and an account missing one attribute would read as a SAFER
+    account — so an account with a dropped entry lands nothing. It stays per-account because
+    making it run-level would let one corrupt row empty the table of 43,000 accounts' rows.
     """
     if "points_json" not in scored.columns:
         raise LandingError(
             "the scored frame carries no `points_json`, so no attribute contribution exists to "
             "land; the artifact that would be needed is out/score/<run>/scored_rows.parquet"
         )
-    part = _current_score_per_account(scored.filter(pl.col("role") == role))
+    part = _require_out_of_sample(
+        _current_score_per_account(scored.filter(pl.col("role") == role)),
+        table="scorecard_bin / scorecard_point",
+        role=role,
+    )
     missing = [name for name in ("label_is_fraud",) if name not in part.columns]
     if missing:
         raise LandingError(
@@ -1513,6 +1549,7 @@ def _scorecard_entries(
     entries: list[tuple[str, int, dict[str, Any]]] = []
     refused: list[str] = []
     dropped: dict[tuple[str, str], int] = {}
+    dropped_by_account: dict[str, set[str]] = {}
     for position, record in enumerate(part.to_dicts()):
         pending: list[tuple[str, int, dict[str, Any]]] = []
         account_key = str(record.get("account_key", ""))
@@ -1553,12 +1590,14 @@ def _scorecard_entries(
             if bin_label is None:
                 reason = "its bin label is empty or longer than the 128-character column"
                 dropped[(feature, reason)] = dropped.get((feature, reason), 0) + 1
+                dropped_by_account.setdefault(account_key, set()).add(feature)
                 continue
             points = _integer(entry.get("points"))
             woe = _ratio(entry.get("woe"))
             if points is None or woe is None:
                 reason = f"points={entry.get('points')!r}/woe={entry.get('woe')!r} is not a number"
                 dropped[(feature, reason)] = dropped.get((feature, reason), 0) + 1
+                dropped_by_account.setdefault(account_key, set()).add(feature)
                 continue
             pending.append(
                 (
@@ -1587,9 +1626,10 @@ def _scorecard_entries(
     for (feature, reason), count in sorted(dropped.items()):
         refused.append(
             f"attribute {feature}: {count:,} contribution(s) refused because {reason}; the points "
-            "still count in score.scorecard_points, but the row has no bin to land against"
+            "still count in score.scorecard_points, but the row has no bin to land against, so "
+            "no account lands a scorecard_point list without it"
         )
-    return entries, refused
+    return entries, refused, dropped_by_account
 
 
 def _bin_table(
@@ -1679,10 +1719,16 @@ def _scorecard_population(
     set[str],
     list[str],
 ]:
-    """The landed contributions, the bin table counted from them, and the refusals between them."""
-    entries, refused = _scorecard_entries(scored, role=role)
+    """The landed contributions, the bin table counted from them, and the refusals between them.
+
+    The fifth value is the per-account record of entries dropped as unreadable. It stays
+    per-account on purpose: promoting it to a run-level refusal, as the bin table's own conflicts
+    are, would remove one account's corrupt attribute from EVERY account's list — and because an
+    account lands whole or not at all, one bad row in a 43k-account run would empty the table.
+    """
+    entries, refused, dropped_by_account = _scorecard_entries(scored, role=role)
     bins, refused_attributes, bin_refusals = _bin_table(entries)
-    return entries, bins, refused_attributes, refused + bin_refusals
+    return entries, bins, refused_attributes, refused + bin_refusals, dropped_by_account
 
 
 def scorecard_bin_rows(
@@ -1693,7 +1739,7 @@ def scorecard_bin_rows(
     THE ORDER, STATED: rows come out sorted by ``(attribute, bin_index)`` and ``bin_index`` follows
     :data:`_BIN_INDEX_KEY`. ``uq_scorecard_bin`` is ``(run_id, attribute, bin_index)``.
     """
-    _entries, bins, _refused, refused = _scorecard_population(scored, role=role)
+    _entries, bins, _refused, refused, _dropped = _scorecard_population(scored, role=role)
     by_attribute: dict[str, list[dict[str, Any]]] = {}
     for bucket in bins.values():
         if bucket["woe"] is None or bucket["points"] is None or bucket["population_share"] is None:
@@ -1738,9 +1784,14 @@ def scorecard_point_rows(
     attributes off a twenty-attribute scorecard would report the account as being in a safer band
     than it is. The refusal says which attributes the fold-scoped scorecards denied it.
     """
-    entries, bins, refused_attributes, refused = _scorecard_population(scored, role=role)
+    entries, bins, refused_attributes, refused, dropped_by_account = _scorecard_population(
+        scored, role=role
+    )
     by_account: dict[str, list[dict[str, Any]]] = {}
-    incomplete: dict[str, int] = {}
+    incomplete: dict[str, int] = {
+        account_key: len(attributes) for account_key, attributes in dropped_by_account.items()
+    }
+    unreportable: set[str] = set()
     for account_key, _position, entry in entries:
         attribute = str(entry["attribute"])
         bucket = bins.get((attribute, str(entry["bin_label"])))
@@ -1754,10 +1805,23 @@ def scorecard_point_rows(
             "population_share": None if bucket is None else float(bucket["population_share"]),
             "bad_rate": None if bucket is None else float(bucket["bad_rate"]),
         }
+        if len(attribute) > REASON_CODE_LEN:
+            # `reason_code` copies the attribute and is the narrower column, so a feature key can
+            # fit `attribute` and still be unlandable here. Truncating it would mint a code nobody
+            # issued; refusing keeps the account whole-or-nothing and says which key it was.
+            unreportable.add(attribute)
+            incomplete[account_key] = incomplete.get(account_key, 0) + 1
+            continue
         if bucket is None or attribute in refused_attributes:
             incomplete[account_key] = incomplete.get(account_key, 0) + 1
             continue
         by_account.setdefault(account_key, []).append(row)
+    for attribute in sorted(unreportable):
+        refused.append(
+            f"scorecard_point: attribute {attribute!r} is {len(attribute)} characters and "
+            f"reason_code is {REASON_CODE_LEN}; the code a case page shows IS the attribute key, "
+            "so every account carrying it is refused rather than the code cut mid-word"
+        )
 
     rows: list[dict[str, Any]] = []
     for account_key in sorted(by_account):
@@ -1766,10 +1830,12 @@ def scorecard_point_rows(
         rows.extend(sorted(by_account[account_key], key=lambda row: row["attribute"]))
     if incomplete:
         refused.append(
-            f"scorecard_point: {len(incomplete):,} account(s) refused because at least one of their "
-            f"attributes has no run-level bin table ({len(refused_attributes)} attribute(s) "
-            "refused above); an account lands whole or not at all, because the case page sums these "
-            "rows against band_definition's point ranges and a short list reads as a safer account"
+            f"scorecard_point: {len(incomplete):,} account(s) refused because at least one of "
+            "their attributes either has no run-level bin table "
+            f"({len(refused_attributes)} attribute(s) refused above) or arrived unreadable on "
+            f"that account's own row ({len(dropped_by_account):,} account(s) affected); an "
+            "account lands whole or not at all, because the case page sums these rows against "
+            "band_definition's point ranges and a short list reads as a safer account"
         )
     return rows, refused
 
@@ -2027,12 +2093,32 @@ def evidence_event_rows(
             )
             continue
         amount = _integer(record.get("amount_minor"))
+        if amount is None:
+            # Refused once, for the event: `transaction_rows` bars the same event from the money
+            # table, and a timeline row whose amount is null reads as a payment of nothing rather
+            # than as an amount that could not be read.
+            refused.append(
+                f"event {txn_id}: amount_minor={record.get('amount_minor')!r} is not an integer "
+                "minor-unit amount (DEV-005), so it is left off the timeline rather than shown "
+                "as an amount-less payment"
+            )
+            continue
         for side, key_column, other in (
             ("outbound", "account_from", "account_to"),
             ("inbound", "account_to", "account_from"),
         ):
-            account_key = _account_key(record.get(key_column))
+            raw_side = record.get(key_column)
+            account_key = _account_key(raw_side)
             if account_key is None:
+                if raw_side is not None:
+                    # A null side is a one-sided event, which is a fact. A side that is present
+                    # but not a 12-character key would silently delete that account's view of the
+                    # payment while the other side still landed.
+                    refused.append(
+                        f"event {txn_id} {side} side: {raw_side!r} is not a "
+                        f"{ACCOUNT_KEY_LEN}-character account key, so the holder of that side "
+                        "gets no timeline row"
+                    )
                 continue
             rows.append(
                 {
@@ -2064,9 +2150,10 @@ def evidence_event_rows(
         account_key = _account_key(record.get("account_key"))
         occurred = record.get("as_of_ts")
         if account_key is None or not isinstance(occurred, datetime):
+            raw_key = str(record.get("account_key"))
             refused.append(
-                f"account {str(record.get('account_key'))[:ACCOUNT_KEY_LEN]}: no key or as-of "
-                f"timestamp, so its rule firings cannot be placed on a timeline"
+                f"account {raw_key!r} ({len(raw_key)} characters): no key or as-of timestamp, so "
+                f"its rule firings cannot be placed on a timeline"
             )
             continue
         for column in severity_columns:
@@ -2167,19 +2254,30 @@ def community_index_by_raw_label(
 
     rows: list[dict[str, Any]] = []
     index_by_raw: dict[int, int] = {}
-    for position, record in enumerate(ordered.to_dicts()):
+    refused: list[str] = []
+    for record in ordered.to_dicts():
         raw = _integer(record.get(NODE_COMMUNITY_COLUMN))
         if raw is None:
+            # Named, never skipped: a community the remap cannot read is a group of nodes the
+            # studio will not colour, and an empty community table with no refusal beside it is
+            # indistinguishable from a graph that found no communities.
+            refused.append(
+                f"community group {record.get(NODE_COMMUNITY_COLUMN)!r} "
+                f"(a {type(record.get(NODE_COMMUNITY_COLUMN)).__name__}, "
+                f"{record.get('size')} node(s)): `{NODE_COMMUNITY_COLUMN}` has to be an integer "
+                "label to be remapped to a canonical index; the frame that would carry it is "
+                "out/graph/<run>/nodes.parquet"
+            )
             continue
-        index_by_raw[raw] = position
+        index_by_raw[raw] = len(rows)
         rows.append(
             {
-                "canonical_index": position,
+                "canonical_index": len(rows),
                 "raw_label": str(raw),
                 "size": _integer(record.get("size")),
             }
         )
-    return index_by_raw, rows, []
+    return index_by_raw, rows, refused
 
 
 def community_rows(
@@ -2226,6 +2324,11 @@ def community_rows(
     )
     wanted = {"account_from", "account_to", "currency", "total_value_minor"}
     internal: dict[int, dict[str, int]] = {}
+    #: Communities with at least one internal-money row that could not be stated. They get no
+    #: total at all: `total_minor` of 0 would claim the community circulates nothing, and a
+    #: partial sum would be a smaller wrong number rather than a true one. Both columns are
+    #: nullable precisely so the absence can be recorded instead of invented.
+    unstated: set[int] = set()
     if wanted <= set(pairs.columns):
         joined = (
             pairs.join(src, on="account_from", how="inner")
@@ -2240,17 +2343,44 @@ def community_rows(
         for record in joined.to_dicts():
             raw = _integer(record.get("src_community"))
             total = _integer(record.get("total_minor"))
-            if raw is None or total is None:
+            currency = _name(record.get("currency"), limit=CURRENCY_LEN)
+            where = (
+                f"community {record.get('src_community')!r} " f"currency {record.get('currency')!r}"
+            )
+            if raw is None:
+                refused.append(
+                    f"{where}: its community label is not an integer, so its internal money "
+                    "cannot be attributed to any community row"
+                )
                 continue
-            internal.setdefault(raw, {})[str(record.get("currency"))] = total
+            if total is None:
+                refused.append(
+                    f"{where}: its internal `total_value_minor` sums to "
+                    f"{record.get('total_minor')!r}, which is not an integer minor-unit amount "
+                    "(DEV-005), so the community books no internal money"
+                )
+                unstated.add(raw)
+                continue
+            if currency is None:
+                refused.append(
+                    f"{where}: an amount has to name the {CURRENCY_LEN}-character currency it is "
+                    f"in, so the community books no internal money rather than a sum in no "
+                    "currency"
+                )
+                unstated.add(raw)
+                continue
+            internal.setdefault(raw, {})[currency] = total
 
     for row in rows:
         raw = int(row["raw_label"])
         currencies = internal.get(raw, {})
-        if len(currencies) == 1:
+        if raw in unstated:
+            row["total_minor"] = None
+            row["currency"] = None
+        elif len(currencies) == 1:
             currency, total = next(iter(currencies.items()))
             row["total_minor"] = total
-            row["currency"] = _name(currency, limit=CURRENCY_LEN)
+            row["currency"] = currency
         elif not currencies:
             row["total_minor"] = 0
             row["currency"] = None

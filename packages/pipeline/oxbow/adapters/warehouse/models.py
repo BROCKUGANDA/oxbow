@@ -50,6 +50,10 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 RUN_ID_LEN: Final = 26
 ACCOUNT_KEY_LEN: Final = 12
 CURRENCY_LEN: Final = 3
+#: ``scorecard_point.reason_code`` is narrower than the ``attribute`` it copies, so a feature key
+#: long enough to fit its own column can still be unlandable as a reason. Named because the
+#: mapper has to refuse on the width rather than let Postgres raise on insert.
+REASON_CODE_LEN: Final = 64
 
 # A run stops accepting writes in these states, which is what lets a packet pin
 # one and stay truthful forever (plan §15).
@@ -379,7 +383,7 @@ class ScorecardPoint(Base):
     bin_label: Mapped[str] = mapped_column(String(128), nullable=False)
     points: Mapped[int] = mapped_column(Integer, nullable=False)
     woe: Mapped[float] = mapped_column(Double, nullable=False)
-    reason_code: Mapped[str] = mapped_column(String(64), nullable=False)
+    reason_code: Mapped[str] = mapped_column(String(REASON_CODE_LEN), nullable=False)
     population_share: Mapped[float] = mapped_column(Double, nullable=False)
     bad_rate: Mapped[float] = mapped_column(Double, nullable=False)
 
