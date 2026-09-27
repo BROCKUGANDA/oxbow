@@ -93,9 +93,9 @@ def test_the_decision_sequence_has_no_gaps() -> None:
     """A hole in the numbering is how an unwritten decision stays invisible."""
     numbers = sorted(int(tag[4:]) for tag in _declared())
     assert numbers, "no DEV entries parsed — did the heading format change?"
-    gaps = sorted({n for n in range(1, max(numbers) + 1)} - set(numbers))
+    gaps = sorted(set(range(1, max(numbers) + 1)) - set(numbers))
     assert gaps == [], (
-        f"DECISIONS.md skips {['DEV-%03d' % g for g in gaps]}; the sequence runs "
+        f"DECISIONS.md skips {[f'DEV-{g:03d}' for g in gaps]}; the sequence runs "
         f"{min(numbers)}..{max(numbers)} with {len(numbers)} entries"
     )
     assert len(numbers) == len(set(numbers)), "a DEV number is declared twice"
