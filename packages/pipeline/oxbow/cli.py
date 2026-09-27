@@ -1278,10 +1278,23 @@ def _score_models_and_land(
         f"[score] model artifacts: {score_dir} — {scored_rows.height} scored rows with SHAP, "
         f"{corpus.height}-row backtest corpus (economics in {economics.currency} minor units)"
     )
+    # The count has to be the number of folds that produced scored rows, not the number of
+    # entries in the summary: on 2026-09-27 the run landed fold 0 and skipped folds 1-4 to
+    # `LightGBMError: bad allocation`, and this line still read "5 fold(s) scored". A
+    # progress line that counts refusals as passes is how a phase gets claimed on a tree
+    # that never finished fitting, which is the failure this repository keeps finding.
+    scored_folds = [entry for entry in runs_summary if "skipped" not in entry]
+    skipped_folds = [entry for entry in runs_summary if "skipped" in entry]
     ctx.echo(
-        "[score] RESULT: rules, features, the grain bridge, the fold-scoped providers and the "
-        f"model stack all ran; {len(runs_summary)} fold(s) scored and landed under {score_dir}"
+        f"[score] RESULT: rules, features, the grain bridge, the fold-scoped providers and the "
+        f"model stack all ran; {len(scored_folds)} of {len(runs_summary)} fold(s) scored and "
+        f"landed under {score_dir}"
     )
+    for entry in skipped_folds:
+        ctx.echo(
+            f"[score] fold {entry.get('fold')} did NOT score: {entry.get('skipped')} — the "
+            f"artifact carries it as a skip, and the phase cannot be claimed on the folds that ran"
+        )
     return EXIT_OK
 
 

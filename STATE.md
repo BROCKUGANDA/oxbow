@@ -14,11 +14,11 @@ the position.
 | **P3a** | time-stamped directed multigraph, rails, Leiden, cycles, subgraph cap | **DONE** | `verify.py --phase P3a` 2/2 — 80 tests (61 prior + `test_p3a_self_edges.py`'s 19), and two `oxbow graph` runs landing **5 byte-identical artifacts** with self-transfers admissible in the input |
 | **P2** | 60-75 features, feature-spec hash, leakage gate proven to bite, purged splits | **DONE** | `verify.py --phase P2` 2/2, re-measured directly after: `tests/test_leakage.py` **19 passed** (exit 0) and `tests/unit -k p2` **78 passed** (exit 0) — 78 where it was 76 before, so the P4 worker's new tests landed without breaking this layer |
 | **P3b** | golden fixture, rules R1-R12 | **DONE** | `verify.py --phase P3b` **2/2 PASS** — 86 tests across rules, golden matrix and the DEV-015 labelled-cycle file (the four that were failing earlier are green now) |
-| **P4** | WOE scorecard, LightGBM, Isolation Forest, calibration, fusion, SHAP | in progress — **the two blockers are gone** | The segfault was a native load order (DEV-021) and the scorecard's monotonic binning had never run behind a swallowing fallback (DEV-020); both are fixed and mutation-proven. 15 §10 guardrail tests now exist (`test_p4_scorecard_guards.py`, `test_p4_calibration_fusion.py`), `tests/unit -k p4` = 16 passed. What is left is one scored run landing: `uv run oxbow score --max-events 40000` has cleared rules (736 hits / 72,135 accounts), features (75 published), and the fold plan (30-day embargo accepted over 2014-01-02 → 2014-06-12) and is in the per-fold model stack as at this entry. No gate in `verify.py` yet, because there is no run to gate on |
+| **P4** | WOE scorecard, LightGBM, Isolation Forest, calibration, fusion, SHAP | in progress — **the first real scored run has landed** | The segfault was a native load order (DEV-021) and the monotonic binning had never run behind a swallowing fallback (DEV-020); both fixed and mutation-proven. On 2026-09-27 `uv run oxbow score --max-events 40000` finished end to end for the first time and wrote `out/score/01M3FZ2GC3J71AYT1QEKPWEDKJ/`: **fold 0 scored 28,588 rows with SHAP** over a 79,998-row × 75-feature account-grain corpus (108 positives, base rate 0.001350), fold 0 `calibrated=false` for the reason the config names (14 validation positives < `min_positives_for_calibration=50`, so probabilities ship labelled uncalibrated). **Folds 1-4 did not fit** — each skipped with `LightGBMError: bad allocation` on a corpus far too small to need that much RAM, which points at per-fold retention rather than a real ceiling and is being measured now. `cli.py`'s RESULT line counted summary entries and read "5 fold(s) scored"; it now reads `N of M` and prints each skipped fold's reason, because a progress line that scores a refusal as a pass is how a phase gets claimed on a tree that never finished fitting. No `verify.py` P4 gate yet — one fold is not five |
 | **P5** | EV allocation, greedy vs CP-SAT, Monte Carlo exposure, economics | **DONE** | `verify.py --phase P5` 1/1 (89 tests) |
-| **P6** | walk-forward backtest, ablation table, fairness, perturbation | in progress | `oxbow backtest --corpus` now has a producer: the score stage lands the per-account corpus frame. 19 metric tests pass; no fold has produced a real number yet, so MODEL_CARD/ECONOMICS_CARD still carry placeholders |
-| **P7** | FastAPI, SSE, RQ, ports/adapters, outbox, audit chain, OIDC | **DONE** | `verify.py --phase P7` **3/3 PASS**: 22 port-conformance tests, 4 import-linter contracts kept, 77 integration tests (41 API + 23 worker + 9 session hygiene + 4 envelope doctrine) against a real Postgres. `apps/api/worker.py` exists — `jobs.py:103` had been enqueuing `api.worker.run_stages` into a module that did not |
-| **P8** | seven screens, state craft, `/dev/states`, zero-CLS | **rendered, measured, NOT claimed** | First browser run this app has ever had (Playwright against the chromium in the ms-playwright cache — nothing downloaded): **21 of 26 green**. vitest 51/51, tsc 0 errors, biome clean, zero `any`. **Measured CLS: /alerts 0.0153** against the plan's zero (a `div` shifts 0.0153 on resolution — the queue's matched-geometry claim does not hold), /cases 0.00059, /dev/states 0.00072. axe: 0 critical and 0 serious on every route sampled. Two gallery specs still red, both diagnosed below |
+| **P6** | walk-forward backtest, ablation table, fairness, perturbation | in progress — **first refusal, and the guard was right** | The landed corpus is the first real bytes `oxbow backtest --corpus` has ever read (every prior P6 number came from `--demo-fakes`, i.e. the harness checking itself). It refused: `FoldError: fold 0: embargo gap is 0.00d but the embargo is 30d`. The guard did its job — fold 0's plan (train ≤ 2014-07-09, test from 2014-08-08) is a correct 30 days, so either the corpus's account-grain anchor timestamps do not carry the boundary the guard reads or the backtest infers it from the wrong column. Under investigation; the embargo check itself stays as hard as it is. MODEL_CARD/ECONOMICS_CARD still carry placeholders until a fold produces a number |
+| **P7** | FastAPI, SSE, RQ, ports/adapters, outbox, audit chain, OIDC | **DONE**, one contract defect open | `verify.py --phase P7` **3/3 PASS**: 22 port-conformance tests, 4 import-linter contracts kept, 77 integration tests against a real Postgres. `apps/api/worker.py` exists — `jobs.py:103` had been enqueuing `api.worker.run_stages` into a module that did not. Open: `/api/graph/subgraph` serves nodes as `id/label/is_seed/is_rail/flags` while `apps/web/src/lib/api/contract.ts:773` decodes `key/node_type/flagged/is_cycle_member/hops/true_size`, so the explorer's pane refuses rather than rendering — which is the decoder behaving correctly and the server being out of contract (plan §12's PII boundary names `account_key` downstream of ingest, so `key` is the right field) |
+| **P8** | seven screens, state craft, `/dev/states`, zero-CLS | **measured, not yet claimed** | Playwright against the cached chromium (nothing downloaded): **24 passed, 1 recorded skip, 1 red**. The skip is the 1,500-node fps probe — the null-file warehouse serves 1 node and the spec says so instead of passing vacuously. **Measured CLS is 0.000000 on `/alerts` and 0.000000 on `/cases/[id]`** against the plan's zero (was 0.0153 on the queue; its skeleton is now built from the same slot table the resolved rows use), and 0.000438 on `/dev/states` against a 0.001 budget. axe 10/10 routes clean, vitest 51/51, tsc 0 errors, biome 0 findings over 86 files (from 76). P8's phase entry now gates vitest, `tsc --noEmit` and `make lint-web`'s biome check through the installed tree with each entry point as its `prerequisite`, and all three were executed through `verify.py`'s own `_run_gate` — not by hand. The red spec is the dataset-fidelity clause on the live API: **13 of `/model`'s panes never leave their loading state even though their route answered 200**, so DESIGN.md §5's pane-error tier is not reached on that path |
 | **P9** | packet, generated docs, demo snapshot, limitations | in progress | `README`/`ARCHITECTURE`/`MODEL_CARD`/`ECONOMICS_CARD`/`LIMITATIONS` written by `make eval`, which also overwrote the authored dataset card (see below) |
 
 Execution order is `P0 → P1a → P1b → P3a → P2 → P3b → …` per DEV-008: the graph
@@ -44,7 +44,17 @@ The two P0 blockers are cleared: the Docker daemon is running (B1) and disk is s
 
 `make` still does not exist on this host, so every §16 gate phrased as `make X` has been
 run as the underlying command (see "Two things about this host" below). `pnpm` is absent
-too; the web checks run as `./node_modules/.bin/<tool>`. Playwright is usable without a
+too — plan §T2 pins `pnpm@9.15.9` and this box has never had it — so the web checks run as
+`node node_modules/<pkg>/...` through the installed tree, which is what `verify.py`'s P8
+gates now do. `bun` 1.4.2 *is* installed, and twice an agent treated that as licence to
+migrate the repository's declared toolchain to it; DEV-022 records the proposal as
+rejected, and `test_the_declared_js_toolchain_is_the_one_every_recipe_uses` holds manifest,
+Dockerfile, Makefile, pre-commit recipes and the phase table to the same answer. One
+consequence is still open and real: `apps/web/node_modules` is the hoisted tree the second
+`bun install` wrote (its `.bin` holds `.exe`/`.bunx` shims, not pnpm's `.pnpm` layout), so
+this host's dependency tree matches neither manifest until someone runs
+`pnpm install --frozen-lockfile` on a box that has pnpm. Nothing installed a system
+dependency to make that happen. Playwright is usable without a
 download because a chromium already sits in `~/AppData/Local/ms-playwright` — the config
 points at it by path rather than installing one.
 
@@ -208,24 +218,69 @@ Ordered by damage if any of it survives into a claimed-complete phase.
     silently). So even with a landed case the PDF step would fail here. Both must be
     named in `LIMITATIONS.md`; only the first is this build's to fix.
 
-11. **`make demo` is a phantom gate.** The target runs
-    `$(PY) scripts/demo_seed.py --restore --boot-budget 90`, and that script does not
-    exist; `data/snapshots/` is empty. So the plan §15 requirement -- "boots offline in
-    under 90 seconds" -- has never been attempted, while `make help` advertises it. The
-    seeder and a pinned snapshot are the work; the hosted read-only demo stays blocked
-    on the licensing decision already recorded in `BACKLOG.md` (00 §I.4), which is a
-    human call, not a task to absorb.
-    **Deliberately not written yet, as of this session.** A seeder's two jobs are to
-    snapshot a warehouse that holds scored rows, backtest folds and one landed
-    reviewer decision, and to prove the stack reaches healthy within a budget on restore.
-    The first job has nothing to snapshot until P4/P6 land (the score stage still stops
-    before a model is trained, so `out/` holds features and rules only), and writing it
-    against an empty database would produce a `make demo` that boots a blank UI -- a
-    green target with no evidence behind it, which is the thing this file has been
-    cataloguing all session. Its ordering is therefore: P4 scorer -> P6 folds -> a
-    decision landed through the API -> then this, with the 90 s budget measured for real.
+11. **`make demo` was a phantom gate. The seeder now exists; the snapshot does not.**
+    The target runs `$(PY) scripts/demo_seed.py --restore --boot-budget 90`. That script
+    did not exist, and `data/snapshots/` was empty, so the plan §15 requirement -- "boots
+    offline in under 90 seconds" -- had never been attempted while `make help` advertised
+    it. `scripts/demo_seed.py` is now written (this session), and it is deliberately
+    built to refuse rather than to fake it: it audits `score`, `backtest_fold` and
+    `decision` first and names every gap, so on the present warehouse it exits non-zero
+    with `scored rows: 0`, `backtest folds: 0`, `a landed reviewer decision: 0` rather
+    than dumping an empty database that would boot a blank UI. It pins a manifest beside
+    the dump (alembic revision, row counts, digest) and verifies that digest before a
+    restore, and it is wired into P9 as a prerequisite-gated gate so a reviewer reads
+    `SKIPPED-PREREQUISITE` with the missing path named instead of a passing name.
+    `tests/unit/test_p9_demo_seed.py` covers it, including that a missing script in any
+    Makefile recipe or phase gate fails the suite -- the general form of the phantom gate
+    this item is about.
+    **What still blocks it is item 12's finding, not the script.** A seeder's two jobs are
+    to snapshot a warehouse holding scored rows, backtest folds and one landed reviewer
+    decision, and to prove the stack reaches healthy within a budget on restore. The first
+    job has nothing to snapshot until the score and backtest stages hand their results to
+    the warehouse sink at all. Its ordering is therefore: wire the sink -> land a decision
+    through the API -> then take the snapshot with the 90 s budget measured for real.
 
-12. **A full-suite number taken while workers are editing is not a verdict.** The one
+12. **`WarehouseSink.write` has no caller outside a test, so `score` and `backtest_fold`
+    can never hold a row.** Measured this session, and not recorded anywhere until now.
+    The port declares `write(self, table, run_id, rows)` (`ports/warehouse.py:188`), the
+    Postgres adapter implements it, and `apps/api/worker.py:235` wraps it -- but nothing
+    in `packages/` or `apps/` ever *calls* it. The one call site in the whole tree is
+    `tests/integration/test_p7_api.py:348`, which writes rows to set up a test. What the
+    score stage produces is Parquet under `out/features/<run>/` and `out/rules/<run>/`,
+    and the backtest writes `out/backtest/<run>/ablation_results.json`; none of that
+    reaches Postgres. Confirmed live against the compose database:
+    `select count(*) filter (where n_live_tup>0), count(*) from pg_stat_user_tables`
+    returns **3 of 44** -- `run`, `stage_event`, `job_run`. The 41 tables the API reads
+    are structurally unreachable from the pipeline.
+    This is what blocks items 10 and 11, and it is a design question rather than a patch:
+    the score and backtest stages need to hand per-fold and per-row results to the sink,
+    and `out/` and the warehouse need one stated relationship instead of two parallel
+    stores nobody has reconciled. The P9 scorer and P6 allocator modules are landed and
+    wired into the run path, so the arithmetic exists; the last hop to Postgres does not.
+
+13. **The MIP binning's model build was unbounded, and it hung the unit suite.**
+    `binning.time_limit_seconds: 20.0` reads like a per-feature time limit and is not one:
+    it reaches ortools `SetTimeLimit`, which bounds `Solve()` and nothing else. The MIP
+    solver spends most of its time *building* the model -- `add_constraint_monotonic_descending`
+    is a double loop issuing one IPC call per candidate pair. Measured here, `solver: mip`,
+    1200 rows, build against candidate count: 20 -> 0.60 s, 32 -> 2.28 s, 48 -> 7.35 s,
+    64 -> 13.85 s. Quadratic, at 1.5-3.4 ms per pair, and dominant: at 300 rows build took
+    13.7 s against 9.9 s solving. A yaml comment here claimed "100 candidates solve in
+    ~0.1 s", measured on the default 5-fold corpus and wrong by two orders of magnitude.
+    With the build unbounded, `test_p4_scorer.py::test_scorer_output_satisfies_the_scoreresult_contract`
+    ran until pytest's own 300 s timeout with the stack parked in `mip.py`, and took the
+    whole `tests/unit` run down with it at 68% (0 of 4 tests in that file completing).
+    **Fixed this session:** `binning.build_budget_seconds: 6.0` plus
+    `measured_ms_per_candidate_pair: 3.4` let `_effective_max_n_prebins` solve for the
+    candidate cap the budget affords -- 42 on this host, down from the declared 100 -- and
+    that cap is what reaches the solver. Deliberately *not* a wall-clock abort: the bin
+    table is written into the hashed artefact, so aborting on load would make one input
+    produce different bins on a busy machine. A feature needing more candidates than the
+    budget allows takes the quantile table and records that in `boundary_source`. The file
+    went 0 completed -> `4 passed in 188.69s`; guard added as
+    `test_the_build_budget_bounds_the_mip_build_and_not_only_the_solve`.
+
+14. **A full-suite number taken while workers are editing is not a verdict.** The one
     snapshot captured concurrently reported 114 failed / 538 passed / 34 errors,
     including every test in `test_p9_packet.py`; the same file run alone reports 28
     passed, 1 skipped. `make test` has to be read on a quiet tree, and the green claim
@@ -439,6 +494,13 @@ not on this list is *not* verified, regardless of what a package's own tests cla
 | P7 gate set, this session | `uv run python scripts/verify.py --phase P7` | **3 gates run, 3 passed** — 22 conformance, `Contracts: 4 kept, 0 broken`, and **77 passed in 160.62s** across the API, worker, session hygiene and envelope doctrine |
 | Append race, isolated | `uv run pytest -q tests/integration/test_p7_api.py` | **41 passed**. The two order-dependent assertions in `test_concurrent_append_gives_one_success_and_one_409` are now scoped to the race itself (`chain_seq == winner + 1`, counts by `trace_id`). Mutation-proven: `+ 2` produced `E assert 2 == (1 + 2)` |
 | The scorecard solver actually runs | seeded 4,000-row monotone signal through `fit_feature_binning` | `boundary_source='optbinning-mip'`, eight value bins, bad rates `0.011 → 0.711` monotone, `monotonic_direction='ascending'`, identical table inside and outside the pytest warning filter. Before DEV-020 every numeric feature came from `quantile-fallback` |
+| **First score run to reach the end** (2026-09-27) | `uv run oxbow score --max-events 40000` on the full 6,362,620-event corpus | **finished, exit 0.** rules 170 hit rows after R10/R11/R12 were excluded at `hit_rate_floor`; features 75 published, spec hash `b622c5f6…`; grain bridge **79,998 rows × 75 features, 108 positives, base rate 0.001350**; **fold 0 landed 28,588 scored rows with SHAP**, `calibrated=false` (14 validation positives < 50); **folds 1-4 skipped**, each `LightGBMError: bad allocation`. The RESULT line previously printed "5 fold(s) scored" from the entry count — it now prints `1 of 5` and each skip's reason |
+| The backtest on real bytes for the first time | `uv run oxbow backtest --corpus out/score/01M3FZ2GC3J71AYT1QEKPWEDKJ/backtest_corpus.parquet` | **refused, correctly**: `FoldError: fold 0: embargo gap is 0.00d but the embargo is 30d`. Every P6 number before this came from `--demo-fakes`. The guard is not being loosened to get past it |
+| P8's three gates, through the gate runner | `uv run python -c "…verify._run_gate(g) for g in PHASES['P8'].gates"` | `[('unit tests…','PASS'), ('typecheck…','PASS'), ('biome lint and format…','PASS')]` — the same argv the phase table holds, executed rather than hand-run |
+| Full web suite, this session | `node node_modules/@playwright/test/cli.js test` (cached chromium, fixture app on :3100, live app on :3101, uvicorn on :8123) | **24 passed, 1 recorded skip, 1 red** in 16.1m. Separately: axe **10/10 routes clean**, cls **3/3** with `/alerts 0` and `/cases 0`, and the three reworked files **11 passed / 1 skipped / 1 red** in 1.9m |
+| The reduced-motion fix, both paths | `page.emulateMedia({reducedMotion:'reduce'})` and `/dev/states?motion=reduced` | OS path: 49 sweep elements at the first frame → **0** once hydrated, `running=0`. Query path: 49 present, **0 visible, running 0** (`animation-duration: 1e-06s`), `data-motion="reduced"`, document height **4549 unchanged** on both paths. Before this session `data-motion` had **no writer at all**, so the forced path's entire CSS block matched nothing |
+| The JS-toolchain gate can fail | mutation: `packageManager` → `bun@1.4.2`, then restore | red on `assert False where False = 'bun@1.4.2'.startswith('pnpm@')`; **45 passed** restored |
+| The API served, and the proxy proved | `uv run uvicorn main:app --port 8123 --app-dir apps/api` with `OXBOW_WAREHOUSE=null`; web rebuilt with `OXBOW_API_ORIGIN=:8123` | `/healthz 200`, `/api/meta/dataset 200` and `/api/graph/subgraph 200` **with a minted demo token**, `401 application/problem+json` without one. Host :8000 is Windows `Microsoft-HTTPAPI/2.0` (PID 4), which is why every browser check before this returned a 401 that was not the API's |
 | P4 guardrail tests | `uv run pytest -q tests/unit -k p4` | **16 passed** (9 guards + 6 calibration/fusion/explain + the scorer seam) |
 | 1.5M-row ingest | `uv run oxbow ingest -s paysim --limit 1500000` | **1,500,000 canonical events, 0 quarantined, 0 silently coerced, 69.4s**, window `2014-01-02 → 2014-05-24` = 143 days, which is what makes the 30-day embargo arithmetically satisfiable |
 | Score on a bounded slice | `uv run oxbow score --max-events 120000` | killed by a 90-minute budget: the rules-layer graph alone took ~65 min for **173,031 nodes, 0 cycles, 23,646 communities** |
