@@ -55,9 +55,9 @@ from api.problems import PROBLEM_MEDIA_TYPE, ProblemDetail  # noqa: E402
 from api.schemas.common import ENVELOPE_KEYS  # noqa: E402
 from api.settings import reset_settings_cache  # noqa: E402
 
-TEST_SALT = "oxbow-schemathesis-salt-not-a-secret"
-TEST_JWT_SECRET = "oxbow-schemathesis-local-jwt-secret"
-TEST_WEBHOOK_SECRET = "oxbow-schemathesis-webhook-secret"
+TEST_SALT = "schemathesis-test-salt-not-the-real-one"
+TEST_JWT_SECRET = "schemathesis-test-local-jwt-secret"
+TEST_WEBHOOK_SECRET = "schemathesis-test-webhook-secret"
 
 _NULL_MODE_ENV = {
     "RUN_SALT": TEST_SALT,
