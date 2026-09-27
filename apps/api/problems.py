@@ -21,6 +21,7 @@ Two fields are extensions beyond RFC 9457 and both are load-bearing (02 §F, pla
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+from http import HTTPStatus
 from typing import Any, Final
 
 from fastapi import FastAPI, Request
@@ -232,6 +233,27 @@ class DependencyUnavailable(OxbowError):
     status, code, title, retryable = 503, "dependency-unavailable", "Dependency unavailable", True
 
 
+# The statuses this API already has a class for, and therefore a ``type`` URI and a title
+# for, on the wire and in the OpenAPI document alike. ``_map_http_status`` reads this so a
+# framework-chosen status can never be renumbered into a different class of problem.
+_HTTP_ERROR_BY_STATUS: Final = {
+    error.status: error
+    for error in (
+        BadRequest,
+        Unauthorized,
+        Forbidden,
+        # ``NotFound`` and not ``RunNotFound``/``CaseNotFound``: a routing miss is about
+        # the path, and the two subclasses exist for a named resource the server looked
+        # for and did not find. They arrive as ``OxbowError``, not through this map.
+        NotFound,
+        Conflict,
+        Unprocessable,
+        UpstreamFailure,
+        DependencyUnavailable,
+    )
+}
+
+
 def problem_responses(
     statuses: Sequence[int] = COMMON_ERROR_STATUSES, *, description: str = "RFC 9457 problem"
 ) -> dict[int | str, dict[str, Any]]:
@@ -324,6 +346,50 @@ def install_problem_media_type(app: FastAPI) -> None:
     app.openapi = openapi  # type: ignore[method-assign]
 
 
+def _map_http_status(status: int, detail: str) -> OxbowError:
+    """Carry a routing status through as itself.
+
+    Starlette raises ``HTTPException`` for what its router could not match — an unknown
+    path (404) and a known path under the wrong method (405) — and this mapping is the
+    only place those become problem documents. It used to collapse everything outside
+    {400, 401, 403, 409, 422} into a 400, which told an operator whose client asked for
+    ``/api/meta/run`` "your request was wrong" when the truth was "this server has no
+    such route". Those are different diagnoses with different fixes — repair the client
+    versus repair the deployment — and a status code that conflates them sends the operator
+    to the wrong one, which is exactly what a problem document exists to prevent.
+
+    The dedicated classes take precedence where this API already has one (so an unknown
+    path is titled *Not found* with the ``not-found`` type, the same vocabulary
+    ``RunNotFound`` uses); anything else keeps its own code, its RFC phrase as its title,
+    and a retryable flag that follows the class of status the spec assigns it.
+    """
+    mapped = _HTTP_ERROR_BY_STATUS.get(status)
+    if mapped is not None:
+        return mapped(detail)
+    return _RoutedProblem(detail, status=status)
+
+
+class _RoutedProblem(OxbowError):
+    """A status the framework chose and this API has no dedicated class for.
+
+    Exists so the pass-through cannot become a second collapsing: the code, the title and
+    the retryability are read off the number itself rather than defaulted.
+    """
+
+    def __init__(self, detail: str, *, status: int) -> None:
+        super().__init__(detail)
+        try:
+            phrase = HTTPStatus(status).phrase
+        except ValueError:
+            # A code with no registered meaning still gets its own number rather than a
+            # crash inside the crash handler, which would end the request with no document.
+            phrase = f"HTTP {status}"
+        self.status = status
+        self.code = phrase.lower().replace(" ", "-")
+        self.title = phrase
+        self.retryable = status >= 500
+
+
 def register_problem_handlers(app: FastAPI) -> None:
     """Wire every failure path to the same problem shape.
 
@@ -361,6 +427,15 @@ def register_problem_handlers(app: FastAPI) -> None:
     @app.exception_handler(StarletteHTTPException)
     async def _http(request: Request, exc: StarletteHTTPException) -> JSONResponse:
         detail = exc.detail if isinstance(exc.detail, str) else "request failed"
+        if exc.status_code == HTTPStatus.NOT_FOUND and detail == HTTPStatus.NOT_FOUND.phrase:
+            # The framework's own placeholder detail repeats its title and names nothing.
+            # Say which path has no route, because that is the sentence that tells an
+            # operator whether to fix the client or the deployment.
+            detail = (
+                f"this API has no route registered for {request.method} {request.url.path}. "
+                "The request itself was well-formed; the path is the thing that does not "
+                "exist on this server."
+            )
         return _map_http_status(exc.status_code, detail).to_problem(request).to_response()
 
     @app.exception_handler(Exception)
@@ -381,13 +456,6 @@ def register_problem_handlers(app: FastAPI) -> None:
             retryable=True,
         )
         return problem.to_response()
-
-
-def _map_http_status(status: int, detail: str) -> OxbowError:
-    for candidate in (BadRequest, Unauthorized, Forbidden, Conflict, Unprocessable):
-        if candidate.status == status:
-            return candidate(detail)
-    return DependencyUnavailable(detail) if status >= 500 else BadRequest(detail)
 
 
 __all__ = [

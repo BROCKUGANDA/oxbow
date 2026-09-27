@@ -607,7 +607,7 @@ def build_container(settings: Settings | None = None) -> Container:
             source = PostgresSource(lambda: _new_session(sessions))
             backend = "postgres"
 
-    read_model = ReadModel(source, money_decimals=_minor_units_per_major())
+    read_model = ReadModel(source, money_decimals=_money_decimals())
     try:
         economics = load_economics(resolved.repo_root)
     except ConfigError as exc:
@@ -669,6 +669,33 @@ def _warehouse_sink_factory(
 
 def _new_session(sessions: sessionmaker[Session]) -> Session:
     return sessions()
+
+
+def _money_decimals() -> int:
+    """Decimal places, converted from config's `minor_units_per_major`.
+
+    A base and an exponent are different numbers, and `Money.decimals` is the exponent:
+    both `apps/api/schemas/common.py` and `apps/web/src/lib/format/money.ts` compute
+    `10 ** decimals` to render a figure. Wiring the base (100) into that field divided
+    every currency number the API served by 10^100 rather than 100 — invisible in fixture
+    mode, where the sample hand-writes `decimals: 2`, and total in live mode, where the
+    queue, the case rail and the dashboard all read as zero.
+
+    config declares a base because that is the quantity an operator reasons about, so the
+    conversion lives here, once, and refuses a base that is not an exact power of ten
+    instead of rounding an exponent into existence.
+    """
+    base = _minor_units_per_major()
+    exponent, place = 0, 1
+    while place < base:
+        place *= 10
+        exponent += 1
+    if place != base:
+        raise ConfigError(
+            f"minor_units_per_major={base} is not an exact power of ten, so it has no "
+            "decimal exponent and money would render at a guessed scale"
+        )
+    return exponent
 
 
 def _minor_units_per_major() -> int:

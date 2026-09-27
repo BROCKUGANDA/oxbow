@@ -1,4 +1,4 @@
-"""Meta routes: the dataset card, the economics, the disclaimer, the licence.
+"""Meta routes: the current run, the dataset card, the economics, the disclaimer, the licence.
 
 Plan §14 puts a dataset badge in the dashboard header and a licence block on the
 validation page, and 01 §A rule 7 makes attribution a property of the data rather
@@ -19,23 +19,44 @@ Three things this router refuses to do:
 * **summarise the economics.** ``/api/meta/economics`` returns the file's own nested
   structure, verbatim, because plan §11 requires the *assumptions* on screen, not a
   paraphrase of them, and the policy simulator's sliders read their ranges from here.
+
+``/api/meta/run`` adds a fourth refusal, because its payload is read by the header strip
+on every screen: it does not **pad a nullable field to satisfy a shape**. ``run_id``,
+``dataset``, ``licence`` and ``model_version`` are null on a warehouse that holds nothing,
+each with an entry in ``degradations`` naming the artifact that would hold the value, and
+the client renders its labelled arm (DESIGN.md §5: degraded, not broken). A route that
+served ``""`` or ``0`` there would convert "this deployment has no run" into a false
+attribution claim, which is the one thing the header exists to prevent.
 """
 
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Final
 
 from fastapi import APIRouter, Depends, Query
 
 from api.deps import Container, analyst_or_higher, get_container
-from api.problems import COMMON_ERROR_STATUSES, DependencyUnavailable, problem_responses
-from api.readmodel import ReadModel
+from api.problems import (
+    COMMON_ERROR_STATUSES,
+    DependencyUnavailable,
+    RunNotFound,
+    problem_responses,
+)
+from api.readmodel import ReadModel, state_value
 from api.routers.common import assumption_lines, build_meta
 from api.schemas.catalog import DatasetMeta, MeasurementCard
 from api.schemas.common import Envelope, envelope
 from api.schemas.me import KnownRoles
+from api.schemas.runtime import (
+    FieldDegradation,
+    RunSourceCard,
+    RunSourceFileCard,
+    RuntimeRun,
+)
 from api.security import Principal
 from oxbow.config import ConfigError, load_yaml
 from oxbow.ports.case_sink import OXBOW_DISCLAIMER
@@ -57,6 +78,32 @@ MEASUREMENT_COMMANDS: Final = {
 # ``top20_senders``, a filename, a currency name) is not a measurement this response
 # is allowed to carry.
 _SCALAR_TYPES = (int, float)
+
+# The join the header renders. Each member is verbatim from an artifact; only the
+# separator is this route's own.
+DATASET_JOIN: Final = " · "
+# Display text for ``degradations``: the artifact a missing value would come from, named
+# for whoever reads the response. The route opens files through ``_run_manifest_path``,
+# which reads the real names from the ingest writer, so this string never locates a file.
+INTERIM_WOULD_BE: Final = "data/interim/<source>/run_manifest.json"
+
+
+def _run_manifest_path(root: Path, source_id: str) -> Path:
+    """``data/interim/<source>/run_manifest.json``, with the names read from the writer.
+
+    The three path components are imported rather than retyped because the ingest sink
+    owns them: a route that hardcoded the filename would keep answering after ingest
+    moved the artifact, and would report the corpus as never ingested. Imported inside
+    the function because :mod:`oxbow.adapters.file.canonical_sink` pulls duckdb and
+    polars at module scope, which this router has no reason to load to read a string.
+    """
+    from oxbow.adapters.file.canonical_sink import (
+        DATA_DIRNAME,
+        INTERIM_DIRNAME,
+        RUN_MANIFEST_FILENAME,
+    )
+
+    return root / DATA_DIRNAME / INTERIM_DIRNAME / source_id / RUN_MANIFEST_FILENAME
 
 
 def _flatten(prefix: str, node: Any, into: dict[str, Any]) -> None:
@@ -159,6 +206,131 @@ def economics_assumptions(
         },
         **meta.model_dump(),
     )
+
+
+@router.get(
+    "/run",
+    response_model=Envelope[RuntimeRun],
+    summary="The current run as measured: zone, seed, hashes, licences, model version",
+    description=(
+        "The header strip on every screen reads this response: the deployment timezone a "
+        "timestamp is rendered in, the currency and minor-unit scale every figure divides "
+        "by, the economics assumptions those figures are a function of, the corpora with "
+        "the licences their ingests recorded, and the model version and config hash that "
+        "produced the numbers. Values come from the ``run`` row, ``config/economics.yaml``, "
+        "``config/pipeline.yaml`` and each corpus's ingest manifest. Where this warehouse "
+        "holds nothing the field is null and ``degradations`` names the artifact that would "
+        "hold it: the client renders each null as a labelled gap, which DESIGN.md §5 "
+        "requires in place of a spinner or a filler value."
+    ),
+    responses=problem_responses(COMMON_ERROR_STATUSES),
+)
+def runtime_run(
+    run_id: str | None = Query(
+        default=None,
+        description="Describe one named run rather than the newest complete one.",
+    ),
+    container: Container = Depends(get_container),
+    principal: Principal = Depends(analyst_or_higher),
+) -> dict[str, Any]:
+    run, no_run_reason = _served_run(container.read_model, run_id)
+    sources, gaps = _ingested_sources(container)
+    economics, unrenderable = _economics_scalars(container.settings.economics())
+    deployment_timezone, timezone_source = _deployment_timezone(container, run)
+
+    degradations: list[FieldDegradation] = list(gaps)
+    if run is None and no_run_reason is not None:
+        for field, would_come_from in (
+            ("run_id", "the `run` table's newest row in state 'complete'"),
+            ("model_version", "run.model_version"),
+            ("config_hash", "run.config_hash"),
+            ("seed", "run.seed"),
+            ("provenance", "run.provenance"),
+        ):
+            degradations.append(
+                FieldDegradation(
+                    field=field,
+                    reason=no_run_reason,
+                    would_come_from=would_come_from,
+                )
+            )
+    dataset = DATASET_JOIN.join(card.name for card in sources) or None
+    licence = DATASET_JOIN.join(dict.fromkeys(card.licence for card in sources)) or None
+    if dataset is None:
+        degradations.append(
+            FieldDegradation(
+                field="dataset",
+                reason=(
+                    "no corpus under config/sources.yaml has an ingest manifest on this "
+                    "host, so no dataset was read by anything this server can point at"
+                ),
+                would_come_from=f"{INTERIM_WOULD_BE} per corpus, written by ingest",
+            )
+        )
+    if licence is None:
+        degradations.append(
+            FieldDegradation(
+                field="licence",
+                reason=(
+                    "attribution is a property of the data (01 §A rule 7), and no ingest "
+                    "recorded a licence for any corpus on this host"
+                ),
+                would_come_from=f"{INTERIM_WOULD_BE}, `source.license`",
+            )
+        )
+    for key in unrenderable:
+        degradations.append(
+            FieldDegradation(
+                field="economics",
+                reason=(
+                    f"{key} in config/economics.yaml holds a structure that is neither a "
+                    "string nor a number, so it cannot be served as an assumption line"
+                ),
+                would_come_from="config/economics.yaml",
+            )
+        )
+
+    body = RuntimeRun(
+        run_id=None if run is None else _text(run, "run_id"),
+        deployment_timezone=deployment_timezone,
+        currency=container.economics.currency,
+        minor_units_per_major=container.economics.minor_units_per_major,
+        economics_source=_economics_source(container),
+        economics=economics,
+        dataset=dataset,
+        licence=licence,
+        model_version=None if run is None else _text(run, "model_version"),
+        # 'pipeline' is the only provenance that is not demo data: RUN_PROVENANCES is
+        # ("pipeline", "fixture", "demo_snapshot"), and the last two are the two ways this
+        # product says "these numbers are a demonstration". With no run row there are no
+        # numbers at all, so the claim to make is the one that is true — nothing here is
+        # demo bytes — and `run_id: null` is the field that says why.
+        demo_data=run is not None and _text(run, "provenance") != "pipeline",
+        run_state=None if run is None else state_value(run["state"]),
+        provenance=None if run is None else _text(run, "provenance"),
+        seed=None if run is None else _int(run.get("seed")),
+        config_hash=None if run is None else _text(run, "config_hash"),
+        # Null, not {}: the column was written by the run, and a run that recorded no
+        # artifact hash has not recorded an empty set of them.
+        artifact_hashes=(run.get("artifact_hashes") or None) if run is not None else None,
+        timezone_source=timezone_source,
+        created_at=None if run is None else run.get("created_at"),
+        finished_at=None if run is None else run.get("finished_at"),
+        warehouse_backend=container.backend,
+        sources=sources,
+        degradations=sorted(degradations, key=lambda item: (item.field, item.reason)),
+    )
+    meta = build_meta(
+        container,
+        run_id=body.run_id,
+        model_version=body.model_version,
+        # 'deployment' when there is no run: this response describes the server, and the
+        # client's provenance badge must not read a null as a claim that the bytes are
+        # fixture output.
+        provenance=body.provenance or "deployment",
+        assumptions=[line.model_dump() for line in assumption_lines(container.economics)],
+    )
+    return envelope(body, **meta.model_dump())
 
 
 @router.get(
@@ -469,6 +641,288 @@ def _deidentification(read_model: ReadModel) -> dict[str, Any]:
 
 def _run_provenance(read_model: ReadModel, run_id: str) -> str:
     return str(read_model.run_row(run_id)["provenance"])
+
+
+# ------------------------------------------------------------- /api/meta/run ---
+
+
+def _served_run(read_model: ReadModel, run_id: str | None) -> tuple[dict[str, Any] | None, str | None]:
+    """The run this response describes, and why there is not one.
+
+    A named run that does not exist is a 404 — ``run_row`` raises it, because the caller
+    asked about a specific thing and the answer is that it is not there. The *default*
+    lookup degrades instead of raising: the header strip asks "what deployment am I
+    looking at", and a warehouse with no complete run has an honest answer (none, and
+    here is what was checked) that is worth more than a 404 on the page that would
+    explain it.
+    """
+    if run_id is not None:
+        return read_model.run_row(run_id), None
+    try:
+        return read_model.resolve_run(None, state="complete"), None
+    except RunNotFound as exc:
+        return None, exc.detail
+
+
+def _deployment_timezone(container: Container, run: dict[str, Any] | None) -> tuple[str, str]:
+    """The zone, and which record it was read from.
+
+    ``deployment_timezone`` is non-nullable in the client's decoder because every
+    timestamp on every screen is rendered through it, and the value genuinely always
+    exists at one of two places: the run row wrote the zone ingest actually used, and
+    before any run there is the zone ``config/pipeline.yaml`` declares and the ingest
+    layer refuses to run without. Naming which of the two supplied it is what stops the
+    response reading as a measurement when it is a declaration.
+    """
+    from_run = None if run is None else _text(run, "timezone")
+    if from_run is not None:
+        return from_run, "run record: run.timezone"
+    try:
+        configured = container.settings.pipeline_config()
+    except ConfigError as exc:
+        raise DependencyUnavailable(
+            f"deployment_timezone is unrenderable: config/pipeline.yaml could not be read "
+            f"and no run row recorded the zone actually used ({exc})"
+        ) from exc
+    return configured.deployment_timezone, "config/pipeline.yaml: deployment_timezone"
+
+
+def _economics_source(container: Container) -> str:
+    """The economics file as a repo-relative path, because that is what a reader checks."""
+    path = container.economics.source_path
+    root = container.settings.repo_root
+    try:
+        return path.resolve().relative_to(root.resolve()).as_posix()
+    except ValueError:
+        # Loaded from outside the repo: the file's own name is still true, and the
+        # absolute path is not this response's to publish.
+        return path.name
+
+
+def _economics_scalars(document: Mapping[str, Any]) -> tuple[dict[str, Any], list[str]]:
+    """``config/economics.yaml`` flattened to dotted keys, in ascending key order.
+
+    The client decodes this as ``Record<string, string | number>``, so the walk keeps a
+    scalar's own type — an integer minor unit stays an integer (DEV-005: money is never a
+    float) and a rate stays a float — and renders the two shapes a record cannot hold
+    structurally as text: a list of scalars becomes its comma-joined members, a boolean
+    ``true``/``false``. Anything else (a list of mappings, a null) is reported rather than
+    dropped or coerced, because a silently missing assumption is an assumption nobody can
+    check. Keys are sorted rather than emitted in file order so two servers with the same
+    bytes serve byte-identical JSON.
+    """
+    flat: dict[str, Any] = {}
+    unrenderable: list[str] = []
+
+    def walk(node: Mapping[str, Any], prefix: str) -> None:
+        for key in sorted(node, key=str):
+            value = node[key]
+            path = f"{prefix}.{key}" if prefix else str(key)
+            if isinstance(value, Mapping):
+                walk(value, path)
+            elif isinstance(value, bool):
+                flat[path] = "true" if value else "false"
+            elif isinstance(value, int | float | str):
+                flat[path] = value
+            elif isinstance(value, list) and all(
+                isinstance(item, bool | int | float | str) for item in value
+            ):
+                flat[path] = ", ".join(
+                    ("true" if item else "false") if isinstance(item, bool) else str(item)
+                    for item in value
+                )
+            else:
+                unrenderable.append(path)
+
+    walk(document, "")
+    return dict(sorted(flat.items())), sorted(set(unrenderable))
+
+
+def _ingested_sources(container: Container) -> tuple[list[RunSourceCard], list[FieldDegradation]]:
+    """Every declared corpus whose ingest manifest is on disk, ascending by source id.
+
+    The corpus list is driven by ``config/sources.yaml`` rather than by a directory scan,
+    for the same reason the measurement artifacts above are named: a scan would serve
+    whatever a later script dropped into ``data/interim`` as an attribution claim.
+    """
+    document = _sources_document(container.read_model)
+    root = container.settings.repo_root
+    cards: list[RunSourceCard] = []
+    gaps: list[FieldDegradation] = []
+    for entry in sorted(document.get("sources", []), key=lambda item: str(item["id"])):
+        source_id = str(entry["id"])
+        path = _run_manifest_path(root, source_id)
+        relative = _relative(root, path)
+        if not bool(entry.get("ingest_allowed", True)):
+            if path.is_file():
+                raise DependencyUnavailable(
+                    f"{relative} exists for {source_id!r}, which config/sources.yaml declares "
+                    "with ingest_allowed = false. The corpus was ingested against terms the "
+                    "declaration refuses, and this response will not present it as permitted."
+                )
+            continue
+        if not path.is_file():
+            gaps.append(
+                FieldDegradation(
+                    field="sources",
+                    reason=(
+                        f"config/sources.yaml declares {source_id!r} as ingestible, but "
+                        f"{relative} does not exist: nothing has been read from it on this host"
+                    ),
+                    would_come_from=relative,
+                )
+            )
+            continue
+        card, card_gaps = _source_card(root, source_id, entry, path)
+        cards.extend([] if card is None else [card])
+        gaps.extend(card_gaps)
+    return sorted(cards, key=lambda card: card.source_id), gaps
+
+
+def _source_card(
+    root: Path, source_id: str, declared: Mapping[str, Any], path: Path
+) -> tuple[RunSourceCard | None, list[FieldDegradation]]:
+    """One corpus, read out of the manifest its ingest wrote.
+
+    The licence comes from the manifest and not from the config declaration because the
+    manifest is what the ingest stage recorded while it verified the bytes; the
+    share-alike obligation comes from the config, which is the only place the obligation
+    is stated (a licence identifier alone does not say what the derived tables inherit).
+    """
+    relative = _relative(root, path)
+    try:
+        manifest = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise DependencyUnavailable(f"{relative} could not be read: {exc}") from exc
+    if not isinstance(manifest, Mapping):
+        raise DependencyUnavailable(
+            f"{relative} holds {type(manifest).__name__}, not the mapping ingest writes"
+        )
+    recorded = manifest.get("source")
+    if not isinstance(recorded, Mapping):
+        return None, [
+            FieldDegradation(
+                field="licence",
+                reason=(
+                    f"{relative} records no `source` block, so no licence was recorded for "
+                    f"{source_id!r} while its bytes were read"
+                ),
+                would_come_from=f"{relative}, `source.license`",
+            )
+        ]
+    recorded_id = _text(recorded, "source_id")
+    if recorded_id is not None and recorded_id != source_id:
+        raise DependencyUnavailable(
+            f"{relative} records source_id {recorded_id!r} while sitting in the directory of "
+            f"{source_id!r}: two records of one identity, and a response cannot pick silently"
+        )
+    licence = _text(recorded, "license")
+    name = _text(recorded, "name")
+    if licence is None or name is None:
+        absent = ", ".join(
+            sorted(
+                f"`source.{field}`"
+                for field, value in (("name", name), ("license", licence))
+                if value is None
+            )
+        )
+        return None, [
+            FieldDegradation(
+                field="licence",
+                reason=(
+                    f"{relative} records no {absent}, so the corpus is not attributed: a "
+                    "licence string guessed from the dataset's reputation is exactly the "
+                    "claim 01 §A rule 7 puts on the data rather than in prose"
+                ),
+                would_come_from=f"{relative}, {absent}",
+            )
+        ]
+
+    gaps: list[FieldDegradation] = []
+    files: list[RunSourceFileCard] = []
+    unhashed = 0
+    for item in recorded.get("files") or []:
+        if not isinstance(item, Mapping):
+            unhashed += 1
+            continue
+        file_name = _text(item, "name")
+        sha256 = _text(item, "sha256")
+        if file_name is None or sha256 is None:
+            unhashed += 1
+            continue
+        files.append(RunSourceFileCard(file_name=file_name, sha256=sha256))
+    files.sort(key=lambda card: card.file_name)
+    if unhashed:
+        gaps.append(
+            FieldDegradation(
+                field=f"sources[{source_id}].files",
+                reason=(
+                    f"{unhashed} file entries in {relative} carry no name or no sha256, so "
+                    "they are not served as hashed inputs"
+                ),
+                would_come_from=f"{relative}, `source.files[]`",
+            )
+        )
+    card = RunSourceCard(
+        source_id=source_id,
+        name=name,
+        role=_text(recorded, "role"),
+        licence=licence,
+        licence_obligation=_text(declared, "license_obligation"),
+        citation=_text(recorded, "citation"),
+        source_url=_text(recorded, "source_url"),
+        manifest_run_id=_text(manifest, "run_id"),
+        ingested_at=_instant(manifest.get("ingested_at"), where=relative),
+        canonical_rows=_int(manifest.get("canonical_count")),
+        window_start=_instant(manifest.get("window_start"), where=relative),
+        window_end=_instant(manifest.get("window_end"), where=relative),
+        files=files,
+    )
+    return card, gaps
+
+
+def _text(row: Mapping[str, Any], key: str) -> str | None:
+    """A stored string, or None. An empty one is absent, not a value, and stays absent."""
+    value = row.get(key)
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
+
+
+def _int(value: Any) -> int | None:
+    return value if isinstance(value, int) and not isinstance(value, bool) else None
+
+
+def _instant(value: Any, *, where: str) -> datetime | None:
+    """A recorded instant, or None when nothing was recorded. A present-but-broken one is loud.
+
+    Deliberately not ``_parse_dt`` above: that helper stands in for a missing
+    ``measured_at`` with the current clock, which is right for a measurement card that
+    says which command produced it and wrong here, where the instant *is* the fact.
+    """
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value
+    text = str(value).strip()
+    if not text:
+        return None
+    try:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise DependencyUnavailable(
+            f"{where} records {text!r} as an instant, which does not parse: the timestamp is "
+            "the evidence, so it is not served as a guess"
+        ) from exc
+    return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=UTC)
+
+
+def _relative(root: Path, path: Path) -> str:
+    try:
+        return path.resolve().relative_to(root.resolve()).as_posix()
+    except ValueError:
+        return path.name
 
 
 __all__ = ["router"]

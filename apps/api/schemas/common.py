@@ -55,7 +55,13 @@ class Money(BaseModel):
 
     minor: int = Field(description="Integer minor units.")
     currency: str = Field(min_length=3, max_length=3, description="ISO 4217 code.")
-    decimals: int = Field(default=2, description="Minor units per major unit, from config.")
+    decimals: int = Field(
+        default=2,
+        description=(
+            "Decimal places, i.e. the EXPONENT whose base is config's "
+            "minor_units_per_major: 100 minor units per major unit is decimals=2."
+        ),
+    )
 
     @property
     def major(self) -> float:
