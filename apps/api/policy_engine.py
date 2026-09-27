@@ -419,6 +419,11 @@ def frontier_points(
     rows: Sequence[AccountEV], assumptions: Assumptions, operating_capacity: int
 ) -> list[dict[str, Any]]:
     """The configured capacity sweep, run through the same cached queue as the slider."""
+    # Same shape as `optimality_gap_view`: built from the assumptions, so it converts the
+    # declared base to the exponent itself. Five references to a `decimals` that this scope
+    # never bound made every frontier point a NameError, which no test reached because no
+    # test asked the policy page for a sweep.
+    decimals = decimals_for_base(assumptions.minor_units_per_major)
     frontier: Frontier = sweep_frontier(list(rows), assumptions)
     points: list[dict[str, Any]] = []
     for point in frontier.points:

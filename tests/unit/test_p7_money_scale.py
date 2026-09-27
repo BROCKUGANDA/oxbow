@@ -145,3 +145,37 @@ def test_the_gap_view_that_holds_no_read_model_still_renders_at_the_exponent() -
         assert rendered == figure["minor"] / cfg.minor_units_per_major, (
             f"{field}: rendered {rendered} but the base says {figure['minor'] / cfg.minor_units_per_major}"
         )
+
+
+def test_the_frontier_points_function_actually_runs() -> None:
+    """`frontier_points` referenced a `decimals` that its own scope never bound.
+
+    Not a lint nit: every point on the capacity sweep raised `NameError` on the way out, so
+    the policy page's frontier section was unreachable rather than merely wrongly scaled. It
+    survived the money sweep for the same reason the gap view did — no read model in scope —
+    and survived the P5 tests because nothing in the suite ever called it. The gate here is
+    the call itself, then the scale of what it returns.
+    """
+    from api.policy_engine import frontier_points
+
+    from oxbow.quant.ev import CalibratedScore, price_account
+    from oxbow.quant.money import Money
+    from tests.unit.p5_fixtures import hand_economics
+
+    cfg = hand_economics()
+
+    def priced(key: str, p: float, minor: int) -> object:
+        return price_account(CalibratedScore(key, p, "D", p, 400), Money(minor, cfg.currency), cfg)
+
+    rows = [priced("ACC-A", 0.80, 1_000_000), priced("ACC-C", 0.90, 500_000)]
+    points = frontier_points(rows, cfg, operating_capacity=25)
+    assert points, "the sweep returned nothing, so the scale below proves nothing"
+
+    for point in points:
+        for field in ("net_benefit", "loss_avoided", "max_drawdown", "var95", "es975"):
+            if field not in point:
+                continue
+            assert point[field]["decimals"] == 2, (
+                f"frontier point at {point['capacity_minutes']} min renders {field} at "
+                f"decimals={point[field]['decimals']!r}"
+            )
