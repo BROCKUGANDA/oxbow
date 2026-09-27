@@ -100,6 +100,11 @@ MODE_SCORECARD_ONLY: Final = "scorecard_and_rules_only"
 P_FUSED_COLUMN: Final = "p_fused"
 P_FUSED_RAW_COLUMN: Final = "p_fused_raw"
 P_GBM_COLUMN: Final = "p_gbm"
+# The same booster family fitted with the ablated feature groups removed, produced only when a
+# caller asks for a feature-subset ablation. It lives here rather than in a sidecar because the
+# ablation row is a fold measurement like any other: same rows, same seed, same fold discipline,
+# one fewer group of features — and a number a reader can only trust next to the full model's.
+P_GBM_NO_GRAPH_COLUMN: Final = "p_gbm_no_graph"
 P_SCORECARD_COLUMN: Final = "p_scorecard"
 P_SCORECARD_RAW_COLUMN: Final = "p_scorecard_uncalibrated"
 ANOMALY_COLUMN: Final = "anomaly_norm"
@@ -913,6 +918,13 @@ class FoldModelRunner:
     layer is being written concurrently and may not be imported here, and the tests hand
     in a deterministic rules provider. P6 passes its own fold provider and gets the same
     objects back.
+
+    ``ablate_feature_groups`` names registry groups (``graph_local``, ``graph_global``, …)
+    whose features are removed from a SECOND booster fit, published as
+    :data:`P_GBM_NO_GRAPH_COLUMN` beside the full model's. It is opt-in and costs one extra
+    LightGBM fit per fold: the row that measures what the graph adds cannot be computed from
+    the model that used it, and re-listing one column under a second label is the imitation
+    DEV-027 refused to ship.
     """
 
     def __init__(
@@ -928,6 +940,7 @@ class FoldModelRunner:
         trial_budget: int | None = None,
         explain: bool = True,
         root: Path | None = None,
+        ablate_feature_groups: tuple[str, ...] = (),
     ) -> None:
         if model_cfg.reporting.tie_break_score_column != P_FUSED_COLUMN:
             raise ModelLayerError(
@@ -950,6 +963,14 @@ class FoldModelRunner:
         self.trial_budget = trial_budget
         self.explain = explain
         self.root = Path(root) if root is not None else model_cfg.root
+        unknown = sorted(set(ablate_feature_groups) - set(feature_registry.groups))
+        if unknown:
+            raise ModelLayerError(
+                f"ablate_feature_groups names {unknown}, which the feature registry does not "
+                f"define; its groups are {sorted(feature_registry.groups)} — an unknown group "
+                "would ablate nothing and still print a row"
+            )
+        self.ablate_feature_groups = tuple(ablate_feature_groups)
 
     def provider(self) -> FoldProvider:
         return RoleColumnFoldProvider(self.split_cfg.embargo_days)
@@ -1086,6 +1107,14 @@ class FoldModelRunner:
                 scored = with_gbm_and_anomaly(
                     scored, gbm=gbm, anomaly=anomaly, features=features, categorical=categorical
                 )
+                if self.ablate_feature_groups:
+                    scored = self._fit_feature_ablated_gbm(
+                        scored,
+                        train=train,
+                        validation=validation,
+                        seed=run_seed,
+                        channel_skips=channel_skips,
+                    )
                 fusion = self._fit_fusion(scored, channel_skips)
                 if fusion is None:
                     scored = with_degraded_channels(scored, drift)
@@ -1197,6 +1226,7 @@ class FoldModelRunner:
         categorical: tuple[str, ...],
         seed: int,
         channel_skips: dict[str, str],
+        skip_key: str = "gbm",
     ) -> tuple[GbmBundle | None, TuningResult | None]:
         budget = (
             self.model_cfg.optuna.n_trials if self.trial_budget is None else int(self.trial_budget)
@@ -1221,9 +1251,80 @@ class FoldModelRunner:
                 bundle = fit_gbm(train, validation, features, categorical, self.model_cfg.gbm, seed)
         except ModelLayerError as exc:
             # Skipped with a named reason and surfaced, never silently omitted.
-            channel_skips["gbm"] = f"gbm fit refused: {exc}"
+            channel_skips[skip_key] = f"{skip_key} fit refused: {exc}"
             return None, None
         return bundle, tuning
+
+    def ablated_feature_names(self) -> tuple[tuple[str, ...], tuple[str, ...]]:
+        """``(kept, removed)`` for the feature-subset booster, from the registry's own groups.
+
+        The names come from the registry rather than a hard-coded prefix so the row labelled
+        "without graph features" is bound to the features P2 declares as graph features. A
+        group that exists in config but publishes no feature is refused here rather than
+        silently ablate nothing.
+        """
+        removed: list[str] = []
+        for group in self.ablate_feature_groups:
+            members = tuple(self.feature_registry.groups[group])
+            if not members:
+                raise ModelLayerError(
+                    f"registry group {group!r} declares no features, so ablating it would "
+                    "re-fit the same model under a different label"
+                )
+            unknown = sorted(set(members) - set(self.feature_registry.names))
+            if unknown:
+                raise ModelLayerError(
+                    f"registry group {group!r} publishes {unknown}, which is not in the "
+                    "fitted feature list"
+                )
+            removed.extend(members)
+        dropped = set(removed)
+        kept = tuple(name for name in self.feature_registry.names if name not in dropped)
+        if not kept:
+            raise ModelLayerError(
+                f"ablating {self.ablate_feature_groups} would leave no features to fit"
+            )
+        return kept, tuple(sorted(dropped))
+
+    def _fit_feature_ablated_gbm(
+        self,
+        scored: pl.DataFrame,
+        *,
+        train: pl.DataFrame,
+        validation: pl.DataFrame,
+        seed: int,
+        channel_skips: dict[str, str],
+    ) -> pl.DataFrame:
+        """Fit the booster a second time without the ablated groups and publish its column.
+
+        Same rows, same seed, same early-stopping discipline as :data:`P_GBM_COLUMN` — only the
+        feature set differs, which is what makes the two columns a measurement of the removed
+        groups rather than two views of one number. A fold whose reduced fit is refused leaves
+        the column absent and the reason in ``channel_skips``; the scorer then refuses the row
+        by name instead of falling back to the full model's probability.
+        """
+        from oxbow.models.gbm import _matrix as gbm_matrix
+
+        categorical_all = tuple(self.scorecard_cfg.binning.categorical_features)
+        kept, _removed = self.ablated_feature_names()
+        categorical = tuple(c for c in categorical_all if c in set(kept))
+        bundle, _ = self._fit_gbm(
+            train,
+            validation,
+            kept,
+            categorical,
+            seed,
+            channel_skips,
+            skip_key=P_GBM_NO_GRAPH_COLUMN,
+        )
+        if bundle is None:
+            return scored
+        return scored.with_columns(
+            pl.Series(
+                P_GBM_NO_GRAPH_COLUMN,
+                bundle.predict_matrix(gbm_matrix(scored, kept, categorical)),
+            )
+        )
 
     def _fit_fusion(
         self, scored: pl.DataFrame, channel_skips: dict[str, str]

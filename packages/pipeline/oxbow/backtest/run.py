@@ -20,7 +20,7 @@ import argparse
 import json
 import sys
 import traceback
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Mapping, Sequence
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Final
@@ -31,6 +31,7 @@ from oxbow.backtest import fakes, serialize
 from oxbow.backtest.ablation import (
     ABLATION_ROWS,
     BASELINE_POLICIES,
+    ROW_IDS,
     AblationSpec,
     build_ablation,
     check_leakage_control,
@@ -45,7 +46,12 @@ from oxbow.backtest.interfaces import (
     ScoreResult,
 )
 from oxbow.backtest.model_card import build_model_card_payload
-from oxbow.backtest.policies import POLICY_EV_CPSAT, POLICY_EV_GREEDY, POLICY_THRESHOLD
+from oxbow.backtest.policies import (
+    POLICY_EV_CPSAT,
+    POLICY_EV_GREEDY,
+    POLICY_RULES_ONLY,
+    POLICY_THRESHOLD,
+)
 
 DEFAULT_OUT_DIR: Final = "out/backtest"
 SPLIT_REPORT_LINE: Final = (
@@ -287,12 +293,17 @@ class CorpusRuleHits:
         }
 
 
-# The honest ablation rows on a real corpus run the full fitted stack; each gets a distinct
-# policy ladder so the threshold-vs-EV row still carries the v2 money comparison. Per-row
-# feature/model subsetting (scorecard-only, GBM-without-graph) is the remaining distance to a
-# scientifically distinct ablation and is named in the payload rather than faked here.
+# Each honest row names the fitted object it is measured on, and the policy ladders it runs
+# through. The profile is the model (DEV-027: a row labelled "Scorecard only" has to be scored
+# by the scorecard); the ladder is the queueing decision, and the threshold-vs-EV row is the
+# one row that is deliberately a policy comparison on one model.
+#
+# "rules_only" has no probability of its own — a rule severity sum is not a price — so its
+# queue is chosen by severity (POLICY_RULES_ONLY) while its p column stays the full stack's.
+# The payload's ``ablation_caveat`` is generated from this table, so the sentence a reviewer
+# reads cannot drift from what the rows actually were.
 _REAL_POLICIES_BY_ROW: dict[str, tuple[str, ...]] = {
-    "rules_only": (POLICY_THRESHOLD,),
+    "rules_only": (POLICY_RULES_ONLY,),
     "scorecard_only": (POLICY_THRESHOLD, POLICY_EV_GREEDY),
     "gbm_no_graph": (POLICY_THRESHOLD, POLICY_EV_GREEDY),
     "gbm_with_graph": (POLICY_THRESHOLD, POLICY_EV_GREEDY),
@@ -301,6 +312,52 @@ _REAL_POLICIES_BY_ROW: dict[str, tuple[str, ...]] = {
     "threshold_vs_ev": (POLICY_THRESHOLD, POLICY_EV_GREEDY, POLICY_EV_CPSAT),
     "full_on_ibm": (POLICY_THRESHOLD, POLICY_EV_GREEDY, POLICY_EV_CPSAT),
 }
+
+ABLATION_PROFILES: dict[str, str] = {
+    "rules_only": "calibrated",
+    "scorecard_only": "scorecard",
+    "gbm_no_graph": "gbm_no_graph",
+    "gbm_with_graph": "gbm",
+    "plus_ifusion": "fused_uncalibrated",
+    "full_calibrated": "calibrated",
+    "threshold_vs_ev": "calibrated",
+    "full_on_ibm": "calibrated",
+}
+
+
+def _ablation_caveat() -> str:
+    """The caveat, generated from the profile table so it cannot disagree with the run.
+
+    A hand-written sentence about what the table measures goes stale the moment a row changes,
+    and a stale disclosure is worse than none: it teaches a reviewer to ignore the paragraph.
+    These rows are read off :data:`ABLATION_PROFILES` and :data:`_REAL_POLICIES_BY_ROW` on
+    every run, so the only way to change what this says is to change what the rows do.
+    """
+    from oxbow.models.scorer import PROFILES
+
+    shared = sorted(
+        row_id
+        for row_id, profile in ABLATION_PROFILES.items()
+        if any(
+            other != row_id and ABLATION_PROFILES[other] == profile for other in ABLATION_PROFILES
+        )
+    )
+    distinct = {PROFILES[profile] for profile in ABLATION_PROFILES.values()}
+    return (
+        f"Each row is scored by the column its label names, of {len(distinct)} distinct fitted "
+        f"channels: {', '.join(f'{row}={ABLATION_PROFILES[row]}' for row in ROW_IDS)}. "
+        "Scorecard, GBM-with-graph and GBM-without-graph are three separate models — the "
+        "graph-free booster is refitted on the registry groups config/splits.yaml "
+        "ablation.graph_feature_groups names — so a difference between those rows is a "
+        "measurement of the graph, not of a policy ladder. "
+        "The row 'Full system on IBM-AML corpus' was NOT run on the IBM-AML corpus: this run "
+        "scores one corpus, and that row is the transfer check still to be made, not a result "
+        f"of it. Rows sharing one probability column: {', '.join(shared) or 'none'}; for those, "
+        "the discrimination columns are the same measurement and only the economics differ, "
+        "because the harness's PR-AUC is taken from the ranking and not from the queue. "
+        "The rules-only row has no probability of its own: its queue is ordered by rule "
+        "severity, and its p column is the full stack's."
+    )
 
 
 # The artifact the score stage writes next to the feature matrix, and the only place the
@@ -472,28 +529,32 @@ def _resolve_fold_plan(
     }
 
 
-class SharedFoldScores:
-    """One fit per fold, reused by every honest ablation row that IS that same fit.
+class SharedFoldRuns:
+    """One fit per fold, reused by every ablation row that reads a channel of it.
 
-    WHY THIS IS NOT A SHORTCUT. On a real corpus the eight honest rows differ by policy ladder,
-    not by model or feature subset (the payload's ``ablation_caveat`` says so), so all eight ask
-    for the same deterministic fit of the same stack over the same three slices under the same
-    seed — eight times, forty times with five folds, ~160 s a fit on this host. Re-running an
-    identical fit cannot produce an identical number that means something different; it only
-    spends the machine. The key is the fold's own identity — row count and as-of span of each of
-    the three slices, plus the spec hash and seed — so two folds can never share a result by
-    accident, and a scorer that is handed a different slice re-fits.
+    WHY THIS IS NOT A SHORTCUT. A fold fit is the expensive unit: on this host one costs
+    minutes and gigabytes, and the eight honest rows would otherwise ask for it eight times
+    and get the same numbers. What the rows measure is a DIFFERENT fitted object each — the
+    WOE logistic, the booster on every feature, the booster refitted without the graph
+    groups, the meta-learner, the calibrated meta-learner — and all of them are columns of
+    the one fold run. So the run is fitted once and each row projects its own column out of
+    it (``WalkForwardScorer.scores_from``), which is an ablation; asking the same scorer for
+    the same number under eight labels would be the imitation DEV-027 refused to ship.
+
+    The key is the fold's own identity — row count and as-of span of each of the three
+    slices, plus the spec hash and seed — so two folds can never share a result by accident,
+    and a scorer handed a different slice re-fits.
 
     The leakage control is NOT run through this: it is a different scorer object with a
     different (cheating) behaviour, and it must stay a separate measurement.
     """
 
-    def __init__(self, factory: Callable[[], Any]) -> None:
-        self._factory = factory
-        self._cache: dict[tuple[Any, ...], ScoreResult] = {}
+    def __init__(self, scorer: Any) -> None:
+        self._scorer = scorer
+        self._cache: dict[tuple[Any, ...], Any] = {}
         self.fits = 0
 
-    def score(
+    def fold_run(
         self,
         *,
         train: pl.DataFrame,
@@ -501,7 +562,7 @@ class SharedFoldScores:
         scored: pl.DataFrame,
         feature_spec_hash: str,
         seed: int,
-    ) -> ScoreResult:
+    ) -> Any:
         key = (
             feature_spec_hash,
             int(seed),
@@ -511,7 +572,7 @@ class SharedFoldScores:
         )
         hit = self._cache.get(key)
         if hit is None:
-            hit = self._factory().score(
+            hit = self._scorer.fold_run(
                 train=train,
                 validation=validation,
                 scored=scored,
@@ -521,6 +582,61 @@ class SharedFoldScores:
             self._cache[key] = hit
             self.fits += 1
         return hit
+
+    def score(
+        self,
+        *,
+        profile: str,
+        train: pl.DataFrame,
+        validation: pl.DataFrame,
+        scored: pl.DataFrame,
+        feature_spec_hash: str,
+        seed: int,
+    ) -> Any:
+        from oxbow.models.scorer import WalkForwardScorer
+
+        return WalkForwardScorer.scores_from(
+            self.fold_run(
+                train=train,
+                validation=validation,
+                scored=scored,
+                feature_spec_hash=feature_spec_hash,
+                seed=seed,
+            ),
+            profile=profile,
+        )
+
+
+class ProfileScorer:
+    """The harness ``Scorer`` for one ablation row: the shared fold fit, its own column.
+
+    A thin adapter, deliberately. ``run_variant`` only knows the ``Scorer`` protocol, so the
+    row's profile is bound here rather than threaded through the harness — which keeps the
+    harness free of model-layer vocabulary and keeps the mapping from label to fitted object
+    visible in one line of ``run_real``.
+    """
+
+    def __init__(self, runs: SharedFoldRuns, profile: str) -> None:
+        self._runs = runs
+        self.profile = profile
+
+    def score(
+        self,
+        *,
+        train: pl.DataFrame,
+        validation: pl.DataFrame,
+        scored: pl.DataFrame,
+        feature_spec_hash: str,
+        seed: int,
+    ) -> Any:
+        return self._runs.score(
+            profile=self.profile,
+            train=train,
+            validation=validation,
+            scored=scored,
+            feature_spec_hash=feature_spec_hash,
+            seed=seed,
+        )
 
 
 def _slice_identity(frame: pl.DataFrame, name: str) -> tuple[Any, ...]:
@@ -586,12 +702,14 @@ def run_real(
             trial_budget=1,
             explain=False,
             root=repo,
+            ablate_feature_groups=config.graph_feature_groups,
         )
         return WalkForwardScorer(runner, embargo_days=plan.embargo_days)
 
-    # One fit per fold, shared by the eight honest rows: they are the same configuration under
-    # different policy ladders, so re-fitting it eight times cannot measure anything new.
-    shared_scores = SharedFoldScores(build_fold_scorer)
+    # One fold fit, shared by every honest row — each row reading the column ITS model made.
+    # The graph-free booster is the only extra fit this buys: without it the "without graph
+    # features" row would have to be the with-graph model's number under a second label.
+    shared_scores = SharedFoldRuns(build_fold_scorer())
 
     allocator = _p5_allocator(economics)
     rule_hits = CorpusRuleHits(corpus)
@@ -603,7 +721,7 @@ def run_real(
                 row_id=row_id,
                 label=label,
                 question=question,
-                scorer=shared_scores,
+                scorer=ProfileScorer(shared_scores, ABLATION_PROFILES[row_id]),
                 policies=_REAL_POLICIES_BY_ROW[row_id],
                 corpus_name="real-corpus",
             )
@@ -652,12 +770,8 @@ def run_real(
         "best_honest_pr_auc": control.best_honest_pr_auc,
         "message": control.message,
     }
-    payload["ablation_caveat"] = (
-        "Every honest arm here runs the full fitted stack; the rows differ by policy ladder, "
-        "not yet by feature subset or model. A scientifically distinct ablation (scorecard-only "
-        "vs GBM-without-graph vs GBM-with-graph) needs per-row feature subsetting, which is "
-        "named here rather than faked by reusing one scorer's numbers under eight labels."
-    )
+    payload["ablation_caveat"] = _ablation_caveat()
+    payload["ablation_profiles"] = dict(ABLATION_PROFILES)
     payload["provenance_note"] = (
         "Figures came from a real per-account corpus run through the P4b scorer, the P5 "
         "allocator and the ONE splits module; provenance=real_corpus."

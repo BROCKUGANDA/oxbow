@@ -57,6 +57,14 @@ def _as_int_list(value: Any, name: str) -> tuple[int, ...]:
     return tuple(_as_int(item, f"{name}[]") for item in value)
 
 
+def _as_str_list(value: Any, name: str) -> tuple[str, ...]:
+    if not isinstance(value, list) or not value:
+        raise ConfigError(f"{name} must be a non-empty list")
+    if not all(isinstance(item, str) and item for item in value):
+        raise ConfigError(f"{name} must be a list of non-empty strings")
+    return tuple(value)
+
+
 @dataclass(frozen=True, slots=True)
 class BenefitRatioConfig:
     """The label, formula and non-Sharpe flag for the risk-adjusted benefit ratio.
@@ -119,6 +127,11 @@ class BacktestConfig:
     leakage_label: str
     leakage_show_in_ui: bool
 
+    # The registry groups the model-ablation row removes before refitting the booster, so
+    # "LightGBM without graph features" is a second fitted model and not one model's number
+    # printed under two labels (DEV-027).
+    graph_feature_groups: tuple[str, ...]
+
     # entity-disjoint robustness check
     entity_disjoint_enabled: bool
     entity_disjoint_holdout_fraction: float
@@ -153,6 +166,7 @@ def load_backtest_config(root: Path | None = None) -> BacktestConfig:
     mc = dict(_require(splits, ("report", "monte_carlo")))
     tail = dict(_require(splits, ("report", "tail_risk")))
     leakage = dict(_require(splits, ("leakage_control",)))
+    ablation = dict(_require(splits, ("ablation",)))
     entity = dict(_require(splits, ("entity_disjoint",)))
     validation = dict(_require(splits, ("validation",)))
 
@@ -231,6 +245,9 @@ def load_backtest_config(root: Path | None = None) -> BacktestConfig:
         leakage_expect_outperforms=_require(leakage, ("expect_outperforms",)) is True,
         leakage_label=str(_require(leakage, ("label",))),
         leakage_show_in_ui=_require(leakage, ("show_in_validation_ui",)) is True,
+        graph_feature_groups=_as_str_list(
+            _require(ablation, ("graph_feature_groups",)), "ablation.graph_feature_groups"
+        ),
         entity_disjoint_enabled=_require(entity, ("enabled",)) is True,
         entity_disjoint_holdout_fraction=_as_float(
             _require(entity, ("holdout_fraction",)), "entity_disjoint.holdout_fraction"

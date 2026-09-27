@@ -122,9 +122,9 @@ def test_each_arm_lands_one_row_under_the_tables_own_names() -> None:
     # The producer calls it `net_benefit_total_minor`; the column is `net_benefit_minor`.
     assert rows[0]["net_benefit_minor"] == 2500
     assert rows[1]["net_benefit_minor"] == -100, "a loss is a number, not a clamp to zero"
-    assert all(isinstance(row["net_benefit_minor"], int) for row in rows), (
-        "money is an integer count of minor units; a float here is DEV-005 at the read model"
-    )
+    assert all(
+        isinstance(row["net_benefit_minor"], int) for row in rows
+    ), "money is an integer count of minor units; a float here is DEV-005 at the read model"
     assert rows[0]["pr_auc"] == 0.25 and rows[0]["ci_low"] == 0.05
     assert rows[0]["ci_method"] == CI_METHOD
     assert rows[0]["seed"] == 1337, "the seed comes from the run, not from the row's own label"
@@ -192,9 +192,9 @@ def test_a_figure_two_arms_disagree_on_refuses_by_name() -> None:
 
     _rows, refused = validation_metric_rows(document)
     assert any("label_prevalence" in line for line in refused), refused
-    assert any("Arm B" in line for line in refused), (
-        f"the refusal must name the disagreeing arm, or it is a count and not a diagnosis: {refused}"
-    )
+    assert any(
+        "Arm B" in line for line in refused
+    ), f"the refusal must name the disagreeing arm, or it is a count and not a diagnosis: {refused}"
 
 
 def test_a_metric_nothing_measured_is_absent_rather_than_zero() -> None:
@@ -210,12 +210,12 @@ def test_a_metric_nothing_measured_is_absent_rather_than_zero() -> None:
         "a flag with no recorded value landing as 0.0 would report a leakage control that "
         "did not run as a control that did not detect"
     )
-    assert "labelled_positive_rows" not in names, (
-        "its value was removed from both arms; a zero would be a measured count of none"
-    )
-    assert _metric(rows, "label_prevalence")["n"] == 1000, (
-        "the metrics the fixture still records must land unchanged by a neighbour's absence"
-    )
+    assert (
+        "labelled_positive_rows" not in names
+    ), "its value was removed from both arms; a zero would be a measured count of none"
+    assert (
+        _metric(rows, "label_prevalence")["n"] == 1000
+    ), "the metrics the fixture still records must land unchanged by a neighbour's absence"
 
 
 # --- fairness_row: the card's published axes, not the per-arm blocks ---------
@@ -347,11 +347,11 @@ def test_each_ran_check_lands_and_an_undocumented_family_refuses() -> None:
     assert rows[0]["seed"] == 7, "the run's recorded seed, stated once in the document"
     assert rows[1]["seed"] == 11, "a check that carries its own seed does not inherit the run's"
     assert rows[0]["note"] == "reordered_at_cutoff=False"
-    assert refused == [
-        reason for reason in refused if "unmapped_kind" in reason and "source map" in reason
-    ] and len(refused) == 1, (
-        f"a family with no declared mapping cannot say which of its figures is the magnitude: {refused}"
-    )
+    assert (
+        refused
+        == [reason for reason in refused if "unmapped_kind" in reason and "source map" in reason]
+        and len(refused) == 1
+    ), f"a family with no declared mapping cannot say which of its figures is the magnitude: {refused}"
 
 
 def test_a_card_with_no_perturbations_block_is_an_error_not_an_empty_table() -> None:

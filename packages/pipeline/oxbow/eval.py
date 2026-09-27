@@ -393,6 +393,11 @@ def _declared_provenance(document: Mapping[str, Any]) -> str:
     return "unknown"
 
 
+#: Which artifact a publisher is allowed to prefer: a corpus result outranks a self-check, and
+#: an unstamped document outranks neither but is not outranked by a scratch run either.
+_PROVENANCE_AUTHORITY: Final[dict[str, int]] = {PROVENANCE_FAKE: 0, "unknown": 1, "real_corpus": 2}
+
+
 def _refuse_a_stale_backtest_artifact(root: Path) -> None:
     """Refuse to publish figures a newer backtest has already superseded.
 
@@ -402,11 +407,18 @@ def _refuse_a_stale_backtest_artifact(root: Path) -> None:
     generated documents make that detectable after the fact (§16's staleness detector);
     this makes it loud *before* the document is written, which is the point of a gate.
 
-    Two signals, because they catch different mistakes. A run directory declaring
-    ``provenance: real_corpus`` while the published file declares ``fake_harness`` is a
-    harness self-check on the page instead of the corpus result — no clock reading needed.
-    A strictly newer modification time is the general case: the published copy is older
-    than something the same command wrote.
+    Two signals, because they catch different mistakes, and both read the variants rather
+    than the path or the clock alone:
+
+    * a candidate more authoritative than the publication — a ``real_corpus`` run sitting
+      beside a published ``fake_harness`` self-check — is a supersession whatever the clock
+      says, because the file on the page is the lesser measurement;
+    * a strictly newer candidate at equal-or-greater authority is the general case: the
+      published copy is older than something the same command wrote.
+
+    A newer candidate of LOWER authority is ignored, and that gap is stated rather than
+    hidden: a harness self-check or a scratch demo run written after the real result must
+    not wedge the publisher into refusing the corpus numbers it is supposed to print.
     """
     published = root / "out" / "backtest" / "ablation_results.json"
     if not published.is_file():
@@ -417,20 +429,23 @@ def _refuse_a_stale_backtest_artifact(root: Path) -> None:
 
     for candidate in sorted((root / "out" / "backtest").glob("*/ablation_results.json")):
         kind = _declared_provenance(_read_json(candidate))
-        demoted = kind == "real_corpus" and published_kind == PROVENANCE_FAKE
-        newer = candidate.stat().st_mtime > published_stamp + 1.0
-        if not (demoted or newer):
+        outranks = _PROVENANCE_AUTHORITY[kind] > _PROVENANCE_AUTHORITY[published_kind]
+        newer = (
+            candidate.stat().st_mtime > published_stamp + 1.0
+            and _PROVENANCE_AUTHORITY[kind] >= _PROVENANCE_AUTHORITY[published_kind]
+        )
+        if not (outranks or newer):
             continue
         reason = (
-            "declares real_corpus while the published one declares fake_harness"
-            if demoted
-            else "was written after the published one"
+            f"declares {kind} while the published one declares {published_kind}"
+            if outranks
+            else f"was written after the published one and declares {kind}"
         )
         raise FileNotFoundError(
             f"{candidate.relative_to(root).as_posix()} {reason}, and this command publishes "
-            f"{published.relative_to(root).as_posix()}, which is older. Refusing rather than "
-            "regenerating cards from superseded figures: the fix is to point "
-            "`oxbow backtest --out` at out/backtest, or copy the intended artifact pair "
+            f"{published.relative_to(root).as_posix()}, which is {'less authoritative' if outranks else 'older'}. "
+            "Refusing rather than regenerating cards from superseded figures: the fix is to "
+            "point `oxbow backtest --out` at out/backtest, or copy the intended artifact pair "
             "(ablation_results.json and model_card.json) into place and re-run."
         )
 
@@ -1635,7 +1650,19 @@ def limitations_section(loaded: Mapping[str, Any], economics: Economics) -> list
         for variant in ((ablation or {}).get("variants") or [])
         if str(variant.get("provenance", "")) == PROVENANCE_FAKE
     ]
-    honest_rows_share_one_fit = bool(ablation) and not fake_rows
+    # How many distinct fitted channels a model ablation needs. The five model-shaped rows of
+    # plan §12 — scorecard, GBM without the graph, GBM with it, the IFusion meta-learner, and
+    # the calibrated stack — are five different models, so an artifact that declares fewer than
+    # five channels behind those labels has rows that share a measurement. Read off the
+    # artifact, not off the current code: a card must describe the run that produced it, and an
+    # artifact written before per-row profiling declares no profiles at all and fails this test.
+    MIN_DISTINCT_MODEL_CHANNELS: Final = 5
+    declared_profiles = (ablation or {}).get("ablation_profiles") or {}
+    rows_scored_per_model = (
+        isinstance(declared_profiles, Mapping)
+        and len({str(value) for value in declared_profiles.values()}) >= MIN_DISTINCT_MODEL_CHANNELS
+    )
+    honest_rows_share_one_fit = bool(ablation) and not fake_rows and not rows_scored_per_model
     harness_claim = (
         "The statistical and economic numbers currently published come from the "
         "hand-computed fake harness, not from a scored corpus. They exist to prove the "
@@ -1656,6 +1683,18 @@ def limitations_section(loaded: Mapping[str, Any], economics: Economics) -> list
             "discrimination. Per-row feature subsetting is the missing work and the artifact "
             "says so in its own `ablation_caveat`."
         )
+    elif rows_scored_per_model:
+        harness_claim = (
+            "Each model row in the published table is scored by the channel its label names, "
+            f"across {len({str(v) for v in declared_profiles.values()})} distinct fitted "
+            "channels, so a difference between the scorecard, GBM-without-graph and "
+            "GBM-with-graph rows is a measurement of that model. What the table still does not "
+            "measure: the row labelled for the IBM-AML corpus was scored on the same corpus as "
+            "the rest of the table, and the rows that share a probability column "
+            "(rules-only queueing, threshold-vs-EV, full-calibrated) are policy comparisons "
+            "whose discrimination columns are one measurement. The artifact's own "
+            "`ablation_caveat` names both."
+        )
     if card is not None and ablation is not None:
         note = str(ablation["provenance_note"])
         harness_claim = (
@@ -1667,7 +1706,11 @@ def limitations_section(loaded: Mapping[str, Any], economics: Economics) -> list
             "id": (
                 "ablation_rows_share_one_fit_until_per_row_subsetting_lands"
                 if honest_rows_share_one_fit
-                else "published_metrics_are_harness_self_checks_until_p6_runs_for_real"
+                else (
+                    "ablation_transfer_row_and_policy_rows_are_not_model_comparisons"
+                    if rows_scored_per_model
+                    else "published_metrics_are_harness_self_checks_until_p6_runs_for_real"
+                )
             ),
             "claim": harness_claim,
             "evidence": [

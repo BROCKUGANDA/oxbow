@@ -98,7 +98,9 @@ def engine() -> Iterator[Any]:
             f"last failure {last}. Start it with `docker compose up -d postgres`; this file is the "
             "only place the analytical rows are checked against the real column set."
         )
-    url = admin.split("//", 1)[0] + "//" + admin.split("//", 1)[1].split("/", 1)[0] + f"/{scratch_db}"
+    url = (
+        admin.split("//", 1)[0] + "//" + admin.split("//", 1)[1].split("/", 1)[0] + f"/{scratch_db}"
+    )
     engine = create_engine(url.replace("postgresql://", "postgresql+psycopg://", 1), future=True)
     Base.metadata.create_all(engine)
     try:
@@ -129,11 +131,7 @@ def tables() -> dict[str, list[dict[str, Any]]]:
                         "axis": "amount_band",
                         "available": True,
                         "buckets": [
-                            {
-                                "bucket": "high",
-                                "false_positive_rate": 0.2,
-                                "n_accounts": 5
-                            },
+                            {"bucket": "high", "false_positive_rate": 0.2, "n_accounts": 5},
                         ],
                     },
                 ],
@@ -147,7 +145,9 @@ def tables() -> dict[str, list[dict[str, Any]]]:
     rows["perturbation_row"], refusals["perturbation_row"] = perturbation_rows(perturbations)
     # An empty table here means the mapper refused, and the test would pass vacuously.
     for name in TABLES:
-        assert rows[name], f"{name} produced no rows from a fixture that describes it: {refusals[name]}"
+        assert rows[
+            name
+        ], f"{name} produced no rows from a fixture that describes it: {refusals[name]}"
         assert not refusals[name], refusals[name]
     return rows
 
@@ -223,6 +223,6 @@ def test_a_completed_run_takes_no_further_analytical_rows(
         with pytest.raises((LandingError, SQLAlchemyError, ValueError)) as caught:
             sink.write("validation_metric", run_id, tables["validation_metric"])
             session.commit()
-        assert "run" in str(caught.value).lower(), (
-            f"refused, but not for the reason that matters: {caught.value}"
-        )
+        assert (
+            "run" in str(caught.value).lower()
+        ), f"refused, but not for the reason that matters: {caught.value}"

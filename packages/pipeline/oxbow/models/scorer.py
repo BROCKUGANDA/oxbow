@@ -48,6 +48,9 @@ from oxbow.models.run import (
     BAND_OBSERVED_RATE_COLUMN,
     EVALUATION_SLICE_KEY,
     P_FUSED_COLUMN,
+    P_FUSED_RAW_COLUMN,
+    P_GBM_COLUMN,
+    P_GBM_NO_GRAPH_COLUMN,
     P_SCORECARD_COLUMN,
     FoldModelRunner,
     FoldRun,
@@ -59,6 +62,7 @@ from oxbow.scoring.frame import (
     COL_AS_OF_TS,
     COL_FOLD,
     COL_ROLE,
+    COL_SPEC_HASH,
     META_COLUMNS,
     ROLE_TEST,
     ROLE_TRAIN,
@@ -209,6 +213,26 @@ class FixedFoldSlicesProvider:
         return self._embargo_days
 
 
+#: One ablation profile per score column, each produced by a DIFFERENT fitted object inside
+#: the same fold fit — the WOE logistic, the booster on every feature, the booster refitted
+#: without the graph groups, the meta-learner, and the calibrated meta-learner. A profile is
+#: a request, not a preference: :meth:`WalkForwardScorer.score` reads exactly that column and
+#: refuses the row when the fold did not produce it, because a fallback would report the full
+#: stack's probability under a label that says a smaller model made it (DEV-027).
+PROFILES: Final[dict[str, str]] = {
+    "scorecard": P_SCORECARD_COLUMN,
+    "gbm": P_GBM_COLUMN,
+    "gbm_no_graph": P_GBM_NO_GRAPH_COLUMN,
+    "fused_uncalibrated": P_FUSED_RAW_COLUMN,
+    "calibrated": P_FUSED_COLUMN,
+}
+DEFAULT_PROFILE: Final = "calibrated"
+
+
+class ProfileUnavailableError(FrameContractViolationError):
+    """The fold did not produce the column a profile asked for, so the row is not measurable."""
+
+
 class WalkForwardScorer:
     """A ``Scorer`` (per ``oxbow.backtest.interfaces``) backed by the P4b fold runner.
 
@@ -216,6 +240,11 @@ class WalkForwardScorer:
     :meth:`score` is called once per fold by the harness and always returns a probability
     for every account in the ``scored`` slice — the harness refuses a missing score rather
     than price an account at a silent zero, and this scorer never produces one.
+
+    ``profile`` selects which of the fold's fitted channels answers the harness, so one fold
+    fit can serve the model-ablation rows honestly: each row reads the column ITS model made.
+    The default is ``"calibrated"``, which is the production configuration and the number the
+    rest of the packet quotes.
     """
 
     def __init__(
@@ -223,13 +252,21 @@ class WalkForwardScorer:
         runner: FoldModelRunner,
         *,
         embargo_days: int | None = None,
+        profile: str = DEFAULT_PROFILE,
     ) -> None:
+        if profile not in PROFILES:
+            raise ProfileUnavailableError(
+                f"unknown ablation profile {profile!r}; the fitted channels are "
+                f"{sorted(PROFILES)}, and a profile that names nothing would score the row off "
+                "whichever column happened to be present"
+            )
         self._runner = runner
+        self.profile = profile
         self._embargo_days = (
             runner.split_cfg.embargo_days if embargo_days is None else int(embargo_days)
         )
 
-    def score(
+    def fold_run(
         self,
         *,
         train: pl.DataFrame,
@@ -237,8 +274,12 @@ class WalkForwardScorer:
         scored: pl.DataFrame,
         feature_spec_hash: str,
         seed: int,
-    ) -> ScoreResult:
-        """Fit on ``train`` + ``validation``, score ``scored``, return calibrated per-account p.
+    ) -> FoldRun:
+        """Fit this fold's whole stack once and return the run, with every channel's column.
+
+        This is the unit of work an ablation row costs. :meth:`score` reads one column out of
+        what it returns, so a shared cache can answer six rows from one call and each row's
+        number still comes from the model its label names.
 
         Raises on a feature-spec mismatch: the harness hands over the corpus's declared
         ``feature_spec_hash`` and this scorer refuses to score a frame the model's feature
@@ -275,18 +316,60 @@ class WalkForwardScorer:
             stamped_scored,
             embargo_days=self._embargo_days,
         )
-        run = self._runner.run_fold(
+        return self._runner.run_fold(
             frame,
             fold,
             provider=provider,
             evaluation_role=ROLE_TEST,
             seed=seed,
         )
-        entries = self._account_scores(run, fold=fold)
+
+    def score(
+        self,
+        *,
+        train: pl.DataFrame,
+        validation: pl.DataFrame,
+        scored: pl.DataFrame,
+        feature_spec_hash: str,
+        seed: int,
+    ) -> ScoreResult:
+        """Fit the fold and answer with the profile's own column — never another channel's."""
+        run = self.fold_run(
+            train=train,
+            validation=validation,
+            scored=scored,
+            feature_spec_hash=feature_spec_hash,
+            seed=seed,
+        )
+        return self.scores_from(run, profile=self.profile)
+
+    @classmethod
+    def scores_from(cls, run: FoldRun, *, profile: str) -> ScoreResult:
+        """Project one fold's fitted stack onto the probability column a profile names.
+
+        Public because the ablation cache holds the :class:`FoldRun` and asks this six times
+        over one fit. It is a projection, not a fallback: the column is read and nothing else
+        is consulted, so two rows can only report the same number if they asked for the same
+        column — which the ablation table's own distinctness check then catches.
+        """
+        if profile not in PROFILES:
+            raise ProfileUnavailableError(
+                f"unknown ablation profile {profile!r}; the fitted channels are {sorted(PROFILES)}"
+            )
+        entries = cls._account_scores(run, profile=profile)
+        hashes = set(run.scored.get_column(COL_SPEC_HASH).unique().to_list())
+        if len(hashes) != 1:
+            raise FrameContractViolationError(
+                f"fold {run.fold}: its scored rows carry {sorted(hashes)} — a fold fitted on one "
+                "feature spec and scored on another cannot be reported as one number"
+            )
         return ScoreResult(
             scores=entries,
-            model_version=self._model_version(run, fold=fold),
-            feature_spec_hash=frame.feature_spec_hash,
+            # Which profile produced it is recorded per row in the payload's
+            # `ablation_profiles` (keyed by row_id) rather than stitched in here: the string
+            # lands in a VARCHAR(128) column and a lineage version already fills most of it.
+            model_version=cls._model_version(run, fold=run.fold),
+            feature_spec_hash=str(hashes.pop()),
         )
 
     # -- mapping --------------------------------------------------------------
@@ -300,47 +383,64 @@ class WalkForwardScorer:
             | set(ALLOWED_ATTACHED_COLUMNS)
         )
 
-    def _account_scores(self, run: FoldRun, *, fold: int) -> dict[str, AccountScore]:
-        if not isinstance(run, FoldRun):  # pragma: no cover - defensive against a runner swap
-            raise FrameContractViolationError("run_fold returned an unexpected type")
+    @classmethod
+    def _account_scores(cls, run: FoldRun, *, profile: str) -> dict[str, AccountScore]:
+        column = PROFILES[profile]
         evaluation = run.scored.filter(pl.col(COL_ROLE) == ROLE_TEST)
         if evaluation.height == 0:
             raise FrameContractViolationError(
-                f"fold {fold}: the runner produced no scored test rows to map; a fold that "
+                f"fold {run.fold}: the runner produced no scored test rows to map; a fold that "
                 "was fit but never scored is a contract break, not an empty result"
+            )
+        if column not in run.scored.columns:
+            raise ProfileUnavailableError(
+                f"fold {run.fold}: profile {profile!r} asks for {column!r} and the fold did not "
+                f"publish it. Its scoring_mode is {run.mode!r} and it recorded "
+                f"{dict(run.channel_skips) or 'no channel skips'} — the channels it refused are "
+                "reported, not replaced with another channel's number"
             )
         entries: dict[str, AccountScore] = {}
         for row in evaluation.iter_rows(named=True):
             key = str(row[COL_ACCOUNT_KEY])
             entries[key] = AccountScore(
                 account_key=key,
-                p_calibrated=self._probability(row, account_key=key),
-                **self._band_evidence(row),
+                p_calibrated=cls._probability(
+                    row, profile=profile, column=column, account_key=key, fold=run.fold
+                ),
+                **cls._band_evidence(row),
             )
         return entries
 
     @staticmethod
-    def _probability(row: dict[str, object], *, account_key: str) -> float:
-        """The calibrated p, with one documented fallback and no invented number.
+    def _probability(
+        row: dict[str, object],
+        *,
+        profile: str,
+        column: str,
+        account_key: str,
+        fold: int,
+    ) -> float:
+        """The profile's own number, or a named refusal — one column, no fallback.
 
-        ``p_fused`` is the calibrated probability whenever the fold calibrated, and the
-        prior-corrected scorecard probability whenever it degraded to scorecard-and-rules
-        (both are inside ``[0, 1]``). The one case it can leave that interval is a fold that
-        fitted a fused score but whose calibration was refused, where ``p_fused`` carries the
-        raw meta-learner output: there the defensible probability is the audited scorecard
-        channel, never a rescaled raw score.
+        DEV-027's imitation was possible because one scorer answered for eight labels and the
+        reader could not tell which channel produced a row. Each row now declares the column it
+        reads, so a fold that did not fit that channel stops the row instead of quietly
+        borrowing the full stack's probability.
         """
-        fused = float(row[P_FUSED_COLUMN])
-        if 0.0 <= fused <= 1.0:
-            return fused
-        scorecard = row.get(P_SCORECARD_COLUMN)
-        if scorecard is not None and 0.0 <= float(scorecard) <= 1.0:
-            return float(scorecard)
-        raise FrameContractViolationError(
-            f"no probability in [0, 1] is available for {account_key}: fused={fused!r} is "
-            "outside the unit interval and the scorecard channel is missing or invalid, so "
-            "any number emitted here would be invented (03 A rule 2)."
-        )
+        raw = row.get(column)
+        if raw is None:
+            raise ProfileUnavailableError(
+                f"fold {fold}, account {account_key}: {column!r} (profile {profile!r}) is null, "
+                "and pricing a queue off a missing score would book it as a zero"
+            )
+        value = float(raw)
+        if not math.isfinite(value) or not 0.0 <= value <= 1.0:
+            raise ProfileUnavailableError(
+                f"fold {fold}, account {account_key}: {column!r} (profile {profile!r}) is "
+                f"{value!r}, outside [0, 1] — the economics multiply it by exposure, so it has "
+                "to be a probability and this profile is not one on this fold"
+            )
+        return value
 
     @staticmethod
     def _band_evidence(row: dict[str, object]) -> dict[str, float | int]:
@@ -360,10 +460,8 @@ class WalkForwardScorer:
         return {"band_observed_rate": float(raw_rate), "band_n": n}
 
     @staticmethod
-    def _model_version(run: object, *, fold: int) -> str:
-        from oxbow.models.run import FoldRun
-
-        assert isinstance(run, FoldRun)  # narrowed above
+    def _model_version(run: FoldRun, *, fold: int) -> str:
+        """Which fitted object produced the fold's rows, in one string the artifact can carry."""
         if run.lineage is not None and run.lineage.model_version is not None:
             return str(run.lineage.model_version)
         if run.gbm is not None:
@@ -372,8 +470,11 @@ class WalkForwardScorer:
 
 
 __all__ = [
+    "DEFAULT_PROFILE",
+    "PROFILES",
     "FixedFoldSlicesProvider",
     "FrameRuleHitProvider",
+    "ProfileUnavailableError",
     "WalkForwardScorer",
     "stamp_role",
 ]

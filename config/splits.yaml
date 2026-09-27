@@ -77,6 +77,18 @@ leakage_control:
   # and it must be visually distinguished from a real ablation row.
   render_as: control
 
+# --- model ablation -------------------------------------------------------
+ablation:
+  # The registry groups lifted out of a SECOND booster fit, so the
+  # "LightGBM without graph features" row is a different fitted model rather than
+  # the with-graph model's number printed under a second label (DEV-027). Each
+  # name must be a key of config/features.yaml `groups`; an unknown name is a
+  # refusal at runner construction, not a row that silently ablates nothing.
+  graph_feature_groups:
+    - graph_local
+    - graph_global
+    - graph_typology
+
 # --- backtest reporting --------------------------------------------------
 report:
   # A fold with no alerts above the cutoff has UNDEFINED precision at capacity.

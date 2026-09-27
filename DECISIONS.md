@@ -1148,7 +1148,7 @@ account (latest fold, latest as-of) before it validates, and an account whose *c
 refused is refused by name instead of rescued by an older fold's calibrated number. Three of the
 four tests added to `tests/unit/test_p7_warehouse_landing.py` fail if that collapse is reverted.
 
-## DEV-027 — the shared fold fit, the row labels that outran it, and the generator that now says so. **Fixed as disclosure; the model ablation is open work.**
+## DEV-027 — the shared fold fit, the row labels that outran it, and the generator that now says so. **Fixed as disclosure; the model ablation landed 2026-09-28 and awaits its re-run.**
 
 The first completed real-corpus walk-forward (2026-09-27, run `01M3HZHE02G8HC8D0HSEV5SP78` over
 `out/score/01M3H8WG436R394NZT2GS1KG69/backtest_corpus.parquet`) published nine variants whose
@@ -1201,4 +1201,44 @@ What would close it: channel and feature-subset switches in `models/run.py` (whi
 scorer factory in `backtest/run.py`, and a re-run. Until then the table ships with the sentence
 that bounds it, and a reviewer can check that sentence against `ablation_results.json` in one
 line.
+
+**Closed in code on 2026-09-28; the published table is still the old one.** The cheaper
+mechanism turned out to exist: the fold already fits the WOE logistic, the booster on every
+feature, the meta-learner and the calibrator as four separate objects and publishes each as its
+own column (`p_scorecard`, `p_gbm`, `p_fused_raw`, `p_fused`), so an ablation row is a *projection*
+of one fold run onto the column its label names — not a second stack. Only
+"LightGBM without graph features" needed a real extra fit: `FoldModelRunner(ablate_feature_groups=…)`
+refits the booster without the registry groups `config/splits.yaml` `ablation.graph_feature_groups`
+names, one more LightGBM fit per fold rather than five whole stacks.
+
+- `models/scorer.py` gained `PROFILES`, `WalkForwardScorer.fold_run` and `scores_from`, and the
+  silent `p_fused` → `p_scorecard` fallback is **gone**: a profile whose column the fold did not
+  publish raises `ProfileUnavailableError` naming the fold's mode and its recorded channel skips.
+  That fallback is the one move that would rebuild this defect while looking like its fix, and it
+  would only bite on a degraded fold — in production, not in a fixture.
+- `backtest/run.py` replaced `SharedFoldScores` (which cached one `ScoreResult` per fold) with
+  `SharedFoldRuns` (which caches the `FoldRun`) plus a `ProfileScorer` per row, and the row →
+  profile map `ABLATION_PROFILES`.
+- The caveat is **generated** from that map (`_ablation_caveat`), because a hand-maintained
+  sentence about what a table measures goes stale exactly when the table changes — which is what
+  happened here. It now also admits the two things this run still cannot claim: the row labelled
+  "Full system on IBM-AML corpus" was scored on the same corpus as the rest of the table, and the
+  rows sharing a probability column (rules-only queueing, threshold-vs-EV, full-calibrated) are
+  policy comparisons whose discrimination columns are one measurement.
+- `eval.py` reads the artifact's own `ablation_profiles` and only drops the limitation item when
+  at least five distinct channels are declared, so a regression that collapses two model rows onto
+  one channel puts the sentence back rather than publishing it silently.
+- `tests/unit/test_p6_per_row_model_ablation.py` (16) pins the distinctness of the five model
+  channels, the five different numbers out of one fold, the three refusal paths, the registry
+  group lookup, and that the generated caveat no longer carries the superseded admission.
+  `tests/unit/test_p6_backtest_exit_code_is_not_green_without_artifacts.py` moved its injection to
+  the seam the harness now calls (`fold_run`) and asserts `score` still runs through it.
+
+**Not yet done, and the reason it is not:** the re-run. Free RAM measured 1.7 GB of 16 GB while the
+500k `score` slice (`01M3J805Z2SKK5AYB4XXDDYKET`) is live, and a concurrent LightGBM fit is how
+this host produced the `bad allocation` deaths already recorded in DEV-021 and the exit-code gate.
+So the currently published `out/backtest/ablation_results.json` still carries the pre-change
+caveat, and `MODEL_CARD.md` still prints it — true to the artifact that made it, which is the
+behind-the-curve state DEV-024 accepted. The ablation re-run is the next thing on a quiet box.
+
 

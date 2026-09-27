@@ -58,6 +58,10 @@ def test_a_fold_chain_that_raises_exits_non_zero_and_writes_nothing(
     Removing the ``except Exception`` from ``main`` makes this test fail by letting the
     exception escape -- which is the defect, since the escape is what made the status depend
     on the caller rather than on the run.
+
+    ``fold_run`` is the seam: the ablation cache fits a fold once and projects each row's
+    column out of that one run, so a row scorer never calls ``WalkForwardScorer.score`` (the
+    last assertion pins that ``score`` is still the same fit rather than a second path).
     """
     from oxbow.models.scorer import WalkForwardScorer
 
@@ -68,7 +72,7 @@ def test_a_fold_chain_that_raises_exits_non_zero_and_writes_nothing(
         del self, kwargs
         raise LightGBMError("bad allocation")
 
-    monkeypatch.setattr(WalkForwardScorer, "score", _die, raising=True)
+    monkeypatch.setattr(WalkForwardScorer, "fold_run", _die, raising=True)
 
     code = backtest_run.main(["--corpus", str(corpus_path), "--out", str(out_dir)])
 
@@ -84,6 +88,20 @@ def test_a_fold_chain_that_raises_exits_non_zero_and_writes_nothing(
     assert not (
         out_dir / ABLATION_ARTIFACT
     ).is_file(), "the run failed and still landed an ablation artifact; the artifact would be a lie"
+
+    # ``score`` is not a second, unmonitored fit path: it asks for the fold run and reads a
+    # column. Patching the fit therefore still bites the standalone scorer a caller may use.
+    # The instance is unwired on purpose -- the raise must happen in the fit, before the
+    # projection touches a runner, config or seed.
+    bare = WalkForwardScorer.__new__(WalkForwardScorer)
+    with pytest.raises(LightGBMError, match="bad allocation"):
+        bare.score(
+            train=pl.DataFrame(),
+            validation=pl.DataFrame(),
+            scored=pl.DataFrame(),
+            feature_spec_hash="0" * 64,
+            seed=1337,
+        )
 
 
 def test_declared_artifacts_absent_or_empty_on_disk_exit_non_zero(tmp_path: Path) -> None:

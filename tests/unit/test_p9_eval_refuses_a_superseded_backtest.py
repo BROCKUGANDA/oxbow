@@ -89,6 +89,42 @@ def test_a_current_publication_and_an_absent_one_both_pass(tmp_path: Path) -> No
     assert published.is_file()
 
 
+def test_a_self_check_written_after_a_real_publication_does_not_wedge_the_publisher(
+    tmp_path: Path,
+) -> None:
+    """The one gap the guard leaves open, kept open on purpose.
+
+    A harness self-check or scratch demo run landing in a sibling directory after the real
+    result is the ordinary state of a working tree. Refusing on it would push the operator to
+    disable the guard rather than delete the scratch file, and the guard's job is to stop the
+    cards quoting a superseded measurement — not to police every JSON under ``out/``.
+    """
+    published = _write(
+        tmp_path, "out/backtest/ablation_results.json", _arm("real_corpus"), mtime=BASE
+    )
+    _write(
+        tmp_path,
+        "out/backtest/demo_scratch/ablation_results.json",
+        _arm("fake_harness"),
+        mtime=BASE + 600,
+    )
+    _refuse_a_stale_backtest_artifact(tmp_path)
+    assert published.is_file()
+
+
+def test_a_newer_artifact_of_the_same_kind_still_supersedes(tmp_path: Path) -> None:
+    """Authority is not a free pass: equal provenance falls back to the clock."""
+    _write(tmp_path, "out/backtest/ablation_results.json", _arm("real_corpus"), mtime=BASE)
+    _write(
+        tmp_path,
+        "out/backtest/run_newer/ablation_results.json",
+        _arm("real_corpus"),
+        mtime=BASE + 60,
+    )
+    with pytest.raises(FileNotFoundError, match="was written after"):
+        _refuse_a_stale_backtest_artifact(tmp_path)
+
+
 def test_provenance_is_read_off_the_arms_and_not_guessed_from_a_path() -> None:
     assert _declared_provenance(_arm("real_corpus")) == "real_corpus"
     assert _declared_provenance(_arm("fake_harness")) == "fake_harness"
