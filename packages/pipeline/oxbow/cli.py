@@ -1564,8 +1564,8 @@ def run_score_stage(
 def _read_canonical_for_ids(ctx: StageContext, wanted: pl.DataFrame) -> pl.DataFrame:
     """The canonical events whose ``txn_id`` is in ``wanted``, read batch by batch.
 
-    Only the seven columns an account is described by are read, and the semi-join happens per
-    batch rather than after a full load: the corpus is 6.36M events and the slice is 40k, so
+    Only the columns an account is described by and a transaction is evidenced with are read,
+    and the semi-join happens per batch rather than after a full load: the corpus is 6.36M events and the slice is 40k, so
     holding the whole frame to discard 99.4% of it is the shape of the memory failure that has
     already cost this project two runs on this host.
 
@@ -1577,13 +1577,26 @@ def _read_canonical_for_ids(ctx: StageContext, wanted: pl.DataFrame) -> pl.DataF
     from oxbow.adapters.file.canonical_sink import sha256_of_file
     from oxbow.adapters.warehouse.landing import LandingError
 
-    columns = [
+    # The seven columns `account` aggregates by, plus the ones `transaction` and
+    # `evidence_event` carry into the case workspace: type, local date and hour, the four balances
+    # and the two labels. Read per batch and column-limited, so widening the list costs the read
+    # time, never a copy of the corpus.
+    wanted = [
         "txn_id",
         "event_ts_utc",
+        "event_date_local",
+        "local_hour",
+        "txn_type",
         "account_from",
         "account_to",
         "amount_minor",
         "currency",
+        "src_balance_before_minor",
+        "src_balance_after_minor",
+        "dst_balance_before_minor",
+        "dst_balance_after_minor",
+        "label_is_fraud",
+        "label_typology",
         "source_dataset",
     ]
     found: list[pl.DataFrame] = []
@@ -1602,6 +1615,8 @@ def _read_canonical_for_ids(ctx: StageContext, wanted: pl.DataFrame) -> pl.DataF
                 raise LandingError(
                     f"{path.name} has sha256 {digest}, the manifest records {batch['sha256']}"
                 )
+            available = set(pl.read_parquet_schema(path))
+            columns = [name for name in wanted if name in available]
             frame = pl.read_parquet(path, columns=columns)
             matched = frame.join(wanted, on="txn_id", how="semi")
             if matched.height:
@@ -1613,8 +1628,286 @@ def _read_canonical_for_ids(ctx: StageContext, wanted: pl.DataFrame) -> pl.DataF
     return pl.concat(found)
 
 
+#: The two artifacts ``oxbow backtest`` writes for a run, and the provenance value that says the
+#: figures came off the real corpus. A fixture's numbers are demo material, and DEV-003 put a
+#: `provenance` column on `run` precisely so the API can tell the two apart in its own responses;
+#: the landing checks it first, because a fixture row in ``ablation_row`` would be quoted as a
+#: measurement inside a week.
+BACKTEST_ABLATION_NAME: Final = "ablation_results.json"
+BACKTEST_CARD_NAME: Final = "model_card.json"
+MEASURED_BACKTEST_PROVENANCE: Final = "real_corpus"
+#: How many refusal lines per table are printed before the count stands in for the rest. A refusal
+#: is a finding, not a log: the first two say what happened, the count says how much of it.
+REFUSAL_LINES_SHOWN: Final = 2
+REFUSAL_PREVIEW_CHARS: Final = 150
+#: THE REPORTING ORDER, STATED: the three tables the queue joins, then the case workspace's
+#: evidence, then the studio's, then the backtest's, then the graph's. Declared rather than taken
+#: from dict order, so two runs print the same lines in the same sequence.
+LANDING_REPORT_ORDER: Final = (
+    "account",
+    "score",
+    "rule_hit",
+    "transaction",
+    "evidence_event",
+    "scorecard_bin",
+    "scorecard_point",
+    "band_definition",
+    "drift_period",
+    "ablation_row",
+    "validation_metric",
+    "fairness_row",
+    "perturbation_row",
+    "backtest_fold",
+    "community",
+    "graph_edge",
+    "account_membership",
+)
+
+
+def _read_json_object(path: Path) -> dict[str, Any]:
+    """A decoded JSON object, or a refusal naming the file it could not read."""
+    from oxbow.adapters.warehouse.landing import LandingError
+
+    try:
+        parsed = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise LandingError(f"{path} cannot be read as JSON: {str(exc)[:120]}") from exc
+    if not isinstance(parsed, dict):
+        raise LandingError(f"{path} is a {type(parsed).__name__}, not the object this stage reads")
+    return parsed
+
+
+def _backtest_pair_for_run(root: Path, run_id: str) -> tuple[Path, Path] | None:
+    """The backtest artifact pair that records *this* run's fold plan, or None when nothing does.
+
+    ``oxbow backtest`` writes under ``out/backtest/<run>/`` inside a pipeline and under a named
+    directory when an operator points it at a corpus with ``--out``, so the directory name is not
+    the identity. The artifact carries it: ``fold_plan_window.window_source`` is the path of the
+    features manifest the fold plan was read from, and that path names the run. Requiring the match
+    is what stops one run's ablation figures being landed under another run's id.
+    """
+    from oxbow.adapters.warehouse.landing import LandingError
+
+    base = root / OUT_DIRNAME / BACKTEST_ARTIFACT_DIRNAME
+    matched: list[tuple[Path, Path]] = []
+    for ablation_path in sorted(base.glob(f"*/{BACKTEST_ABLATION_NAME}")):
+        card_path = ablation_path.with_name(BACKTEST_CARD_NAME)
+        if not card_path.is_file():
+            continue
+        document = _read_json_object(ablation_path)
+        window = document.get("fold_plan_window")
+        source = str(window.get("window_source") or "") if isinstance(window, Mapping) else ""
+        if run_id in source or ablation_path.parent.name.upper() == run_id:
+            matched.append((ablation_path, card_path))
+    if not matched:
+        return None
+    if len(matched) > 1:
+        raise LandingError(
+            f"{len(matched)} backtest artifacts claim this run's fold plan: "
+            f"{', '.join(path[0].as_posix() for path in matched)} — landing them together would "
+            "put two ablation tables under one run id, so the operator picks the directory"
+        )
+    return matched[0]
+
+
+def _backtest_tables(
+    ctx: StageContext, run_id: str
+) -> tuple[dict[str, list[dict[str, Any]]], dict[str, list[str]]]:
+    """``ablation_row``, ``validation_metric``, ``fairness_row``, ``perturbation_row``, ``backtest_fold``.
+
+    A missing or fixture-provenanced artifact refuses these five tables and nothing else: the
+    analytical half of the handoff is additive, and "there is no backtest for this run" is a
+    different finding from "the backtest failed to shape".
+    """
+    from oxbow.adapters.warehouse.landing import (
+        LandingError,
+        ablation_rows,
+        backtest_fold_rows,
+        fairness_rows,
+        perturbation_rows,
+        validation_metric_rows,
+    )
+    from oxbow.backtest.config_io import load_backtest_config
+
+    names = (
+        "ablation_row",
+        "validation_metric",
+        "fairness_row",
+        "perturbation_row",
+        "backtest_fold",
+    )
+    tables: dict[str, list[dict[str, Any]]] = {}
+    refusals: dict[str, list[str]] = {}
+    base = (ctx.root / OUT_DIRNAME / BACKTEST_ARTIFACT_DIRNAME).as_posix()
+    try:
+        pair = _backtest_pair_for_run(ctx.root, run_id)
+        if pair is None:
+            message = (
+                f"nothing under {base}*/ names run {run_id} in its fold_plan_window; the files "
+                f"that would be needed are {BACKTEST_ABLATION_NAME} and {BACKTEST_CARD_NAME}, "
+                "written by `oxbow backtest`"
+            )
+            return tables, {name: [message] for name in names}
+        ablation = _read_json_object(pair[0])
+        card = _read_json_object(pair[1])
+        provenances = {
+            str(variant.get("provenance"))
+            for variant in ablation.get("variants") or []
+            if isinstance(variant, Mapping)
+        }
+        if not provenances or provenances != {MEASURED_BACKTEST_PROVENANCE}:
+            message = (
+                f"{pair[0].as_posix()} records provenance {sorted(provenances)}, not "
+                f"[{MEASURED_BACKTEST_PROVENANCE!r}]: a fixture or demo figure is never landed as a "
+                "measurement (plan §19, DEV-003's provenance column)"
+            )
+            return tables, {name: [message] for name in names}
+        resamples = int(load_backtest_config(ctx.root).bootstrap_resamples)
+        tables["ablation_row"], refusals["ablation_row"] = ablation_rows(
+            card, ablation, declared_resamples=resamples
+        )
+        tables["validation_metric"], refusals["validation_metric"] = validation_metric_rows(
+            ablation, card
+        )
+        tables["fairness_row"], refusals["fairness_row"] = fairness_rows(card)
+        tables["perturbation_row"], refusals["perturbation_row"] = perturbation_rows(card, ablation)
+        tables["backtest_fold"], refusals["backtest_fold"] = backtest_fold_rows(ablation)
+    except LandingError as exc:
+        for name in names:
+            refusals.setdefault(name, [f"the backtest artifact could not be shaped: {exc}"])
+    return tables, refusals
+
+
+def _frame_tables(
+    ctx: StageContext, *, scored: pl.DataFrame, events: pl.DataFrame
+) -> tuple[dict[str, list[dict[str, Any]]], dict[str, list[str]]]:
+    """The studio and evidence tables, each shaped from the run's own landed rows.
+
+    The band's action and its review effort are not measurements of the run — they are the declared
+    configuration the run consumed, read from ``config/scorecard.yaml`` and
+    ``config/economics.yaml`` through their own loaders rather than restated here, the same way
+    ``_attach_corpus_economics`` reads the analyst price and the floor.
+    """
+    from oxbow.adapters.warehouse.landing import (
+        band_definition_rows,
+        drift_period_rows,
+        evidence_event_rows,
+        scorecard_bin_rows,
+        scorecard_point_rows,
+        transaction_rows,
+    )
+    from oxbow.quant.economics import load_economics
+    from oxbow.scoring.config import load_scorecard_config
+
+    bands = load_scorecard_config(ctx.root).bands
+    actions = {entry.band_id: entry.action for entry in bands.entries}
+    economics = load_economics(ctx.root)
+    minutes = {entry.band_id: economics.minutes_for(entry.band_id) for entry in bands.entries}
+
+    tables: dict[str, list[dict[str, Any]]] = {}
+    refusals: dict[str, list[str]] = {}
+    tables["transaction"], refusals["transaction"] = transaction_rows(events)
+    tables["evidence_event"], refusals["evidence_event"] = evidence_event_rows(events, scored)
+    tables["band_definition"], refusals["band_definition"] = band_definition_rows(
+        scored, actions=actions, review_minutes=minutes
+    )
+    tables["scorecard_bin"], refusals["scorecard_bin"] = scorecard_bin_rows(scored)
+    tables["scorecard_point"], refusals["scorecard_point"] = scorecard_point_rows(scored)
+    tables["drift_period"], refusals["drift_period"] = drift_period_rows(scored)
+    return tables, refusals
+
+
+def _graph_tables(
+    ctx: StageContext, run_id: str
+) -> tuple[dict[str, list[dict[str, Any]]], dict[str, list[str]]]:
+    """``community``, ``graph_edge`` and ``account_membership`` from the graph stage's own artifact.
+
+    The graph is read from ``out/graph/<run_id>/``, the directory the graph stage writes for the run
+    it built. ``oxbow score`` builds a graph in memory for its rules layer and never lands it, so a
+    score-only run has no graph artifact — and copying community numbers out of a *different* run's
+    directory would be that run's measurement wearing this run's id, which is the one thing the
+    partition key exists to prevent. So the absence is reported with the path that would fix it.
+    """
+    from oxbow.adapters.warehouse.landing import (
+        LandingError,
+        account_membership_rows,
+        community_index_by_raw_label,
+        community_rows,
+        graph_edge_rows,
+    )
+    from oxbow.graph.persist import MANIFEST_NAME
+
+    names = ("community", "graph_edge", "account_membership")
+    directory = ctx.root / OUT_DIRNAME / GRAPH_ARTIFACT_DIRNAME / run_id
+    nodes_path = directory / "nodes.parquet"
+    pairs_path = directory / "pairs.parquet"
+    if not nodes_path.is_file() or not pairs_path.is_file():
+        message = (
+            f"{directory.as_posix()} holds no nodes.parquet/pairs.parquet; the graph stage writes "
+            "them, so `oxbow graph` and `oxbow score` have to run under one run id before "
+            "community, graph_edge and account_membership can be read"
+        )
+        return {}, {name: [message] for name in names}
+    try:
+        nodes = pl.read_parquet(nodes_path)
+        pairs = pl.read_parquet(pairs_path)
+        manifest = _read_json_object(directory / MANIFEST_NAME)
+        stats = manifest.get("stats") if isinstance(manifest, Mapping) else None
+        index_by_raw, _, label_refusals = community_index_by_raw_label(nodes)
+        communities, community_refusals = community_rows(nodes, pairs, stats=stats)
+        memberships, membership_refusals = account_membership_rows(nodes, index_by_raw)
+        edges, edge_refusals = graph_edge_rows(pairs, nodes)
+    except (LandingError, OSError, ValueError) as exc:
+        return {}, {name: [f"{directory.as_posix()}: {exc}"] for name in names}
+    return (
+        {"community": communities, "graph_edge": edges, "account_membership": memberships},
+        {
+            "community": label_refusals + community_refusals,
+            "graph_edge": edge_refusals,
+            "account_membership": membership_refusals,
+        },
+    )
+
+
+def _existing_txn_ids(session: Any, wanted: Sequence[str], *, chunk: int = 500) -> set[str]:
+    """The txn_ids already in the table, looked up in bounded blocks.
+
+    ``transaction.txn_id`` is the primary key and the corpus is shared between runs, so a second run
+    over overlapping events cannot re-land the rows the first one wrote. Asking which are already
+    there is what keeps a re-run idempotent instead of ending in one rollback of the whole warehouse.
+    """
+    from sqlalchemy import select
+
+    from oxbow.adapters.warehouse.models import Base
+
+    table = Base.metadata.tables["transaction"]
+    ordered = sorted(wanted)
+    found: set[str] = set()
+    for start in range(0, len(ordered), chunk):
+        block = ordered[start : start + chunk]
+        rows = session.execute(select(table.c.txn_id).where(table.c.txn_id.in_(block))).scalars()
+        found.update(str(value) for value in rows)
+    return found
+
+
+def _rows_already_landed(session: Any, table_name: str, run_id: str) -> int:
+    """How many rows one table already holds for this run — the idempotency check.
+
+    ``evidence_event`` has no unique key to collide with, so a second landing of an open run would
+    quietly double the case timeline. The count is asked before the write, not after.
+    """
+    from sqlalchemy import func, select
+
+    from oxbow.adapters.warehouse.models import Base
+
+    table = Base.metadata.tables[table_name]
+    return int(
+        session.scalar(select(func.count()).select_from(table).where(table.c.run_id == run_id)) or 0
+    )
+
+
 def land_warehouse_rows(ctx: StageContext, handle: StageHandle, *, run_id: str) -> int:
-    """Land the run's scores, accounts and rule hits where the API can read them.
+    """Land the run's rows in every warehouse table its artifacts can describe, and say what it could not.
 
     Called from the score stage, not from a verb of its own: 01 §D fixes the CLI as
     `oxbow ingest graph score backtest` — "no more, no fewer", asserted by the P0 gate — so a
@@ -1630,7 +1923,9 @@ def land_warehouse_rows(ctx: StageContext, handle: StageHandle, *, run_id: str) 
     measured ``observed_rate`` and a non-zero ``calibration_n``, and the loader refuses to write
     a zero into either. That refusal is reported with a count, not swallowed, because "0 rows
     landed" and "0 rows could be landed for this named reason" are different findings and the
-    second is the one an operator can act on.
+    second is the one an operator can act on. The analytical tables are now reported the same way,
+    table by table: on the landed 40k run ``backtest_fold``, ``drift_period`` and the three graph
+    tables refuse for named reasons, and the run still lands everything it did measure.
     """
     import os
 
@@ -1675,11 +1970,23 @@ def land_warehouse_rows(ctx: StageContext, handle: StageHandle, *, run_id: str) 
     # The frame is one row per event in the slice: that set of txn_ids IS the sample.
     slice_ids = pl.read_parquet(frame_path, columns=["txn_id"]).get_column("txn_id").to_frame()
 
+    payload: dict[str, list[dict[str, Any]]] = {}
+    refusals: dict[str, list[str]] = {}
     try:
         events = _read_canonical_for_ids(ctx, slice_ids)
         accounts = account_rows(events)
-        scores, refused = score_rows(scored)
-        hits = rule_hit_rows(scored)
+        scores, score_refusals = score_rows(scored)
+        payload["account"] = accounts
+        payload["score"] = scores
+        payload["rule_hit"] = rule_hit_rows(scored)
+        for shapes in (
+            _frame_tables(ctx, scored=scored, events=events),
+            _backtest_tables(ctx, run_id),
+            _graph_tables(ctx, run_id),
+        ):
+            payload.update(shapes[0])
+            for name, reasons in shapes[1].items():
+                refusals.setdefault(name, []).extend(reasons)
     except LandingError as exc:
         ctx.echo(f"[warehouse] REFUSED: {exc}", err=True)
         handle.mark_failed(str(exc)[:300])
@@ -1687,6 +1994,7 @@ def land_warehouse_rows(ctx: StageContext, handle: StageHandle, *, run_id: str) 
 
     engine = create_engine(url, pool_pre_ping=True)
     Session = sessionmaker(bind=engine)  # SQLAlchemy's own naming
+    skipped: dict[str, int] = {}
     with Session() as session:
         sink = PostgresWarehouseSink(session)
         try:
@@ -1706,11 +2014,29 @@ def land_warehouse_rows(ctx: StageContext, handle: StageHandle, *, run_id: str) 
                     model_version=f"{MODEL_VERSION_PREFIX}/{__version__}",
                     dataset_ref=(ctx.root / DATA_DIRNAME / INTERIM_DIRNAME).as_posix(),
                 )
-            written = {
-                "account": sink.write("account", run_id, accounts),
-                "score": sink.write("score", run_id, scores),
-                "rule_hit": sink.write("rule_hit", run_id, hits),
-            }
+            # Idempotency, once per reason. A transaction's key is the corpus id, so an event that
+            # is already in the table stays with the run that landed it; a timeline row has no key
+            # at all, so the table's own contents decide whether this run already has one.
+            already = _existing_txn_ids(
+                session, [str(row["txn_id"]) for row in payload.get("transaction", [])]
+            )
+            if already:
+                skipped["transaction"] = len(already)
+                payload["transaction"] = [
+                    row for row in payload["transaction"] if str(row["txn_id"]) not in already
+                ]
+            for name in ("evidence_event",):
+                if name not in payload:
+                    continue
+                existing = _rows_already_landed(session, name, run_id)
+                if existing:
+                    skipped[name] = existing
+                    payload[name] = []
+            written: dict[str, int] = {}
+            for name in LANDING_REPORT_ORDER:
+                if name not in payload:
+                    continue
+                written[name] = sink.write(name, run_id, payload[name])
             sink.complete_run(run_id, RunState.COMPLETE)
             session.commit()
         except Exception as exc:  # a rejected row must not half-land
@@ -1724,11 +2050,25 @@ def land_warehouse_rows(ctx: StageContext, handle: StageHandle, *, run_id: str) 
             return EXIT_FAILED
     engine.dispose()
 
-    for table, rows in written.items():
-        ctx.echo(f"[warehouse] {table}: {rows:,} row(s) landed under run {run_id}")
+    for name in LANDING_REPORT_ORDER:
+        if name not in written:
+            continue
+        lines = refusals.get(name) or []
+        note = (
+            f" ({skipped[name]:,} row(s) already landed under another key, skipped)"
+            if name in skipped
+            else ""
+        )
+        ctx.echo(f"[warehouse] {name}: {written[name]:,} row(s) landed under run {run_id}{note}")
+        for reason in lines[:REFUSAL_LINES_SHOWN]:
+            ctx.echo(f"[warehouse]   {name} refused: {reason[:REFUSAL_PREVIEW_CHARS]}")
+        if len(lines) > REFUSAL_LINES_SHOWN:
+            ctx.echo(
+                f"[warehouse]   {name}: {len(lines) - REFUSAL_LINES_SHOWN:,} further refusal line(s)"
+            )
     ctx.echo(
-        f"[warehouse] score: {len(scores):,} landed, {len(refused):,} refused"
-        + (f" — first reason: {refused[0][:140]}" if refused else "")
+        f"[warehouse] score: {len(scores):,} landed, {len(score_refusals):,} refused"
+        + (f" — first reason: {score_refusals[0][:140]}" if score_refusals else "")
     )
     if not written["score"]:
         ctx.echo(
@@ -1736,7 +2076,10 @@ def land_warehouse_rows(ctx: StageContext, handle: StageHandle, *, run_id: str) 
             "see the refusal above (DEV-024 is the calibration arithmetic behind it).",
         )
         return EXIT_OK
-    ctx.echo("[warehouse] RESULT: OK — account, score and rule_hit are readable by the API.")
+    ctx.echo(
+        "[warehouse] RESULT: OK — every table the run's artifacts measured is readable by the API; "
+        "any table that refused is named above with the reason it refused."
+    )
     return EXIT_OK
 
 
