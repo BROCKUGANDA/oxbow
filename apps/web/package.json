@@ -2,10 +2,9 @@
   "name": "oxbow-web",
   "version": "0.1.0",
   "private": true,
-  "packageManager": "bun@1.4.2",
+  "packageManager": "pnpm@9.15.9",
   "engines": {
-    "node": ">=20",
-    "bun": ">=1.4.2"
+    "node": ">=20"
   },
   "scripts": {
     "dev": "next dev --port 3000",
@@ -67,9 +66,11 @@
     "typescript": "5.6.3",
     "vitest": "2.1.8"
   },
-  "overrides": {
-    "@tailwindcss/oxide": "4.0.0",
-    "@tailwindcss/oxide-win32-x64-msvc": "4.0.0",
-    "@tailwindcss/node": "4.0.0"
+  "pnpm": {
+    "overrides": {
+      "@tailwindcss/oxide": "4.0.0",
+      "@tailwindcss/oxide-win32-x64-msvc": "4.0.0",
+      "@tailwindcss/node": "4.0.0"
+    }
   }
 }

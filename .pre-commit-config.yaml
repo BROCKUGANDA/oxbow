@@ -83,7 +83,7 @@ repos:
     hooks:
       - id: biome
         name: biome (lint + format)
-        entry: bash -c 'cd apps/web && bun x biome check --write .'
+        entry: bash -c 'cd apps/web && pnpm exec biome check --write .'
         language: system
         pass_filenames: false
         types: [ts, tsx, js, jsx, json]
@@ -94,7 +94,7 @@ repos:
     hooks:
       - id: design-tokens-in-sync
         name: tokens.ts must match tokens.css
-        entry: bash -c 'cd apps/web && bun run icons && git diff --exit-code -- src/design/tokens.ts src/design/icons/sprite.svg'
+        entry: bash -c 'cd apps/web && pnpm run icons && git diff --exit-code -- src/design/tokens.ts src/design/icons/sprite.svg'
         language: system
         pass_filenames: false
         files: ^apps/web/src/design/(tokens\.css|icons/src/.*\.svg)$

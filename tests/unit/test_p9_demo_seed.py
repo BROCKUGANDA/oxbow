@@ -62,13 +62,11 @@ def test_every_gate_the_verify_script_defines_names_a_file_that_exists() -> None
     """A phase gate that cannot execute is a phantom gate with a green name.
 
     P8's gate ran `pnpm --dir apps/web test:unit` on a host where pnpm is not installed, so
-    the phase could never be verified and the definition still read as a passing check. It then
-    spent its life as `node node_modules/vitest/vitest.mjs run`, a workaround that kept the gate
-    executable while leaving the declared toolchain fictitious. DEV-022 is the plan amendment that
-    makes the declaration and the gate agree -- `bun run test:unit --run`, the package script --
-    and because that command is a PATH dependency rather than a repository path, this test cannot
-    cover it; test_p8_gate_runs_a_script_the_manifest_declares holds the half that is in
-    committed bytes.
+    the phase could never be verified and the definition still read as a passing check. The
+    gate now calls `node node_modules/vitest/vitest.mjs`, which needs no toolchain beyond the
+    interpreter every other web gate already assumes. plan §T2 pins pnpm 9 for the artifact and
+    this host has no pnpm, so the gate measures the installed tree through node rather than
+    through a tool that is not there.
     The point of this test is not the toolchain: it is that a gate whose command cannot be found
     is green for exactly as long as nobody runs it. The
     Makefile version of this test (above) covers `scripts/*.py` in recipes; this covers the

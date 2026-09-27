@@ -787,33 +787,23 @@ key back, which turns the suite red.
 Digest pins resolved with `docker buildx imagetools inspect` on 2026-09-27:
 `oven/bun:1.4.2-debian@sha256:4f6e31d1a54d6a3dd312daef655fc998101b5043d52e12592ac293ef04b9bc73`.
 
-### Status of this entry: applied, as an approved plan amendment
+### Status of this entry: recorded, NOT applied -- and it needs a ruling, not a re-apply
 
-A second session working in this repository reverted the Bun changes twice while this entry was
+A second session working in this repository has reverted the Bun changes twice while this entry was
 being written, and wrote its objection into `scripts/verify.py` at the P8 gate: plan §T2 pins
 `packageManager: "pnpm@9.15.9"` with a committed `pnpm-lock.yaml`, §13 puts `pnpm audit` in CI, and
 `test_pnpm_lockfile_is_committed` enforces the artifact -- so swapping the toolchain is a plan
-amendment the owner accepts, not a convenience a task discovers mid-flight.
+amendment that the owner has to accept, not a convenience a task discovers mid-flight. It is right
+that the amendment route is the one to use, and this entry is that amendment. As of the last
+measurement the tracked state is pnpm again (`bun.lock` deleted, `pnpm-lock.yaml` restored,
+`package.json` naming `pnpm@9.15.9`, Makefile/Dockerfile/pre-commit reverted), while
+`apps/web/node_modules` is still the hoisted tree Bun installed. **That mismatch is the open defect**
+and it should be resolved by `pnpm install --frozen-lockfile` or by accepting this amendment -- not
+by leaving a tree that matches neither manifest.
 
-**That objection was right as process, and it is the reason this entry exists.** The owner ruled on
-2026-09-27 that §T2's pin is superseded, so the amendment is applied: the P8 gate, `.env.example`,
-`README.md`, the README generator in `oxbow/eval.py`, `tests/unit/test_p0_toolchain.py` and
-`test_p9_demo_seed.py`'s narrative moved with `package.json`, the Dockerfile, the Makefile and the
-pre-commit hooks.
-
-What the disagreement left behind is worth keeping, so that session's contribution is recorded
-rather than quietly overwritten. It wrote `test_the_declared_js_toolchain_is_the_one_every_recipe_uses`,
-which asserts that `packageManager`, `apps/web/Dockerfile`, the `Makefile` web recipes and
-`.pre-commit-config.yaml` all name the *same* package manager, because a manifest the Dockerfile
-contradicts is drift wearing a clean badge. That shape is toolchain-agnostic and correct, so it
-stayed and only its subject moved to Bun. Mutation-proved in both directions: flipping `make
-lint-web` back to `pnpm lint` turns it red. Its first offender scan matched the word "pnpm" inside a
-prose comment and failed on a file that was doing nothing wrong, which is why the scan now skips
-comment lines -- a guard that fires on a healthy file is the same trap as a guard that cannot fire.
-
-`apps/web/node_modules` was reinstalled from `bun.lock` so the tree on disk and the committed
-lockfile agree. Mid-whipsaw it was possible to be measuring a Bun hoisted tree under a pnpm
-manifest, which is the state no gate should ever be in.
+Every measurement in the section above stands regardless of which toolchain wins: they are
+observations about this host and about the web app, and the plan-pin conflict is a separate question
+from whether Bun could run the gates at all.
 
 ## DEV-023 — the same-origin seam moves from the Next rewrite to a Caddy edge
 

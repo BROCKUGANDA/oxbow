@@ -421,103 +421,72 @@ def test_python_is_pinned_to_three_twelve() -> None:
     assert pyproject["project"]["requires-python"] == ">=3.12,<3.13"
 
 
-def test_bun_lockfile_is_committed() -> None:
-    """bun.lock is the JS reproducibility artifact, and it is the only one.
-
-    DEV-022 supersedes plan §T2's `pnpm@9.15.9` + `pnpm-lock.yaml` pin: the amendment was raised
-    because pnpm is not installed on this host and never was, which made every `pnpm ...` recipe
-    here unrunnable as written. A lockfile only reproduces anything if the tool named beside it
-    can read it.
-    """
-    web = REPO_ROOT / "apps" / "web"
-    assert (web / "bun.lock").is_file(), "bun.lock must be committed"
-    assert not (web / "pnpm-lock.yaml").exists(), (
-        "two JS lockfiles would disagree about the tree and nothing here would catch it"
-    )
+def test_pnpm_lockfile_is_committed() -> None:
+    """pnpm-lock.yaml is the JS reproducibility artifact."""
+    assert (REPO_ROOT / "apps" / "web" / "pnpm-lock.yaml").is_file()
 
 
 def test_the_declared_js_toolchain_is_the_one_every_recipe_uses() -> None:
-    """Whatever the pinned toolchain is, the whole chain has to agree on it.
+    """Plan §T2 pins the JS toolchain; nothing but this test noticed when it was swapped.
 
-    Plan §T2 pinned pnpm, and twice an agent met this host's missing pnpm by quietly swapping in
-    Bun -- `packageManager`, the web Dockerfile's install line, the Makefile's web recipes, the
-    pre-commit hook, the README generator and verify.py's P8 gate -- deleting the tracked lockfile
-    on the way without noticing the container build needed it. That whipsaw is the real defect,
-    and it is a drift-detection failure rather than a tooling one: nothing checked that the files
-    which *state* the toolchain agree with each other.
+    Twice in one session an agent met the host's missing pnpm by replacing it with Bun, and
+    rewrote the files that state the answer rather than the problem: `packageManager`, the web
+    Dockerfile's install line, the Makefile's web recipes, the pre-commit hook, the README
+    generator, scripts/verify.py's P8 gate, and `test_pnpm_lockfile_is_committed` itself. Both
+    times the tracked `pnpm-lock.yaml` was deleted on the way, which the container build needs
+    and nothing upstream checked. §13 also puts `pnpm audit` in CI.
 
-    So keep this test's shape and move its subject (DEV-022 approved the amendment): assert the
-    chain agrees, on Bun. A `packageManager` string the Dockerfile and Makefile contradict is the
-    same drift wearing a clean badge, whichever name is on it.
-
-    Bun also reads a top-level `overrides` and ignores `pnpm.overrides` entirely, so losing the
-    @tailwindcss/oxide 4.0.0 native-binding pin would fail at build time on a missing binary
-    rather than as a warning.
+    So this asserts the whole chain agrees, not just the manifest field: a `packageManager`
+    string that the Dockerfile and Makefile contradict is the same drift wearing a clean badge.
+    A lockfile is only a reproducibility artifact if the tool named beside it can read it.
     """
     web = REPO_ROOT / "apps" / "web"
     manifest = json.loads((web / "package.json").read_text(encoding="utf-8"))
 
     manager = str(manifest.get("packageManager", ""))
-    assert manager.startswith("bun@"), (
-        f"packageManager is {manager!r}, but DEV-022 put Bun on the pinned chain"
+    assert manager.startswith("pnpm@"), (
+        f"packageManager is {manager!r}; plan §T2 pins `pnpm@9.15.9`. Changing the pinned "
+        "supply chain is a plan amendment in DECISIONS.md, not a host-convenience change -- "
+        "the gates are run through `node node_modules/...` precisely so this pin can hold on a "
+        "host without pnpm."
     )
-    assert "overrides" in manifest and "@tailwindcss/oxide" in manifest["overrides"], (
-        "the @tailwindcss/oxide 4.0.0 native-binding pin must be a top-level `overrides` entry; "
-        "Bun ignores `pnpm.overrides`"
+    assert "bun" not in str(manifest.get("engines", {})).lower(), (
+        "engines names an interpreter the image does not run"
     )
-    assert "pnpm" not in manifest, "a `pnpm` key in package.json is dead config under Bun"
+    assert "pnpm" in manifest and "overrides" in manifest["pnpm"], (
+        "the @tailwindcss/oxide 4.0.0 native-binding pin lives under `pnpm.overrides`; pnpm "
+        "reads that key and ignores a top-level `overrides`, so losing it fails at build time "
+        "on a missing binary rather than as a warning"
+    )
+    assert not (web / "bun.lock").exists(), (
+        "two JS lockfiles would disagree about the tree and nothing here would catch it"
+    )
 
     recipes = {
         "apps/web/Dockerfile": [
-            "COPY --chown=bun:bun package.json bun.lock ./",
-            "RUN bun install --frozen-lockfile",
+            "COPY package.json pnpm-lock.yaml ./",
+            "RUN pnpm install --frozen-lockfile",
         ],
-        "Makefile": ["cd $(WEB) && bun install --frozen-lockfile", "cd $(WEB) && bun run lint"],
-        ".pre-commit-config.yaml": ["bun x biome check --write ."],
+        "Makefile": ["cd $(WEB) && pnpm install --frozen-lockfile", "cd $(WEB) && pnpm lint"],
+        ".pre-commit-config.yaml": ["pnpm exec biome check --write ."],
     }
     for path, needles in recipes.items():
         text = (REPO_ROOT / path).read_text(encoding="utf-8")
         for needle in needles:
             assert needle in text, f"{path} no longer says `{needle}`"
-        offenders = [
-            line.strip()
-            for line in text.splitlines()
-            if not line.strip().startswith("#")
-            and re.search(r"(?:^|\s|&&\s)(pnpm|npm|yarn)\s+\S", line)
-        ]
-        assert not offenders, f"{path} still runs another package manager: {offenders}"
+        offenders = [t for t in _bun_command_tokens(text) if t not in {"bundle", "buffers"}]
+        assert not offenders, f"{path} mentions another package manager: {sorted(set(offenders))}"
 
     verify = (REPO_ROOT / "scripts" / "verify.py").read_text(encoding="utf-8")
-    assert '("bun", "run", "test:unit"' in verify, (
-        "the P8 gate is not the declared `bun run test:unit`; a gate that shells straight into an "
-        "entry point drifts from the recipe and the manifest"
-    )
-    assert '("pnpm",' not in verify, "a phase gate names a toolchain this repo no longer uses"
-
-
-def test_p8_gate_runs_a_script_the_manifest_declares() -> None:
-    """The P8 gate invokes `bun run <script>`, so <script> has to be a declared script.
-
-    `bun` is a PATH dependency and no committed file can prove PATH, which is the half this test
-    cannot cover. What it can cover is the other half of the phantom-gate failure: a gate naming a
-    script the manifest does not declare exits 1 for the wrong reason, and a phase table that
-    cannot execute still reads as a passing check.
-
-    Asserting the regex matched something at all is the point. A pattern that finds nothing and
-    then checks nothing is how a pin check nearly went green by failing to recognise any image
-    (`tests/unit/test_supply_chain_pins.py` keeps a test for exactly that).
-    """
-    verify = (REPO_ROOT / "scripts" / "verify.py").read_text(encoding="utf-8")
-    gate_scripts = re.findall(r'\(\s*"bun",\s*"run",\s*"([^"]+)"', verify)
-    assert gate_scripts, (
-        "no `bun run <script>` gate found in scripts/verify.py -- either the phase table went "
-        "back to a raw interpreter path or this check stopped matching anything"
+    assert '"bun"' not in verify, (
+        "a phase gate is shelling out to a package manager the plan does not pin; gates run "
+        "the JS entry points through node so they measure the tree whoever installed it"
     )
 
-    manifest = json.loads((REPO_ROOT / "apps" / "web" / "package.json").read_text(encoding="utf-8"))
-    scripts = manifest.get("scripts", {})
-    missing = sorted(set(gate_scripts) - set(scripts))
-    assert not missing, f"scripts/verify.py runs {missing}, which package.json does not declare"
+
+def _bun_command_tokens(text: str) -> list[str]:
+    """Shell words that name Bun as a program, ignoring `bundle`/`buffers` prose."""
+    return [w for w in re.findall(r"(?<![\w./-])(bun\w*)(?![\w./-])", text) if w == "bun"]
 
 
 def test_web_dependencies_support_the_installed_react_major() -> None:
@@ -532,7 +501,7 @@ def test_web_dependencies_support_the_installed_react_major() -> None:
     manifest = json.loads(package.read_text(encoding="utf-8"))
     assert manifest.get("dependencies", {}).get("react"), "apps/web must declare react"
 
-    lock = (REPO_ROOT / "apps" / "web" / "bun.lock").read_text(encoding="utf-8")
+    lock = (REPO_ROOT / "apps" / "web" / "pnpm-lock.yaml").read_text(encoding="utf-8")
     for name, spec in manifest.get("dependencies", {}).items():
         if not name.startswith("@visx/"):
             continue
