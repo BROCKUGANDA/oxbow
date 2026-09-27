@@ -122,11 +122,20 @@ seeder refusing is correct — a blank demo is worse than no demo.
 
 ## Order that gets all six done in four days
 
-1. **Real five folds** — the score stage lands fold 0 today; folds 1–4 died on host
-   allocation. Then `oxbow backtest --corpus …` (its embargo refusal was the guard working,
-   not a bug).
-2. **Regenerate the cards** — `uv run oxbow eval` clears `provenance: fake_harness`.
-3. **Land the demo** — decision through the API, then `demo_seed --create`, then
-   `demo_seed --restore --boot-budget 90`.
-4. **Re-capture screenshots** and write/record `demo-tour.spec.ts`.
-5. **`gh auth login`**, publish, paste the six components into Devpost.
+1. **Real five folds** — **done.** All five folds fitted and scored on the landed corpus, the
+   walk-forward completed (`out/backtest/real40k/ablation_results.json`, 9 variants at
+   `provenance: real_corpus`), and the fold plan agrees with the corpus's own fold column on
+   all 79,998 rows. What cost four attempts was DEV-026: a fold booking one account's analyst
+   minutes once per scored row, caught by its own capacity postcondition.
+2. **Regenerate the cards** — **done.** `uv run oxbow eval` publishes the real run; `grep -c
+   fake_harness` over README, ARCHITECTURE, MODEL_CARD, ECONOMICS_CARD and LIMITATIONS is 0.
+   The cards now disclose the two things the table does not measure: the honest rows share one
+   fitted stack, and no fold cleared the calibration floor (DEV-024).
+3. **Land the demo** — open. Decision through the API, then `demo_seed --create`, then
+   `demo_seed --restore --boot-budget 90`. Blocked on rows in Postgres, which is the analytical
+   handoff now being landed; the score rows themselves wait on a run that calibrates.
+4. **Re-capture screenshots** and write/record `demo-tour.spec.ts` — open. The spec exists, is
+   wired to the beat slots and skips with a named reason until step 3 lands, because a tour of
+   the bundled fixture would demonstrate the fixture.
+5. **`gh auth login`**, publish, paste the six components into Devpost — open, and owner-only:
+   the tree stays private until the push is said yes to.

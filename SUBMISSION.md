@@ -76,9 +76,17 @@ in code review and a hard refusal in the renderer. Twelve named weaknesses are i
 LIMITATIONS.md with the measurement that shows each one.
 
 **Honest status.** The pipeline runs end to end and has produced a real scored corpus
-(79,998 accounts × 75 features, 108 positives). The headline model and economics cards
-currently carry `provenance: fake_harness` on every figure — the harness is verified against
-hand-computed ground truth, and the real five-fold numbers are being regenerated now. We
+(79,998 account rows × 75 features, 108 positives). The headline model and economics cards
+now carry `provenance: real_corpus`: 9 variants from the walk-forward over the landed PaySim
+40k slice, with the fold plan agreeing with the corpus's own fold column on all 79,998 rows,
+and the deliberately leaking control row scoring PR-AUC 1.0 against the best honest arm's
+0.0591 — which is the harness proving it can see leakage, not a model proving it is good.
+Two things are not what the table's labels imply, and the cards say so beside it: every honest
+row runs the same fitted stack, so the ablation separates the allocation policy rather than
+the model class, and every fold refuses to calibrate because the slice holds fewer validation
+positives than `config/model.yaml`'s floor of 50 requires (DEV-024; a 500,000-event slice is
+running to answer that). The harness itself was verified first against
+hand-computed ground truth, and it still carries that labelled demonstration path. We
 would rather ship a card that says so than one that does not.
 
 ---
