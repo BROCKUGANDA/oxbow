@@ -23,6 +23,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from http import HTTPStatus
 from typing import Any, Final
+from urllib.parse import quote
 
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
@@ -34,6 +35,21 @@ from api.observability import get_logger, new_trace_id, run_id_var, trace_id_var
 
 PROBLEM_MEDIA_TYPE: Final = "application/problem+json"
 PROBLEM_TYPE_BASE: Final = "https://oxbow.dev/problems/"
+
+
+def _instance_of(request: Request) -> str:
+    """The request path as a URI reference, which is what RFC 9457 says `instance` is.
+
+    Starlette decodes the request target before it reaches `url.path`, so a path parameter
+    containing a control character or a raw byte above U+007F would otherwise be echoed
+    into a JSON field that claims to name a URI. A UI that renders it as a copyable link,
+    or an operator who pastes it into a log query, gets an unparseable string — the field
+    stops doing its one job. `quote` with the default `safe="/"` re-encodes exactly those
+    bytes and leaves an ordinary path byte-identical, so this changes nothing for every
+    request a client can legally send.
+    """
+    return quote(str(request.url.path), safe="/")
+
 
 # The status codes every route can answer with, declared once so the generated client
 # gets the same union everywhere instead of a per-route approximation.
@@ -146,7 +162,7 @@ class OxbowError(RuntimeError):
             title=self.title_override or self.title,
             status=self.status,
             detail=self.detail,
-            instance=str(request.url.path) if request is not None else None,
+            instance=_instance_of(request) if request is not None else None,
             run_id=self.run_id or run_id_var.get(),
             trace_id=trace_id_var.get() or new_trace_id(),
             errors=self.errors,
@@ -285,21 +301,31 @@ def _log_unhandled(request: Request, exc: BaseException) -> None:
 
 
 def _rekey_problem_content(responses: Mapping[str, Any]) -> int:
-    """Move every ``ProblemDetail`` response onto ``application/problem+json``.
+    """Move every problem-shaped error response onto ``application/problem+json``.
 
-    FastAPI derives the media type of an extra ``responses=`` entry from the route's
-    *success* response class, so declaring ``model=ProblemDetail`` for a 400 writes
-    ``content: {"application/json": ...}`` into the document while the handler emits
-    ``application/problem+json``. That is precisely the drift this module's docstring says
-    cannot happen, and it is not cosmetic: a generated client builds its error union from
-    the declared media type, so a client would parse a problem document as a plain JSON
-    body and never reach the ``type``/``title`` fields.
+    Two kinds of drift are removed here, and they have different origins:
 
-    Re-keying after generation keeps one source of truth — the ``ProblemDetail`` model,
-    still registered through ``model=`` — and fixes only the content key. It is idempotent,
-    so it is safe to run against FastAPI's cached schema.
+    **A declared model.** FastAPI derives the media type of an extra ``responses=`` entry
+    from the route's *success* response class, so declaring ``model=ProblemDetail`` for a 400
+    writes ``content: {"application/json": ...}`` into the document while the handler emits
+    ``application/problem+json``.
+
+    **FastAPI's own 422.** A route with any validated parameter gets a ``422`` entry
+    referencing ``HTTPValidationError``, because that is the exception FastAPI raises. It is
+    not what this API sends: the ``RequestValidationError`` handler in
+    :func:`register_problem_handlers` builds an `Unprocessable` problem and carries the field
+    errors inside ``ProblemDetail.errors``. The document naming a schema the server never
+    emits is the same defect one layer up, and it is not cosmetic — a generated client types
+    the 422 branch as ``HTTPValidationError`` and then cannot read ``type``, ``title`` or
+    ``run_id`` from a real response. The field-level detail moves too: it is ``errors[]``
+    with ``location``/``message``/``value``, not ``detail[]`` with ``loc``/``msg``, so this
+    re-key is the document catching up with the wire rather than a rename.
+
+    Re-keying after generation keeps one source of truth — the ``ProblemDetail`` model — and
+    it is idempotent, so it is safe to run against FastAPI's cached schema.
     """
     moved = 0
+    problem_ref = {"$ref": "#/components/schemas/ProblemDetail"}
     for status, definition in responses.items():
         if not isinstance(definition, dict) or status == "default":
             continue
@@ -309,7 +335,10 @@ def _rekey_problem_content(responses: Mapping[str, Any]) -> int:
         json_body = content.get("application/json")
         if not isinstance(json_body, dict):
             continue
-        if json_body.get("schema", {}).get("$ref", "").endswith("/ProblemDetail"):
+        reference = str(json_body.get("schema", {}).get("$ref", ""))
+        if reference.endswith("/ProblemDetail") or reference.endswith("/HTTPValidationError"):
+            if reference.endswith("/HTTPValidationError"):
+                json_body["schema"] = problem_ref
             content.pop("application/json")
             content[PROBLEM_MEDIA_TYPE] = json_body
             moved += 1
@@ -450,7 +479,7 @@ def register_problem_handlers(app: FastAPI) -> None:
                 "the request failed inside the API. The traceback is in the server log "
                 f"under trace_id {trace}; the body deliberately does not repeat it."
             ),
-            instance=str(request.url.path),
+            instance=_instance_of(request),
             run_id=run_id_var.get(),
             trace_id=trace,
             retryable=True,

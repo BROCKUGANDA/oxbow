@@ -47,7 +47,7 @@ from api import jobs
 from api.deps import Container, analyst_or_higher, build_container, get_container
 from api.events import router as events_router
 from api.observability import configure_logging, get_logger, new_trace_id, run_id_var, trace_id_var
-from api.problems import register_problem_handlers
+from api.problems import problem_responses, register_problem_handlers
 from api.routers import (
     alerts,
     auth,
@@ -162,6 +162,12 @@ def create_app() -> FastAPI:
         "/healthz",
         response_model=Envelope[HealthResponse],
         tags=["health"],
+        # The one error this route can produce without the request being wrong is a failure to
+        # build the container it reads its component list from, which reaches the generic
+        # handler as a 500. Declaring nothing would leave the generated client's error branch
+        # for the boot-probe unnamed — and this is the route `make demo` waits on, so a
+        # failure here has to be readable without a token and without guessing.
+        responses=problem_responses((500,)),
         summary="Liveness and the degraded-component list, without authentication",
         description=(
             "Unauthenticated on purpose: a banner that needs a token to explain why the "
