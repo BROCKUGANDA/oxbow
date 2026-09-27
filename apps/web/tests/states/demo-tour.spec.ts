@@ -39,6 +39,11 @@ test.use({ trace: 'off', video: 'off', screenshot: 'off' });
 
 const LIVE_BASE = process.env.OXBOW_LIVE_WEB_BASE_URL;
 const CASE_ID = process.env.OXBOW_DEMO_CASE_ID;
+// The account the graph beat walks. It comes from the environment for the same reason the case
+// id does: `ACC-00DORM` is a fixture key, and asking the live warehouse for it returns a pane
+// that correctly says the account is not here — so a tour filmed from the sample URL would
+// narrate a network over an empty state, which is the exact defect this file exists to refuse.
+const ACCOUNT_KEY = process.env.OXBOW_DEMO_ACCOUNT_KEY;
 const FRAMES_DIR = process.env.OXBOW_DEMO_FRAMES_DIR ?? 'out/video/frames';
 
 /** How often a frame is taken, in milliseconds. At 500 ms a 3:30 tour is roughly 420 frames. */
@@ -48,7 +53,7 @@ const FRAME_EVERY_MS = 500;
 const BEATS: readonly { number: number; label: string; path: string; to: number }[] = [
   { number: 1, label: 'command', path: '/dashboard', to: 20 },
   { number: 2, label: 'scorecard', path: '/scorecard', to: 50 },
-  { number: 3, label: 'network', path: '/network?account=ACC-00DORM&hops=2', to: 85 },
+  { number: 3, label: 'network', path: '/network?account=DEMO_ACCOUNT&hops=2', to: 85 },
   { number: 4, label: 'queue', path: '/alerts', to: 120 },
   { number: 5, label: 'case', path: '/cases/DEMO_CASE', to: 155 },
   { number: 6, label: 'validation', path: '/model', to: 180 },
@@ -69,6 +74,13 @@ function blocked(): string | null {
     return (
       'OXBOW_DEMO_CASE_ID is not set: beat 5 opens a real case carrying a landed decision, so ' +
       'the demo snapshot has to exist and name the case it holds.'
+    );
+  }
+  if (ACCOUNT_KEY === undefined || ACCOUNT_KEY === '') {
+    return (
+      'OXBOW_DEMO_ACCOUNT_KEY is not set: beat 3 walks a real account two hops out, and a ' +
+      'fixture key asked of the live warehouse answers "not here", which would film an empty ' +
+      'state under a sentence about cycles.'
     );
   }
   return null;
@@ -101,7 +113,7 @@ test.describe('the demo tour', () => {
     };
 
     for (const beat of BEATS) {
-      const path = beat.path.replace('DEMO_CASE', CASE_ID ?? '');
+      const path = beat.path.replace('DEMO_CASE', CASE_ID ?? '').replace('DEMO_ACCOUNT', ACCOUNT_KEY ?? '');
       await page.goto(`${LIVE_BASE}${path}`, { waitUntil: 'networkidle' });
 
       // The footer disclaimer is on every route and is what beat 7 says out loud; if it is
