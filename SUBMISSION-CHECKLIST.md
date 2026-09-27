@@ -77,20 +77,35 @@ all seven slot offsets.
 `speak.ps1` uses `SetOutputToWaveFile` — `SetWaveFile` does not exist on this API and fails at
 runtime, not at parse time.
 
-Screen capture: Playwright records per-page video natively, which avoids a full-desktop
-capture and the RAM it costs on this box.
+Screen capture: **not** Playwright's `video: 'on'`. That option needs Playwright's private ffmpeg
+build under the browser cache (`ms-playwright/ffmpeg-1010/ffmpeg-win64.exe`), and this project
+installs no browsers and downloads nothing — enabling it fails with
+`Executable doesn't exist`, which is the kind of failure that arrives on the day of filming. So
+`tests/states/demo-tour.spec.ts` screenshots the tour on a 500 ms timer into
+`out/video/frames/`, and `scripts/make_demo_video.py` assembles the sequence with the system
+ffmpeg that is actually installed.
 
 ```bash
 cd apps/web
-node node_modules/@playwright/test/cli.js test demo-tour.spec.ts   # writes .test-output/video/*.webm
-# assemble: concat the beats, pad each to its slot, mux over the video
-ffmpeg -f concat -safe 0 -i beats.txt -i tour.webm -c:v libx264 -pix_fmt yuv420p \
-       -shortest -movflags +faststart oxbow-demo.mp4
+# needs OXBOW_LIVE_WEB_BASE_URL and OXBOW_DEMO_CASE_ID set, or it skips with the reason
+node node_modules/@playwright/test/cli.js test demo-tour.spec.ts   # ~420 JPEG frames
+cd ../..
+uv run python scripts/make_demo_video.py --check-only              # verify inputs, no encode
+uv run python scripts/make_demo_video.py                           # out/oxbow-demo.mp4
 ```
 
-`demo-tour.spec.ts` (the scripted walkthrough the video is captured from) is **not written
-yet** — it is the remaining piece of component 03, and it wants the demo snapshot below so
-the tour shows real numbers.
+`make_demo_video.py` derives the frame rate from `frames / narration_seconds` rather than
+declaring one, so the picture ends when the last word is spoken; it then reads the container's
+duration back with ffprobe and fails if it disagrees with the narration by more than 2 seconds.
+Verified: the guard fires with 0 frames ("only 0 frames in out\video\frames — run the tour
+first", exit 1), `probe_seconds` returns 3.0 s on a real file and `None` on a missing one, and a
+three-still sequence assembles into h264 with this ffmpeg. The full 206-second encode has not been
+run, because a 3:30 encode cannot finish while the score run holds the machine's remaining
+memory — do it after the numbers land, with nothing else running.
+
+`demo-tour.spec.ts` exists and is wired to the beat slots, but it **skips until the demo
+snapshot below exists** — it needs a live origin serving landed numbers and a case id carrying a
+landed decision, because a tour of the bundled fixture would demonstrate the fixture.
 
 ## What the video needs first: real evidence
 
