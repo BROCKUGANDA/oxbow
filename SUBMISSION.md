@@ -92,6 +92,14 @@ datasets keep their own terms (PaySim CC BY-SA 4.0, IBM-AML CDLA-Sharing-1.0, bo
 share-alike on derived data; Elliptic CC BY-NC-ND, cite-only) and are not redistributed —
 `make data` fetches them and verifies each against a recorded SHA-256.
 
+Measured rather than asserted: `git ls-files` returns nothing under `.github/` (an empty local
+`.github/workflows/` directory exists and is in no commit — git does not track empty directories,
+so a clone has no CI either), and `tests/unit/test_publication_preflight.py` holds the rest of it:
+license consistency across `pyproject.toml` and `package.json`, no developer home path in shipped
+code, no secret-shaped literal, the `RUN_SALT` value absent from every tracked file, `.env`
+untracked, no corpus bytes committed, and every `license:` in `config/sources.yaml` named in
+`LICENSE`.
+
 ---
 
 ## 03 · Demo video — script and narration
