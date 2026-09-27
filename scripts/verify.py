@@ -227,11 +227,15 @@ PHASES: tuple[Phase, ...] = (
             "the walk-forward has now completed on the landed 40k corpus (DEV-026's grain "
             "defect was what the capacity postcondition refused on), and MODEL_CARD.md and "
             "ECONOMICS_CARD.md carry provenance=real_corpus with the leakage control "
-            "detecting the lookahead arm. The phase is not claimed because the ablation is "
-            "not yet an ablation: every honest row runs the same fitted stack and the eight "
-            "rows differ by policy ladder, so no row is evidence that the scorecard, the "
-            "graph features or the GBM add discrimination. Per-row feature subsetting is the "
-            "open work; the artifact says so and the generated card prints that sentence."
+            "detecting the lookahead arm. The phase is not claimed because the ablation table "
+            "ON DISK is still the shared-fit one: every honest row in it ran the same fitted "
+            "stack and the rows differ by policy ladder, so no row is evidence that the "
+            "scorecard, the graph features or the GBM add discrimination. The per-row scorer "
+            "landed on 2026-09-28 (DEV-027 — each row reads the channel its label names, one "
+            "extra booster fit per fold for the graph-free model, a missing channel raises "
+            "rather than borrowing the full stack's number) and is unit-proven; what is missing "
+            "is the re-run, blocked on this host's RAM while the 500k score slice is live. "
+            "The artifact's own generated `ablation_caveat` says which of these is true."
         ),
         gates=(
             Gate(

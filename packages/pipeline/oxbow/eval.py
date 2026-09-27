@@ -46,6 +46,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import itertools
 import json
 import sys
 from collections.abc import Mapping, Sequence
@@ -450,6 +451,62 @@ def _refuse_a_stale_backtest_artifact(root: Path) -> None:
         )
 
 
+#: Discrimination columns a model-ablation row is supposed to move. Comparing these across rows
+#: that declare different channels is how DEV-027 is caught without a human reading the table:
+#: the fold already proved the numbers were byte-identical under eight model-shaped labels.
+_ABLATION_DISCRIMINATION: Final = ("pr_auc", "brier", "auroc_comparability_only")
+
+
+def _refuse_an_ablation_table_whose_model_rows_do_not_differ(document: Mapping[str, Any]) -> None:
+    """Refuse to publish a table whose rows claim different models and report one measurement.
+
+    This is DEV-027 as a gate rather than as an incident. A run that declares a channel per row
+    and then produces the same PR-AUC for two of them means the fold cache answered two rows with
+    one scorer — the collision the identity key in ``SharedFoldRuns`` exists to prevent, and the
+    one failure mode where every number in the never-cut table is arithmetically correct and
+    editorially false.
+
+    Artifacts that declare no ``ablation_profiles`` are skipped: they predate per-row scoring, and
+    their limitation is the one the packet already carries.
+    """
+    profiles = document.get("ablation_profiles")
+    if not isinstance(profiles, Mapping) or len({str(v) for v in profiles.values()}) < 5:
+        return
+    honest = [
+        variant
+        for variant in document.get("variants") or []
+        if isinstance(variant, Mapping) and not variant.get("is_control")
+    ]
+    duplicates: list[str] = []
+    for first, second in itertools.combinations(honest, 2):
+        row_a, row_b = str(first.get("row_id")), str(second.get("row_id"))
+        if profiles.get(row_a) == profiles.get(row_b):
+            continue  # rows that share a channel by design; the caveat names them
+        for policy, agg_a in (first.get("policies") or {}).items():
+            agg_b = (second.get("policies") or {}).get(policy)
+            if not isinstance(agg_a, Mapping) or not isinstance(agg_b, Mapping):
+                continue
+            shared = [
+                column
+                for column in _ABLATION_DISCRIMINATION
+                if agg_a.get(column) is not None and agg_a.get(column) == agg_b.get(column)
+            ]
+            if len(shared) == len(_ABLATION_DISCRIMINATION):
+                duplicates.append(
+                    f"{row_a} (profile {profiles.get(row_a)}) and {row_b} "
+                    f"(profile {profiles.get(row_b)}) report one measurement on the "
+                    f"{policy!r} ladder: {', '.join(shared)}"
+                )
+    if duplicates:
+        raise FileNotFoundError(
+            "the ablation table declares a distinct fitted channel per row and then publishes "
+            "rows that do not differ, so it is not a model ablation: "
+            + "; ".join(duplicates)
+            + ". Refusing to regenerate the cards from it — check that the fold cache keys on the "
+            "slice identity and that each row's profile was actually fitted."
+        )
+
+
 def _load_available(root: Path) -> dict[str, Any]:
     _refuse_a_stale_backtest_artifact(root)
     loaded: dict[str, Any] = {}
@@ -463,6 +520,8 @@ def _load_available(root: Path) -> dict[str, Any]:
     ):
         path = root / relpath
         loaded[name] = _read_json(path) if path.is_file() else None
+    if isinstance(loaded["backtest_ablation"], Mapping):
+        _refuse_an_ablation_table_whose_model_rows_do_not_differ(loaded["backtest_ablation"])
     typologies = root / "data/processed/ibm_typologies.parquet"
     loaded["ibm_typologies"] = pl.read_parquet(typologies) if typologies.is_file() else None
     for config_name in ("sources", "pipeline", "model", "rules", "features", "splits"):
