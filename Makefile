@@ -5,6 +5,7 @@
 #
 #   make bootstrap   uv sync, pnpm install, pre-commit install
 #   make up          docker compose up: Postgres 16, Redis 7, MinIO, MLflow, Keycloak, echo svc
+#   make up-full     the same, plus the application profile: api, worker, web and the caddy edge
 #   make ingest|graph|score|backtest   the four pipeline stages, separately resumable
 #   make pipeline    all four, streaming stage events over SSE
 #   make api|web|dev dev servers
@@ -66,6 +67,15 @@ up: ## docker compose up: Postgres 16, Redis 7, MinIO, MLflow, Keycloak, echo
 	$(COMPOSE) up -d --wait
 	@echo "--- health ---"
 	@$(COMPOSE) ps --format 'table {{.Service}}\t{{.State}}\t{{.Health}}'
+
+.PHONY: up-full
+up-full: ## the application profile too: api, worker, web and the caddy edge on :8080
+	@echo "--- building and booting the full profile (api image and next build run here) ---"
+	COMPOSE_PROFILES=full $(COMPOSE) up -d --wait --build
+	@echo "--- health ---"
+	@COMPOSE_PROFILES=full $(COMPOSE) ps --format 'table {{.Service}}\t{{.State}}\t{{.Health}}'
+	@echo "--- edge ---"
+	@echo "http://localhost:$${OXBOW_EDGE_PORT:-8080}  (browser origin; /api/* goes to the API, the rest to the app)"
 
 .PHONY: down
 down: ## docker compose down, keep volumes
