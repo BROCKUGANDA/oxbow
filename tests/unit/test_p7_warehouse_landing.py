@@ -177,9 +177,9 @@ def test_rule_hits_keep_the_rules_that_did_not_fire() -> None:
 
     assert set(by_rule) == {"R4", "R2", "R9"}
     assert by_rule["R4"]["fired"] is True
-    assert by_rule["R2"]["fired"] is False, (
-        "a non-firing rule is dropped from the table, so the case rail cannot show the margin"
-    )
+    assert (
+        by_rule["R2"]["fired"] is False
+    ), "a non-firing rule is dropped from the table, so the case rail cannot show the margin"
     assert by_rule["R2"]["detail"]["severity"] == 0.0
 
 
@@ -207,7 +207,9 @@ def test_an_account_scored_in_two_folds_collapses_to_one_hit_row() -> None:
     assert r4[0]["fired"] is True
 
     none_fired = rule_hit_rows(
-        pl.concat([_scored(fold=0, rule_r4_cycle_severity=0), _scored(fold=1, rule_r4_cycle_severity=0)])
+        pl.concat(
+            [_scored(fold=0, rule_r4_cycle_severity=0), _scored(fold=1, rule_r4_cycle_severity=0)]
+        )
     )
     r4_quiet = next(row for row in none_fired if row["rule_id"] == "R4")
     assert r4_quiet["fired"] is False and r4_quiet["detail"]["folds_fired"] == 0
@@ -231,3 +233,68 @@ def test_the_landed_40k_run_refuses_every_row_for_the_same_named_reason() -> Non
     )
     assert refused, "no row and no refusal means the loader looked at nothing"
     assert "calibration_n" in refused[0]
+
+
+def test_an_account_scored_in_two_folds_lands_one_current_score() -> None:
+    """`score` is UNIQUE (run_id, account_key) with no fold column, so the table has one row.
+
+    Hand-computed: the same account scored in fold 0 at band D / 712 points and again in fold 2
+    (30 days later) at band C / 800 points. The later pass is the current score, so one row
+    lands and it carries C and 800. A loader that emitted both would have the write rejected by
+    the database — measured on the landed 40k run, where 43,720 test rows cover 43,046 accounts
+    and 674 rows collide (DEV-026, at the warehouse boundary).
+    """
+    frames = pl.concat(
+        [
+            _scored(fold=0, as_of_ts=T0),
+            _scored(fold=2, as_of_ts=T0 + 30 * DAY, band="C", score_points=800),
+            _scored(account_key="ffffffffffffffffffff0000", fold=1, as_of_ts=T0 + DAY),
+        ]
+    )
+    rows, refused = score_rows(frames)
+
+    assert refused == [], f"every row here is calibrated: {refused}"
+    assert len(rows) == 2, f"expected one current score per account, got {len(rows)}"
+    by_account = {row["account_key"]: row for row in rows}
+    assert len(by_account) == 2, "the two accounts must not collapse into one another"
+    scored_twice = by_account["0123456789abcdef01234567"]
+    assert scored_twice["band"] == "C" and scored_twice["scorecard_points"] == 800, (
+        "the fold-0 reading is the older information; landing it would put a stale score in "
+        "the queue and the reader would have no way to tell"
+    )
+
+
+def test_the_latest_pass_beats_an_earlier_one_regardless_of_row_order() -> None:
+    """The rule names the latest scoring pass, not the last row the frame happened to hold."""
+    frames = pl.concat(
+        [
+            _scored(fold=2, as_of_ts=T0 + 30 * DAY, band="C", score_points=800),
+            _scored(fold=0, band="D"),
+        ]
+    )
+    rows, _refused = score_rows(frames)
+
+    assert len(rows) == 1 and rows[0]["band"] == "C" and rows[0]["scorecard_points"] == 800
+
+
+def test_an_account_whose_current_row_is_refused_is_not_rescued_by_an_older_fold() -> None:
+    """Falling back to a stale calibrated score would be the silent substitution this file exists
+    to refuse; the account is refused by name instead."""
+    frames = pl.concat(
+        [
+            _scored(fold=0),
+            _scored(fold=2, as_of_ts=T0 + 30 * DAY, band_n=0, band_observed_rate=float("nan")),
+        ]
+    )
+    rows, refused = score_rows(frames)
+
+    assert rows == [], "the older fold's number is not the account's current score"
+    assert len(refused) == 1 and "calibration_n" in refused[0]
+
+
+def test_a_scored_frame_without_a_fold_or_as_of_cannot_name_a_current_score() -> None:
+    """Refuse rather than land one account as several 'current' scores and hope the reader notices."""
+    frames = _scored().drop("as_of_ts")
+
+    with pytest.raises(LandingError, match="as_of_ts"):
+        score_rows(frames)

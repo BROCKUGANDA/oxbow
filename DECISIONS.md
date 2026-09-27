@@ -1115,3 +1115,15 @@ it fail with the population-mismatch error rather than quietly reporting the old
 `ablation_results.json` now carries `rows_collapsed_into_decisions` per fold, so the published
 table says how many alerts became how many reviews.
 
+**The same grain defect waited at the warehouse boundary, invisible only because calibration was
+refusing every row.** `score` is `UNIQUE (run_id, account_key)` and carries no fold or as-of
+column — the table's own declaration says an account has one score per run — while
+`landing.score_rows` emitted one row per scored row. Measured on the landed 40k run: 43,720 test
+rows over 43,046 distinct accounts, 359 accounts scored in two folds, so **674 rows would have
+been rejected by the constraint** the first time a run calibrated. The `warehouse` stage would have
+rolled the whole commit back and the demo snapshot would still have had no scores, with a traceback
+pointing at Postgres rather than at the grain. The loader now resolves the current score per
+account (latest fold, latest as-of) before it validates, and an account whose *current* row is
+refused is refused by name instead of rescued by an older fold's calibrated number. Three of the
+four tests added to `tests/unit/test_p7_warehouse_landing.py` fail if that collapse is reverted.
+

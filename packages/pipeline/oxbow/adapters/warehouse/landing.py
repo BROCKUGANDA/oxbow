@@ -134,7 +134,9 @@ def account_rows(events: pl.DataFrame) -> list[dict[str, Any]]:
     required = {"account_from", "account_to", "amount_minor", "event_ts_utc", "currency"}
     missing = required - set(events.columns)
     if missing:
-        raise LandingError(f"the event frame is missing {sorted(missing)}; cannot describe accounts")
+        raise LandingError(
+            f"the event frame is missing {sorted(missing)}; cannot describe accounts"
+        )
 
     out, inc = _pairs(events)
     both = pl.concat([out, inc])
@@ -151,18 +153,16 @@ def account_rows(events: pl.DataFrame) -> list[dict[str, Any]]:
         pl.col("currency").mode().first().alias("currency"),
     )
     grouped = grouped.with_columns(
-        (
-            (pl.col("last_seen_at") - pl.col("first_seen_at")).dt.total_days().cast(pl.Int64)
-        ).alias("age_days")
+        ((pl.col("last_seen_at") - pl.col("first_seen_at")).dt.total_days().cast(pl.Int64)).alias(
+            "age_days"
+        )
     )
 
     rows: list[dict[str, Any]] = []
     for record in grouped.sort("account_key").to_dicts():
         row = {column: record.get(column) for column in ACCOUNT_COLUMNS}
         absent = [
-            column
-            for column in ACCOUNT_COLUMNS
-            if column != "age_days" and row.get(column) is None
+            column for column in ACCOUNT_COLUMNS if column != "age_days" and row.get(column) is None
         ]
         if absent:
             raise LandingError(
@@ -210,6 +210,33 @@ def _load_json(value: Any, *, column: str, account_key: str) -> Any:
         ) from exc
 
 
+def _current_score_per_account(part: pl.DataFrame) -> pl.DataFrame:
+    """One row per account: the latest fold's latest as-of, which is the run's current score.
+
+    ``score`` is ``UNIQUE (run_id, account_key)`` and carries no fold or as-of column, so the
+    table's own declaration says an account has one score per run. A walk-forward run scores an
+    account again in every fold it is still active in — measured on the landed 40k run: 43,720
+    test rows over 43,046 accounts, with 359 accounts scored in two folds, so 674 rows would
+    collide. Same grain finding as DEV-026, at the warehouse boundary instead of the ledger.
+
+    The later fold wins because it is the later information. An account whose current row is
+    refused is NOT replaced by an older fold's calibrated number: that would put a stale score
+    in the queue and let the reader believe it is the live one. The refusal is reported by
+    account instead, in the caller.
+    """
+    missing = [name for name in ("fold", "as_of_ts") if name not in part.columns]
+    if missing:
+        raise LandingError(
+            f"the scored frame has no {missing} column(s), so 'the latest scoring pass for each "
+            "account' cannot be resolved and one account would land as several current scores"
+        )
+    ordered = part.with_row_index("_landing_row").sort(
+        ["account_key", "fold", "as_of_ts", "_landing_row"]
+    )
+    kept = ordered.unique(subset=["account_key"], keep="last")
+    return kept.sort("_landing_row").drop("_landing_row")
+
+
 def score_rows(
     scored: pl.DataFrame, *, role: str = "test"
 ) -> tuple[list[dict[str, Any]], list[str]]:
@@ -220,8 +247,10 @@ def score_rows(
     current score, and the queue would rank accounts by how well the model memorised them.
     """
     if "role" not in scored.columns:
-        raise LandingError("the scored frame carries no `role` column, so no row can be trusted "
-                           "to be out-of-sample")
+        raise LandingError(
+            "the scored frame carries no `role` column, so no row can be trusted "
+            "to be out-of-sample"
+        )
     part = scored.filter(pl.col("role") == role)
     if part.height == 0:
         raise LandingError(f"no scored rows with role={role!r}; nothing out-of-sample to land")
@@ -241,7 +270,7 @@ def score_rows(
 
     rows: list[dict[str, Any]] = []
     refused: list[str] = []
-    for record in part.sort(["account_key", "fold"]).to_dicts():
+    for record in _current_score_per_account(part).to_dicts():
         account_key = str(record.get("account_key", ""))
         observed_rate = record.get("band_observed_rate")
         calibration_n = record.get("band_n")
@@ -349,7 +378,9 @@ def rule_hit_rows(scored: pl.DataFrame, *, role: str = "test") -> list[dict[str,
             detail = existing["detail"]
             detail["folds"] = int(detail["folds"]) + 1
             detail["folds_fired"] = int(detail["folds_fired"]) + (1 if fired else 0)
-            if severity is not None and (detail["severity"] is None or severity > detail["severity"]):
+            if severity is not None and (
+                detail["severity"] is None or severity > detail["severity"]
+            ):
                 detail["severity"] = severity
                 existing["typology"] = str(record.get("label_typology") or "unlabelled")
             existing["fired"] = bool(existing["fired"] or fired)
