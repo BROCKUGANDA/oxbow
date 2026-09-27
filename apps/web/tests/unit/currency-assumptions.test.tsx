@@ -51,7 +51,12 @@ describe('a currency figure cannot render without its assumptions', () => {
 
   it('when it does render, the figure carries the band and the named assumption line', () => {
     const view = render(
-      <MoneyFigure figure={figure(412_000_000)} assumptions={ASSUMPTIONS} label="Expected loss avoided" emphasis="kpi" />,
+      <MoneyFigure
+        figure={figure(412_000_000)}
+        assumptions={ASSUMPTIONS}
+        label="Expected loss avoided"
+        emphasis="kpi"
+      />,
     );
     const body = text(view.container);
     // 412,000,000 minor units at 2 decimals is 4,120,000.00 UGX — the division the
@@ -75,7 +80,9 @@ describe('a currency figure cannot render without its assumptions', () => {
       }),
     ).toThrowError();
     expect(moneyAtBand(figure(1000))).toHaveLength(3);
-    expect(moneyAtBand({ value: { minor: 1, currency: 'UGX', decimals: 2 }, band: null, band_rates: null })).toEqual([]);
+    expect(moneyAtBand({ value: { minor: 1, currency: 'UGX', decimals: 2 }, band: null, band_rates: null })).toEqual(
+      [],
+    );
   });
 
   it('minor-unit division is exact long division, never a float artifact', () => {

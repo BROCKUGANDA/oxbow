@@ -25,36 +25,54 @@
 'use client';
 
 import Link from 'next/link';
-import { useEffect, useState, type ReactElement, ReactNode } from 'react';
+import { type ReactElement, type ReactNode, useEffect, useState } from 'react';
 
+import { ChartFrame, LineChart, Waterfall, minimumSeriesNote } from '@/components/charts/charts';
+import { BandBadge } from '@/components/ui/BandBadge';
+import { MarkArc } from '@/components/ui/MarkArc';
+import { MoneyFigure } from '@/components/ui/MoneyFigure';
+import { DegradedBanner, ProvenanceBadge, RunIdChip, Timestamp } from '@/components/ui/provenance';
+import { PANEL, PANEL_SUNKEN, T_HERO, T_LABEL, T_MICRO, T_MONO } from '@/components/ui/sx';
+import { Icon } from '@/design/icons/Icon';
+import { GLYPH_NAMES } from '@/design/icons/Icon';
 import { EmptyState } from '@/design/primitives/EmptyState';
 import { ErrorPane } from '@/design/primitives/ErrorPane';
 import { Shimmer } from '@/design/primitives/Shimmer';
 import { Skeleton } from '@/design/primitives/Skeleton';
 import { StageLedger } from '@/design/primitives/StageLedger';
-import { Icon } from '@/design/icons/Icon';
-import { GLYPH_NAMES } from '@/design/icons/Icon';
-import { BandBadge } from '@/components/ui/BandBadge';
-import { MarkArc } from '@/components/ui/MarkArc';
-import { DegradedBanner, ProvenanceBadge, RunIdChip, Timestamp } from '@/components/ui/provenance';
-import { MoneyFigure } from '@/components/ui/MoneyFigure';
-import { ChartFrame, LineChart, Waterfall, minimumSeriesNote } from '@/components/charts/charts';
-import { ROUTES, type MoneyFigure as MoneyFigureValue } from '@/lib/api/contract';
-import { PIPELINE_COMMAND, RUNTIME_ESTIMATE_FALLBACK } from '@/lib/copy';
-import { GALLERY_META } from './gallery-meta';
+import { type MoneyFigure as MoneyFigureValue, ROUTES } from '@/lib/api/contract';
 import { useResource } from '@/lib/api/hooks';
+import { PIPELINE_COMMAND, RUNTIME_ESTIMATE_FALLBACK } from '@/lib/copy';
 import { count } from '@/lib/format/money';
-import { PANEL, PANEL_SUNKEN, T_HERO, T_LABEL, T_MICRO, T_MONO } from '@/components/ui/sx';
+import { GALLERY_META } from './gallery-meta';
 import { FigureRow, LongTextRow, StaleRow } from './gallery-rows';
 
 export function StatesGallery({ reduced }: { reduced: boolean }): ReactElement {
   const money = useResource('money-strip', ROUTES.dashboard.path, ROUTES.dashboard.data);
 
+  // `globals.css` keys its forced-path rules to `html[data-motion="reduced"]` and its own
+  // comment says "?motion=reduced sets this attribute" -- but nothing set it, so the
+  // block that pauses animations, kills the shimmer sweep and drops transforms to
+  // opacity matched no element at all. The prop-driven parts of the gallery behaved; a
+  // component that animates by CSS alone did not, which is precisely the case the forced
+  // mode exists to demonstrate.
+  useEffect(() => {
+    const root = document.documentElement;
+    if (reduced) {
+      root.setAttribute('data-motion', 'reduced');
+    } else {
+      root.removeAttribute('data-motion');
+    }
+    return () => root.removeAttribute('data-motion');
+  }, [reduced]);
+
   const assumptions = money.meta?.assumptions ?? [];
   const figure: MoneyFigureValue | null = money.data?.expected_loss_avoided ?? null;
 
   return (
-    <div style={{ padding: 'var(--spacing-pane-gap)', display: 'flex', flexDirection: 'column', gap: 24, maxWidth: 1180 }}>
+    <div
+      style={{ padding: 'var(--spacing-pane-gap)', display: 'flex', flexDirection: 'column', gap: 24, maxWidth: 1180 }}
+    >
       <header>
         <h1 style={T_HERO}>State gallery</h1>
         <p style={{ ...T_LABEL, color: 'var(--color-ink-muted)', maxWidth: '76ch', marginTop: 6 }}>
@@ -78,16 +96,35 @@ export function StatesGallery({ reduced }: { reduced: boolean }): ReactElement {
         </div>
         <p style={{ ...T_MICRO, color: 'var(--color-ink-faint)', marginTop: 10 }}>
           All five sit at equal lightness, so a greyscale print keeps the order through the meter segments and the
-          letter. Nothing in the product encodes risk with colour alone, and{' '}
-          <code style={T_MONO}>@media print</code> in globals.css re-states the ramp in greyscale for the packet.
+          letter. Nothing in the product encodes risk with colour alone, and <code style={T_MONO}>@media print</code> in
+          globals.css re-states the ramp in greyscale for the packet.
         </p>
       </Section>
 
       {/* ------------------------------------------------------ 2. glyphs -- */}
       <Section id="glyphs" title="The twelve typology glyphs and the three utility marks">
-        <ul style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(120px, 1fr))', gap: 10, listStyle: 'none', margin: 0, padding: 0 }}>
+        <ul
+          style={{
+            display: 'grid',
+            gridTemplateColumns: 'repeat(auto-fill, minmax(120px, 1fr))',
+            gap: 10,
+            listStyle: 'none',
+            margin: 0,
+            padding: 0,
+          }}
+        >
           {GLYPH_NAMES.map((name) => (
-            <li key={name} style={{ ...PANEL_SUNKEN, padding: 10, display: 'flex', flexDirection: 'column', gap: 6, alignItems: 'flex-start' }}>
+            <li
+              key={name}
+              style={{
+                ...PANEL_SUNKEN,
+                padding: 10,
+                display: 'flex',
+                flexDirection: 'column',
+                gap: 6,
+                alignItems: 'flex-start',
+              }}
+            >
               <Icon name={name} size={24} title={name} />
               <span style={{ ...T_MICRO, color: 'var(--color-ink-faint)' }}>{name}</span>
             </li>
@@ -135,7 +172,9 @@ export function StatesGallery({ reduced }: { reduced: boolean }): ReactElement {
         </div>
         <div style={{ display: 'flex', gap: 16, marginTop: 14, flexWrap: 'wrap', alignItems: 'center' }}>
           <div style={{ minWidth: 220 }}>
-            <p style={{ ...T_MICRO, color: 'var(--color-ink-faint)', marginBottom: 4 }}>shimmer: translateX on the compositor</p>
+            <p style={{ ...T_MICRO, color: 'var(--color-ink-faint)', marginBottom: 4 }}>
+              shimmer: translateX on the compositor
+            </p>
             <Shimmer width="100%" height={14} label="Sweeping placeholder" />
           </div>
           <div>
@@ -164,10 +203,20 @@ export function StatesGallery({ reduced }: { reduced: boolean }): ReactElement {
           <EmptyState
             kind="filters-excluded"
             unfilteredRows={1_412}
-            narrowest={{ label: 'Typology is circular transfer', value: 'R4 only', rowsIfRemoved: 41, onRemove: () => undefined }}
+            narrowest={{
+              label: 'Typology is circular transfer',
+              value: 'R4 only',
+              rowsIfRemoved: 41,
+              onRemove: () => undefined,
+            }}
             others={[{ label: 'Band', value: 'E', onRemove: () => undefined }]}
           />
-          <EmptyState kind="no-run" command={PIPELINE_COMMAND} expectedRuntime={RUNTIME_ESTIMATE_FALLBACK} corpus="IBM-AML HI-Small and PaySim" />
+          <EmptyState
+            kind="no-run"
+            command={PIPELINE_COMMAND}
+            expectedRuntime={RUNTIME_ESTIMATE_FALLBACK}
+            corpus="IBM-AML HI-Small and PaySim"
+          />
           <EmptyState
             kind="window-empty"
             accountId="ACC-00DORM"
@@ -208,7 +257,11 @@ export function StatesGallery({ reduced }: { reduced: boolean }): ReactElement {
         <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
           <div>
             <p style={{ ...T_MICRO, color: 'var(--color-ink-faint)', marginBottom: 4 }}>tier 1 · inline field</p>
-            <p role="alert" data-field-error="reason" style={{ ...T_MICRO, color: 'var(--color-state-failed)', margin: 0 }}>
+            <p
+              role="alert"
+              data-field-error="reason"
+              style={{ ...T_MICRO, color: 'var(--color-state-failed)', margin: 0 }}
+            >
               reason: a written reason is required — the field above is still holding your text.
             </p>
           </div>
@@ -226,7 +279,12 @@ export function StatesGallery({ reduced }: { reduced: boolean }): ReactElement {
             <ErrorPane
               paneId="gallery-pane"
               operation="Loading the network graph"
-              error={{ title: 'Upstream failure', status: 502, detail: 'the warehouse port returned a reset mid-query', run_id: '01J4Z7M2QK9N7V1C4X6E8G0B2D' }}
+              error={{
+                title: 'Upstream failure',
+                status: 502,
+                detail: 'the warehouse port returned a reset mid-query',
+                run_id: '01J4Z7M2QK9N7V1C4X6E8G0B2D',
+              }}
               onRetry={() => undefined}
               attempt={2}
             />
@@ -243,11 +301,11 @@ export function StatesGallery({ reduced }: { reduced: boolean }): ReactElement {
               </Link>
             </p>
             <p style={{ ...T_MICRO, color: 'var(--color-ink-muted)', margin: 0, maxWidth: '76ch' }}>
-              Reached by asking the failure transport for a response that is a well-formed envelope with the
-              assumptions block emptied: the currency chokepoint refuses to render it, the refusal escapes every pane
-              boundary on that screen, and the segment boundary catches it. A segment failure renders the same ErrorPane
-              with <code style={T_MONO}>siblingsIntact=false</code>; the header and the footer survive because they are
-              above the boundary.
+              Reached by asking the failure transport for a response that is a well-formed envelope with the assumptions
+              block emptied: the currency chokepoint refuses to render it, the refusal escapes every pane boundary on
+              that screen, and the segment boundary catches it. A segment failure renders the same ErrorPane with{' '}
+              <code style={T_MONO}>siblingsIntact=false</code>; the header and the footer survive because they are above
+              the boundary.
             </p>
           </div>
           <div>
@@ -257,18 +315,24 @@ export function StatesGallery({ reduced }: { reduced: boolean }): ReactElement {
             <p style={{ ...T_MICRO, color: 'var(--color-ink-muted)', margin: 0, maxWidth: '72ch' }}>
               The boundary above the shell re-declares html and body and imports nothing from the design system, because
               if the shell is what failed, a surface built from the shell is what just failed. It is styled with the
-              token values inlined for exactly that reason. Next mounts it only when the root layout itself fails,
-              which is not a state a URL can ask for, so <code style={T_MONO}>app/layout.tsx</code> carries a
+              token values inlined for exactly that reason. Next mounts it only when the root layout itself fails, which
+              is not a state a URL can ask for, so <code style={T_MONO}>app/layout.tsx</code> carries a
               server-environment probe that throws on purpose; the screenshot of this tier is taken with that variable
               set and nothing else changes.
             </p>
           </div>
           <div>
-            <p style={{ ...T_MICRO, color: 'var(--color-ink-faint)', marginBottom: 4 }}>contract tier · a 2xx that is not the envelope</p>
+            <p style={{ ...T_MICRO, color: 'var(--color-ink-faint)', marginBottom: 4 }}>
+              contract tier · a 2xx that is not the envelope
+            </p>
             <ErrorPane
               paneId="gallery-contract"
               operation="Reading the dashboard strip"
-              error={{ title: 'Response did not match the API contract', detail: 'envelope keys were [data, success], expected [data, meta]', run_id: '01J4Z7M2QK9N7V1C4X6E8G0B2D' }}
+              error={{
+                title: 'Response did not match the API contract',
+                detail: 'envelope keys were [data, success], expected [data, meta]',
+                run_id: '01J4Z7M2QK9N7V1C4X6E8G0B2D',
+              }}
               onRetry={() => undefined}
             />
           </div>
@@ -296,11 +360,29 @@ export function StatesGallery({ reduced }: { reduced: boolean }): ReactElement {
             text the page could not render. */}
         <FigureRow />
         {figure === null ? (
-          <Skeleton label="Loading the figures" showHeader={false} rows={1} rowHeight={96} columns={[{ key: 'f', width: '100%' }]} />
+          <Skeleton
+            label="Loading the figures"
+            showHeader={false}
+            rows={1}
+            rowHeight={96}
+            columns={[{ key: 'f', width: '100%' }]}
+          />
         ) : (
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: 16 }}>
-            <MoneyFigure figure={figure} assumptions={assumptions} label="Expected loss avoided" emphasis="kpi" source="config/economics.yaml" />
-            <MoneyFigure figure={money.data?.residual_exposure ?? figure} assumptions={assumptions} label="Residual exposure (ES 97.5%)" emphasis="kpi" source="config/economics.yaml" />
+            <MoneyFigure
+              figure={figure}
+              assumptions={assumptions}
+              label="Expected loss avoided"
+              emphasis="kpi"
+              source="config/economics.yaml"
+            />
+            <MoneyFigure
+              figure={money.data?.residual_exposure ?? figure}
+              assumptions={assumptions}
+              label="Residual exposure (ES 97.5%)"
+              emphasis="kpi"
+              source="config/economics.yaml"
+            />
           </div>
         )}
       </Section>
@@ -309,11 +391,15 @@ export function StatesGallery({ reduced }: { reduced: boolean }): ReactElement {
       <Section id="edges" title="Edge cases with named tests">
         <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
           <div>
-            <p style={{ ...T_MICRO, color: 'var(--color-ink-faint)', marginBottom: 4 }}>single-point series, minimum-series guard</p>
-            <LineChart points={[{ x: '2026-09-01T00:00:00Z', y: 412_000_000, label: 'one fold' }]} yIsMoney ariaLabel="Single point series" />
-            <p style={{ ...T_MICRO, color: 'var(--color-ink-faint)', marginTop: 4 }}>
-              {minimumSeriesNote(1, 'line')}
+            <p style={{ ...T_MICRO, color: 'var(--color-ink-faint)', marginBottom: 4 }}>
+              single-point series, minimum-series guard
             </p>
+            <LineChart
+              points={[{ x: '2026-09-01T00:00:00Z', y: 412_000_000, label: 'one fold' }]}
+              yIsMoney
+              ariaLabel="Single point series"
+            />
+            <p style={{ ...T_MICRO, color: 'var(--color-ink-faint)', marginTop: 4 }}>{minimumSeriesNote(1, 'line')}</p>
           </div>
           <div>
             <p style={{ ...T_MICRO, color: 'var(--color-ink-faint)', marginBottom: 4 }}>zero-point series</p>
@@ -331,7 +417,9 @@ export function StatesGallery({ reduced }: { reduced: boolean }): ReactElement {
             </div>
           </div>
           <div>
-            <p style={{ ...T_MICRO, color: 'var(--color-ink-faint)', marginBottom: 4 }}>waterfall rows, which are cross-filter targets</p>
+            <p style={{ ...T_MICRO, color: 'var(--color-ink-faint)', marginBottom: 4 }}>
+              waterfall rows, which are cross-filter targets
+            </p>
             <Waterfall
               ariaLabel="Gallery contribution waterfall"
               rows={[
@@ -397,5 +485,10 @@ function LedgerStrip(): ReactElement {
     { id: '5', stage: 'rules', status: 'pending', rows: null, elapsed_ms: null },
     { id: '6', stage: 'score', status: 'pending', rows: null, elapsed_ms: null },
   ] as const;
-  return <StageLedger stages={stages.map((entry) => ({ ...entry, status: entry.status }))} runId="01J4Z7M2QK9N7V1C4X6E8G0B2D" />;
+  return (
+    <StageLedger
+      stages={stages.map((entry) => ({ ...entry, status: entry.status }))}
+      runId="01J4Z7M2QK9N7V1C4X6E8G0B2D"
+    />
+  );
 }

@@ -6,7 +6,7 @@
  * mocked data, and nothing in src/ branches on a test mode.
  */
 
-;(globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true;
+(globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true;
 
 type MqlListener = (event: { matches: boolean }) => void;
 

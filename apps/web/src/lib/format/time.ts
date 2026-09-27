@@ -64,8 +64,7 @@ export function zoned(iso: string | null, timeZone: string): ZonedInstant {
     timeZoneName: 'short',
   }).formatToParts(date);
 
-  const pick = (type: Intl.DateTimeFormatPartTypes): string =>
-    parts.find((part) => part.type === type)?.value ?? '';
+  const pick = (type: Intl.DateTimeFormatPartTypes): string => parts.find((part) => part.type === type)?.value ?? '';
 
   const datePart = `${pick('day')} ${pick('month')} ${pick('year')}`;
   const timePart = normaliseHours(pick('hour'), pick('minute'));
@@ -89,11 +88,7 @@ export function zoned(iso: string | null, timeZone: string): ZonedInstant {
  * wall clock was taken in. When the short form is only an offset, the long form is
  * asked for ("East Africa Time"), and the offset is still printed beside it.
  */
-function zoneLabel(
-  date: Date,
-  timeZone: string,
-  shortName: string,
-): string {
+function zoneLabel(date: Date, timeZone: string, shortName: string): string {
   if (!/^GMT([+-]|$)/.test(shortName)) return shortName;
   const parts = formatter(timeZone, {
     year: 'numeric',

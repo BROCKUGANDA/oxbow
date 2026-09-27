@@ -20,22 +20,22 @@
 'use client';
 
 import Link from 'next/link';
-import { useCallback, useEffect, useRef, useState, type CSSProperties, type ReactElement } from 'react';
+import { type CSSProperties, type ReactElement, useCallback, useEffect, useRef, useState } from 'react';
 
-import { EmptyState } from '@/design/primitives/EmptyState';
-import { Icon } from '@/design/icons/Icon';
-import { ErrorPane } from '@/design/primitives/ErrorPane';
 import { Pane } from '@/components/Pane';
 import { LineChart, MultiLineChart } from '@/components/charts/charts';
+import { MarkArc } from '@/components/ui/MarkArc';
 import { MoneyFigure } from '@/components/ui/MoneyFigure';
 import { Assumptions } from '@/components/ui/provenance';
-import { MarkArc } from '@/components/ui/MarkArc';
-import { ROUTES, type Allocation } from '@/lib/api/contract';
+import { PANEL_SUNKEN, T_LABEL, T_MICRO, T_MONO } from '@/components/ui/sx';
+import { Icon } from '@/design/icons/Icon';
+import { EmptyState } from '@/design/primitives/EmptyState';
+import { ErrorPane } from '@/design/primitives/ErrorPane';
+import { type Allocation, ROUTES } from '@/lib/api/contract';
 import { useListResource, useResource } from '@/lib/api/hooks';
 import { failureDetail, failureRunId, failureTitle, isRunNotFound } from '@/lib/api/problem';
 import { PIPELINE_COMMAND, RUNTIME_ESTIMATE_FALLBACK } from '@/lib/copy';
 import { compactFromMinor, count, percent } from '@/lib/format/money';
-import { PANEL_SUNKEN, T_LABEL, T_MICRO, T_MONO } from '@/components/ui/sx';
 
 type Params = {
   capacity_minutes: number;
@@ -78,7 +78,9 @@ export default function PolicyPage(): ReactElement {
     if (draft.recovery_rate <= 0 || draft.recovery_rate >= 1) {
       // The open interval is enforced client-side so the analyst sees why the number
       // moved nothing, rather than watching an empty result.
-      setError('Recovery rate must be strictly between 0 and 1: at either end the ranking degenerates, it does not become optimistic.');
+      setError(
+        'Recovery rate must be strictly between 0 and 1: at either end the ranking degenerates, it does not become optimistic.',
+      );
       return;
     }
     setError(null);
@@ -123,10 +125,30 @@ export default function PolicyPage(): ReactElement {
   const solverDegraded = allocation.failure !== null && allocation.failure.class !== 'contract' && exact;
 
   return (
-    <div style={{ padding: 'var(--spacing-pane-gap)', display: 'flex', flexDirection: 'column', gap: 'var(--spacing-pane-gap)' }}>
-      <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 380px) minmax(0, 1fr)', gap: 'var(--spacing-pane-gap)', alignItems: 'start' }}>
+    <div
+      style={{
+        padding: 'var(--spacing-pane-gap)',
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 'var(--spacing-pane-gap)',
+      }}
+    >
+      <div
+        style={{
+          display: 'grid',
+          gridTemplateColumns: 'minmax(0, 380px) minmax(0, 1fr)',
+          gap: 'var(--spacing-pane-gap)',
+          alignItems: 'start',
+        }}
+      >
         {/* --------------------------------------------------- sliders ---- */}
-        <Pane id="inputs" title="Assumptions under test" operation="Reading the economic assumptions" meta={defaults.meta} skeleton={{ columns: [{ key: 's', width: '100%' }], rows: 4 }}>
+        <Pane
+          id="inputs"
+          title="Assumptions under test"
+          operation="Reading the economic assumptions"
+          meta={defaults.meta}
+          skeleton={{ columns: [{ key: 's', width: '100%' }], rows: 4 }}
+        >
           <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
             <Slider
               label="Review capacity"
@@ -170,7 +192,11 @@ export default function PolicyPage(): ReactElement {
             />
 
             {error !== null ? (
-              <p role="alert" data-field-error="recovery_rate" style={{ ...T_MICRO, color: 'var(--color-state-failed)', margin: 0 }}>
+              <p
+                role="alert"
+                data-field-error="recovery_rate"
+                style={{ ...T_MICRO, color: 'var(--color-state-failed)', margin: 0 }}
+              >
                 {error}
               </p>
             ) : null}
@@ -188,7 +214,14 @@ export default function PolicyPage(): ReactElement {
                 <Icon name="chain" size={14} /> solve exactly with CP-SAT
               </button>
               {exact ? (
-                <button type="button" onClick={() => { setExact(false); setTimeout(commit, 0); }} style={CONTROL}>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setExact(false);
+                    setTimeout(commit, 0);
+                  }}
+                  style={CONTROL}
+                >
                   back to greedy
                 </button>
               ) : null}
@@ -199,8 +232,7 @@ export default function PolicyPage(): ReactElement {
                 answers are computed from, exactly where the number is being chosen. */}
             <Assumptions assumptions={assumptions} source={defaults.data.source} />
             <p style={{ ...T_MICRO, color: 'var(--color-ink-faint)' }}>
-              every value on this page is the server’s answer to these four numbers ·
-              nothing here is precomputed
+              every value on this page is the server’s answer to these four numbers · nothing here is precomputed
             </p>
           </div>
         </Pane>
@@ -218,25 +250,67 @@ export default function PolicyPage(): ReactElement {
               <ErrorPane
                 paneId="allocation"
                 operation="Re-allocating under these assumptions"
-                error={{ title: failureTitle(allocation.failure), detail: failureDetail(allocation.failure) ?? undefined, run_id: failureRunId(allocation.failure) ?? undefined }}
+                error={{
+                  title: failureTitle(allocation.failure),
+                  detail: failureDetail(allocation.failure) ?? undefined,
+                  run_id: failureRunId(allocation.failure) ?? undefined,
+                }}
                 onRetry={() => void allocation.refetch()}
                 attempt={allocation.attempts}
                 retrying={allocation.isFetching}
               />
             ) : (
-              <Pane id="allocation" title="Allocation" operation="Computing the allocation" meta={null} skeleton={{ columns: [{ key: 'c', width: '100%' }], rows: 6 }}>
+              <Pane
+                id="allocation"
+                title="Allocation"
+                operation="Computing the allocation"
+                meta={null}
+                skeleton={{ columns: [{ key: 'c', width: '100%' }], rows: 6 }}
+              >
                 {MarkArc({ progress: null, label: 'solving' })}
               </Pane>
             )
           ) : (
             <>
-              <section style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(210px, 1fr))', gap: 'var(--spacing-pane-gap)' }}>
-                <MoneyFigure figure={answer.expected_loss_avoided} assumptions={assumptions} label="Expected loss avoided" emphasis="kpi" source={defaults.data.source} />
-                <MoneyFigure figure={answer.benefit_per_analyst_hour} assumptions={assumptions} label="Benefit per analyst-hour" emphasis="kpi" source={defaults.data.source} />
-                <MoneyFigure figure={answer.es975_unreviewed} assumptions={assumptions} label="Residual exposure ES 97.5%" emphasis="kpi" source={defaults.data.source} />
+              <section
+                style={{
+                  display: 'grid',
+                  gridTemplateColumns: 'repeat(auto-fit, minmax(210px, 1fr))',
+                  gap: 'var(--spacing-pane-gap)',
+                }}
+              >
+                <MoneyFigure
+                  figure={answer.expected_loss_avoided}
+                  assumptions={assumptions}
+                  label="Expected loss avoided"
+                  emphasis="kpi"
+                  source={defaults.data.source}
+                />
+                <MoneyFigure
+                  figure={answer.benefit_per_analyst_hour}
+                  assumptions={assumptions}
+                  label="Benefit per analyst-hour"
+                  emphasis="kpi"
+                  source={defaults.data.source}
+                />
+                <MoneyFigure
+                  figure={answer.es975_unreviewed}
+                  assumptions={assumptions}
+                  label="Residual exposure ES 97.5%"
+                  emphasis="kpi"
+                  source={defaults.data.source}
+                />
                 <div style={{ ...PANEL_SUNKEN, padding: 10 }}>
                   <p style={{ ...T_LABEL, textTransform: 'uppercase', letterSpacing: '0.06em' }}>Accounts reviewed</p>
-                  <p className="u-num" style={{ fontFamily: 'var(--font-condensed)', fontSize: 'var(--text-kpi)', fontWeight: 600, margin: '2px 0 0' }}>
+                  <p
+                    className="u-num"
+                    style={{
+                      fontFamily: 'var(--font-condensed)',
+                      fontSize: 'var(--text-kpi)',
+                      fontWeight: 600,
+                      margin: '2px 0 0',
+                    }}
+                  >
                     {count(answer.accounts_reviewed)}
                   </p>
                   <p style={{ ...T_MICRO, color: 'var(--color-ink-faint)' }}>
@@ -247,26 +321,78 @@ export default function PolicyPage(): ReactElement {
               </section>
 
               {/* what changed — the sentence a risk manager asks for */}
-              <Pane id="changed" title="What changed" operation="Comparing review sets" meta={allocation.meta} skeleton={{ columns: [{ key: 'k', width: '100%' }], rows: 2 }}>
+              <Pane
+                id="changed"
+                title="What changed"
+                operation="Comparing review sets"
+                meta={allocation.meta}
+                skeleton={{ columns: [{ key: 'k', width: '100%' }], rows: 2 }}
+              >
                 <div data-what-changed style={{ display: 'flex', gap: 16, flexWrap: 'wrap' }}>
-                  <ChangeSet title="entered the review set" keys={answer.changed.entered} total={answer.changed.entered_count} tone="in" />
-                  <ChangeSet title="left the review set" keys={answer.changed.left} total={answer.changed.left_count} tone="out" />
+                  <ChangeSet
+                    title="entered the review set"
+                    keys={answer.changed.entered}
+                    total={answer.changed.entered_count}
+                    tone="in"
+                  />
+                  <ChangeSet
+                    title="left the review set"
+                    keys={answer.changed.left}
+                    total={answer.changed.left_count}
+                    tone="out"
+                  />
                 </div>
               </Pane>
 
-              <Pane id="curve" title="Cumulative benefit against the baselines" operation="Loading the benefit curve" meta={allocation.meta} skeleton={{ columns: [{ key: 'c', width: '100%' }], rows: 1, rowHeight: 300 }}>
+              <Pane
+                id="curve"
+                title="Cumulative benefit against the baselines"
+                operation="Loading the benefit curve"
+                meta={allocation.meta}
+                skeleton={{ columns: [{ key: 'c', width: '100%' }], rows: 1, rowHeight: 300 }}
+              >
                 <MultiLineChart series={answer.cumulative_curve} ariaLabel="Cumulative benefit by policy" />
               </Pane>
 
-              <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1fr)', gap: 'var(--spacing-pane-gap)' }}>
-                <Pane id="frontier" title="Efficient frontier" operation="Loading the frontier" meta={allocation.meta} skeleton={{ columns: [{ key: 'f', width: '100%' }], rows: 1, rowHeight: 220 }}>
+              <div
+                style={{
+                  display: 'grid',
+                  gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1fr)',
+                  gap: 'var(--spacing-pane-gap)',
+                }}
+              >
+                <Pane
+                  id="frontier"
+                  title="Efficient frontier"
+                  operation="Loading the frontier"
+                  meta={allocation.meta}
+                  skeleton={{ columns: [{ key: 'f', width: '100%' }], rows: 1, rowHeight: 220 }}
+                >
                   <Frontier allocation={answer} currency={defaults.data.currency} />
                 </Pane>
 
-                <Pane id="risk" title="Tail and gap" operation="Loading the tail figures" meta={allocation.meta} skeleton={{ columns: [{ key: 'r', width: '100%' }], rows: 4 }}>
+                <Pane
+                  id="risk"
+                  title="Tail and gap"
+                  operation="Loading the tail figures"
+                  meta={allocation.meta}
+                  skeleton={{ columns: [{ key: 'r', width: '100%' }], rows: 4 }}
+                >
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-                    <MoneyFigure figure={answer.max_drawdown} assumptions={assumptions} label="Max drawdown of cumulative net benefit" compact source={defaults.data.source} />
-                    <MoneyFigure figure={answer.var95_unreviewed} assumptions={assumptions} label="VaR 95% of unreviewed exposure" compact showBand={false} />
+                    <MoneyFigure
+                      figure={answer.max_drawdown}
+                      assumptions={assumptions}
+                      label="Max drawdown of cumulative net benefit"
+                      compact
+                      source={defaults.data.source}
+                    />
+                    <MoneyFigure
+                      figure={answer.var95_unreviewed}
+                      assumptions={assumptions}
+                      label="VaR 95% of unreviewed exposure"
+                      compact
+                      showBand={false}
+                    />
                     {answer.optimality_gap === null ? (
                       <p style={{ ...T_MICRO, color: 'var(--color-ink-faint)', maxWidth: '46ch' }}>
                         No optimality gap: the exact solve has not run for this configuration, so the gap would be a
@@ -275,12 +401,24 @@ export default function PolicyPage(): ReactElement {
                     ) : (
                       <div style={{ ...PANEL_SUNKEN, padding: 10 }} data-optimality-gap>
                         <p style={{ ...T_LABEL, margin: 0 }}>Gap to the exact CP-SAT optimum</p>
-                        <p className="u-num" style={{ fontFamily: 'var(--font-condensed)', fontSize: 'var(--text-kpi)', fontWeight: 600, margin: '2px 0' }}>
+                        <p
+                          className="u-num"
+                          style={{
+                            fontFamily: 'var(--font-condensed)',
+                            fontSize: 'var(--text-kpi)',
+                            fontWeight: 600,
+                            margin: '2px 0',
+                          }}
+                        >
                           {percent(answer.optimality_gap.ratio, 2)}
                         </p>
                         <p style={{ ...T_MICRO, color: 'var(--color-ink-muted)' }}>
-                          {compactFromMinor(answer.optimality_gap.absolute.minor, answer.optimality_gap.absolute.decimals)}{' '}
-                          {answer.optimality_gap.absolute.currency} · greedy {answer.optimality_gap.greedy_objective.toFixed(0)} vs exact{' '}
+                          {compactFromMinor(
+                            answer.optimality_gap.absolute.minor,
+                            answer.optimality_gap.absolute.decimals,
+                          )}{' '}
+                          {answer.optimality_gap.absolute.currency} · greedy{' '}
+                          {answer.optimality_gap.greedy_objective.toFixed(0)} vs exact{' '}
                           {answer.optimality_gap.cpsat_objective.toFixed(0)} · solve {String(answer.solve_ms ?? 0)} ms
                         </p>
                       </div>
@@ -354,7 +492,12 @@ function Slider({
   );
 }
 
-function ChangeSet({ title, keys, total, tone }: { title: string; keys: readonly string[]; total: number; tone: 'in' | 'out' }): ReactElement {
+function ChangeSet({
+  title,
+  keys,
+  total,
+  tone,
+}: { title: string; keys: readonly string[]; total: number; tone: 'in' | 'out' }): ReactElement {
   return (
     <div style={{ minWidth: 200 }}>
       <p style={{ ...T_LABEL, color: tone === 'in' ? 'var(--color-band-d)' : 'var(--color-band-b)', margin: 0 }}>
@@ -368,12 +511,22 @@ function ChangeSet({ title, keys, total, tone }: { title: string; keys: readonly
         <ul style={{ listStyle: 'none', margin: '4px 0 0', padding: 0, display: 'flex', gap: 6, flexWrap: 'wrap' }}>
           {keys.map((key) => (
             <li key={key}>
-              <Link href={`/cases/${encodeURIComponent(key)}`} style={{ ...T_MONO, fontSize: 'var(--text-micro)', color: 'var(--color-ink)', textDecoration: 'underline' }}>
+              <Link
+                href={`/cases/${encodeURIComponent(key)}`}
+                style={{
+                  ...T_MONO,
+                  fontSize: 'var(--text-micro)',
+                  color: 'var(--color-ink)',
+                  textDecoration: 'underline',
+                }}
+              >
                 {key}
               </Link>
             </li>
           ))}
-          {total > keys.length ? <li style={{ ...T_MICRO, color: 'var(--color-ink-faint)' }}>+{count(total - keys.length)} more</li> : null}
+          {total > keys.length ? (
+            <li style={{ ...T_MICRO, color: 'var(--color-ink-faint)' }}>+{count(total - keys.length)} more</li>
+          ) : null}
         </ul>
       )}
     </div>
@@ -391,32 +544,50 @@ function Frontier({ allocation, currency }: { allocation: Allocation; currency: 
       <LineChart
         points={points}
         yIsMoney
-        mark={points[allocation.frontier.current_index] === undefined ? null : { x: points[allocation.frontier.current_index]?.x ?? '', label: 'here' }}
+        mark={
+          points[allocation.frontier.current_index] === undefined
+            ? null
+            : { x: points[allocation.frontier.current_index]?.x ?? '', label: 'here' }
+        }
         formatY={(value) => compactFromMinor(value, 2)}
         formatX={(value) => `${count(Math.round(Date.parse(value) / 60_000))} min`}
         ariaLabel="Achievable expected loss avoided at each capacity, with the current operating point marked"
       />
       <p style={{ ...T_MICRO, color: 'var(--color-ink-faint)' }}>
         axes: capacity in analyst-minutes against achievable {currency} loss avoided. One dominated policy is drawn on
-        the same curve — the point at {(points[allocation.frontier.current_index] === undefined ? '' : points[Math.max(allocation.frontier.current_index - 1, 0)]?.label ?? '')}{' '}
+        the same curve — the point at{' '}
+        {points[allocation.frontier.current_index] === undefined
+          ? ''
+          : (points[Math.max(allocation.frontier.current_index - 1, 0)]?.label ?? '')}{' '}
         — so the frontier has something to be better than.
       </p>
     </div>
   );
 }
 
-function DegradedSolver({ failure, onRetry }: { failure: Parameters<typeof failureTitle>[0] | null; onRetry: () => void }): ReactElement {
+function DegradedSolver({
+  failure,
+  onRetry,
+}: { failure: Parameters<typeof failureTitle>[0] | null; onRetry: () => void }): ReactElement {
   return (
-    <Pane id="allocation" title="Allocation" operation="Solving exactly" meta={null} skeleton={{ columns: [{ key: 'c', width: '100%' }], rows: 4 }}>
+    <Pane
+      id="allocation"
+      title="Allocation"
+      operation="Solving exactly"
+      meta={null}
+      skeleton={{ columns: [{ key: 'c', width: '100%' }], rows: 4 }}
+    >
       <div style={{ ...PANEL_SUNKEN, padding: 12, borderLeft: '2px solid var(--color-state-running)' }}>
         <p style={{ ...T_LABEL, color: 'var(--color-ink)', margin: 0 }}>
           Degraded: the CP-SAT port is unavailable, so the deterministic greedy allocation is shown instead of no
           allocation.
         </p>
         <p style={{ ...T_MICRO, color: 'var(--color-ink-muted)', marginTop: 6 }}>
-          {failure === null ? 'The solver did not answer.' : `${failureTitle(failure)} — ${failureDetail(failure) ?? ''}`} The
-          greedy result is still the optimum of the fractional relaxation, and the optimality gap is withheld because a
-          time-limited incumbent has no dual bound to compare against.
+          {failure === null
+            ? 'The solver did not answer.'
+            : `${failureTitle(failure)} — ${failureDetail(failure) ?? ''}`}{' '}
+          The greedy result is still the optimum of the fractional relaxation, and the optimality gap is withheld
+          because a time-limited incumbent has no dual bound to compare against.
         </p>
         <button type="button" onClick={onRetry} style={{ ...CONTROL, marginTop: 8 }}>
           continue with greedy
@@ -425,4 +596,3 @@ function DegradedSolver({ failure, onRetry }: { failure: Parameters<typeof failu
     </Pane>
   );
 }
-

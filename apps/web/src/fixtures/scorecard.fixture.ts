@@ -18,7 +18,12 @@ const BASE_ODDS = 50;
 const FACTOR = Math.round((PDO / Math.LN2) * 100) / 100;
 const OFFSET = Math.round((BASE_SCORE - FACTOR * Math.log(BASE_ODDS)) * 100) / 100;
 
-type BinSeed = { bin: string; bad_rate: number; share: number; special: 'missing' | 'structural_zero' | 'unseen' | null };
+type BinSeed = {
+  bin: string;
+  bad_rate: number;
+  share: number;
+  special: 'missing' | 'structural_zero' | 'unseen' | null;
+};
 
 /** WOE from the base rate the corpus carries, so the sign follows the bad rate. */
 function woeOf(badRate: number, baseRate: number): number {
@@ -178,11 +183,51 @@ export const scorecard: Scorecard = {
   },
   attributes,
   bands: [
-    { band: 'A', lower: 720, upper: 999, population_share: 0.62, observed_rate: 0.012, action: 'monitor', accounts: 319_350 },
-    { band: 'B', lower: 640, upper: 719, population_share: 0.237, observed_rate: 0.051, action: 'monitor', accounts: 122_074 },
-    { band: 'C', lower: 545, upper: 639, population_share: 0.084, observed_rate: 0.163, action: 'review', accounts: 43_267 },
-    { band: 'D', lower: 430, upper: 544, population_share: 0.044, observed_rate: 0.402, action: 'review', accounts: 22_664 },
-    { band: 'E', lower: 0, upper: 429, population_share: 0.015, observed_rate: 0.671, action: 'escalate', accounts: 7_725 },
+    {
+      band: 'A',
+      lower: 720,
+      upper: 999,
+      population_share: 0.62,
+      observed_rate: 0.012,
+      action: 'monitor',
+      accounts: 319_350,
+    },
+    {
+      band: 'B',
+      lower: 640,
+      upper: 719,
+      population_share: 0.237,
+      observed_rate: 0.051,
+      action: 'monitor',
+      accounts: 122_074,
+    },
+    {
+      band: 'C',
+      lower: 545,
+      upper: 639,
+      population_share: 0.084,
+      observed_rate: 0.163,
+      action: 'review',
+      accounts: 43_267,
+    },
+    {
+      band: 'D',
+      lower: 430,
+      upper: 544,
+      population_share: 0.044,
+      observed_rate: 0.402,
+      action: 'review',
+      accounts: 22_664,
+    },
+    {
+      band: 'E',
+      lower: 0,
+      upper: 429,
+      population_share: 0.015,
+      observed_rate: 0.671,
+      action: 'escalate',
+      accounts: 7_725,
+    },
   ],
   points_total_reconciles: true,
   source: 'config/scorecard.yaml',
@@ -205,8 +250,12 @@ export const drift: Drift = {
     BAND_LETTERS.map((to) => ({
       from,
       to,
-      count: from === to ? 400 + Math.round((from.charCodeAt(0) % 7) * 60) : Math.round(((from.charCodeAt(0) - to.charCodeAt(0)) % 9) * 12 + 6),
-    }))),
+      count:
+        from === to
+          ? 400 + Math.round((from.charCodeAt(0) % 7) * 60)
+          : Math.round(((from.charCodeAt(0) - to.charCodeAt(0)) % 9) * 12 + 6),
+    })),
+  ),
   downgrade_rate: 0.061,
   thresholds: { watch: 0.1, action: 0.25, source: 'config/scorecard.yaml' },
 };

@@ -89,8 +89,7 @@ function Sweep(): ReactElement {
         position: 'absolute',
         inset: 0,
         width: '40%',
-        background:
-          'linear-gradient(90deg, transparent 0%, oklch(1 0 0 / 0.055) 50%, transparent 100%)',
+        background: 'linear-gradient(90deg, transparent 0%, oklch(1 0 0 / 0.055) 50%, transparent 100%)',
         willChange: 'transform',
         animation: `oxbow-shimmer ${SHIMMER_PERIOD_S}s linear infinite`,
       }}

@@ -22,12 +22,12 @@ import { AxisBottom, AxisLeft } from '@visx/axis';
 import { Group } from '@visx/group';
 import { ParentSize } from '@visx/responsive';
 import { scaleLinear } from '@visx/scale';
+import { scaleLinear as bandLinear, scaleBand } from '@visx/scale';
 import { Bar, LinePath } from '@visx/shape';
-import { scaleBand, scaleLinear as bandLinear } from '@visx/scale';
-import { useState, type ReactElement, type ReactNode } from 'react';
+import { type ReactElement, type ReactNode, useState } from 'react';
 
-import type { SeriesPoint } from '../../lib/api/contract';
 import { CANVAS_RAISED, EVIDENCE, HAIRLINE, INK, INK_FAINT, INK_MUTED } from '../../design/tokens';
+import type { SeriesPoint } from '../../lib/api/contract';
 
 /** The one chart height in the product. Chosen once so a page's charts align. */
 export const CHART_HEIGHT = 220;
@@ -86,14 +86,7 @@ function LineChartInner({
   const xTickFormat = formatX ?? ((value: string) => value.slice(0, 10));
 
   return (
-    <svg
-      width={width}
-      height={height}
-      role="img"
-      aria-label={ariaLabel}
-      data-chart="line"
-      data-points={points.length}
-    >
+    <svg width={width} height={height} role="img" aria-label={ariaLabel} data-chart="line" data-points={points.length}>
       {y.ticks(4).map((tick) => (
         <line
           key={`grid-${String(tick)}`}
@@ -113,7 +106,14 @@ function LineChartInner({
         tickFormat={(tick) => tickFormat(Number(tick))}
         stroke={HAIRLINE}
         tickStroke={HAIRLINE}
-        tickLabelProps={() => ({ fill: INK_FAINT, fontSize: 10, textAnchor: 'end', dx: -6, dy: 3, fontFamily: 'var(--font-mono)' })}
+        tickLabelProps={() => ({
+          fill: INK_FAINT,
+          fontSize: 10,
+          textAnchor: 'end',
+          dx: -6,
+          dy: 3,
+          fontFamily: 'var(--font-mono)',
+        })}
       />
       <AxisBottom
         scale={x}
@@ -122,7 +122,13 @@ function LineChartInner({
         tickFormat={(tick) => xTickFormat(new Date(Number(tick)).toISOString())}
         stroke={HAIRLINE}
         tickStroke={HAIRLINE}
-        tickLabelProps={() => ({ fill: INK_FAINT, fontSize: 10, textAnchor: 'middle', dy: 6, fontFamily: 'var(--font-mono)' })}
+        tickLabelProps={() => ({
+          fill: INK_FAINT,
+          fontSize: 10,
+          textAnchor: 'middle',
+          dy: 6,
+          fontFamily: 'var(--font-mono)',
+        })}
       />
 
       <LinePath
@@ -141,12 +147,7 @@ function LineChartInner({
         </text>
       ) : null}
       {yLabel !== undefined ? (
-        <text
-          transform={`translate(10, ${MARGIN.top}) rotate(-90)`}
-          fill={INK_FAINT}
-          fontSize={9}
-          textAnchor="end"
-        >
+        <text transform={`translate(10, ${MARGIN.top}) rotate(-90)`} fill={INK_FAINT} fontSize={9} textAnchor="end">
           {yLabel}
         </text>
       ) : null}
@@ -192,7 +193,13 @@ export type MultiSeriesProps = {
 
 /** One line per policy, which is how the cumulative benefit curve is meant to read:
  *  the active policy against the four baselines, on one axis. */
-export function MultiLineChart({ series, height = CHART_HEIGHT_TALL, yIsMoney = true, formatY, ariaLabel }: MultiSeriesProps): ReactElement {
+export function MultiLineChart({
+  series,
+  height = CHART_HEIGHT_TALL,
+  yIsMoney = true,
+  formatY,
+  ariaLabel,
+}: MultiSeriesProps): ReactElement {
   const longest = series.reduce((max, entry) => Math.max(max, entry.points.length), 0);
   const note = minimumSeriesNote(longest, 'line');
   if (note !== null || series.length === 0) {
@@ -207,7 +214,14 @@ export function MultiLineChart({ series, height = CHART_HEIGHT_TALL, yIsMoney = 
     <div style={{ width: '100%', height }}>
       <ParentSize>
         {({ width, height: boxHeight }) => (
-          <svg width={Math.max(width, 1)} height={boxHeight} role="img" aria-label={ariaLabel} data-chart="multi-line" data-points={longest}>
+          <svg
+            width={Math.max(width, 1)}
+            height={boxHeight}
+            role="img"
+            aria-label={ariaLabel}
+            data-chart="multi-line"
+            data-points={longest}
+          >
             <MultiSeriesInner
               width={Math.max(width, 1)}
               height={boxHeight}
@@ -263,7 +277,14 @@ function MultiSeriesInner({
         tickFormat={(value) => tick(Number(value))}
         stroke={HAIRLINE}
         tickStroke={HAIRLINE}
-        tickLabelProps={() => ({ fill: INK_FAINT, fontSize: 10, textAnchor: 'end', dx: -6, dy: 3, fontFamily: 'var(--font-mono)' })}
+        tickLabelProps={() => ({
+          fill: INK_FAINT,
+          fontSize: 10,
+          textAnchor: 'end',
+          dx: -6,
+          dy: 3,
+          fontFamily: 'var(--font-mono)',
+        })}
       />
       <AxisBottom
         scale={x}
@@ -272,7 +293,13 @@ function MultiSeriesInner({
         tickFormat={(value) => new Date(Number(value)).toISOString().slice(0, 10)}
         stroke={HAIRLINE}
         tickStroke={HAIRLINE}
-        tickLabelProps={() => ({ fill: INK_FAINT, fontSize: 10, textAnchor: 'middle', dy: 6, fontFamily: 'var(--font-mono)' })}
+        tickLabelProps={() => ({
+          fill: INK_FAINT,
+          fontSize: 10,
+          textAnchor: 'middle',
+          dy: 6,
+          fontFamily: 'var(--font-mono)',
+        })}
       />
       {series.map((entry, index) => (
         <LinePath
@@ -314,7 +341,12 @@ function Legend({ series }: { series: readonly { label: string; is_policy: boole
               }`,
             }}
           />
-          <span style={{ fontSize: 'var(--text-micro)', color: entry.is_policy ? 'var(--color-ink)' : 'var(--color-ink-muted)' }}>
+          <span
+            style={{
+              fontSize: 'var(--text-micro)',
+              color: entry.is_policy ? 'var(--color-ink)' : 'var(--color-ink-muted)',
+            }}
+          >
             {entry.label}
           </span>
         </li>
@@ -388,7 +420,11 @@ function BarWithLineInner({
   ariaLabel: string;
 }): ReactElement {
   const [hover, setHover] = useState<string | null>(null);
-  const x = scaleBand({ domain: rows.map((row) => row.label), range: [MARGIN.left, width - MARGIN.right], padding: 0.28 });
+  const x = scaleBand({
+    domain: rows.map((row) => row.label),
+    range: [MARGIN.left, width - MARGIN.right],
+    padding: 0.28,
+  });
   const y = bandLinear({
     domain: [0, Math.max(...rows.map((row) => row.value)) || 1],
     range: [height - MARGIN.bottom, MARGIN.top],
@@ -431,7 +467,14 @@ function BarWithLineInner({
         tickFormat={(value) => tick(Number(value))}
         stroke={HAIRLINE}
         tickStroke={HAIRLINE}
-        tickLabelProps={() => ({ fill: INK_FAINT, fontSize: 10, textAnchor: 'end', dx: -6, dy: 3, fontFamily: 'var(--font-mono)' })}
+        tickLabelProps={() => ({
+          fill: INK_FAINT,
+          fontSize: 10,
+          textAnchor: 'end',
+          dx: -6,
+          dy: 3,
+          fontFamily: 'var(--font-mono)',
+        })}
       />
       {rows.map((row) => (
         <Bar
@@ -447,7 +490,7 @@ function BarWithLineInner({
       {hasSecondary ? (
         <LinePath
           data={points as { label: string; secondary?: number }[]}
-          x={(point) => (x(point.label) ?? 0) + (x.bandwidth() / 2)}
+          x={(point) => (x(point.label) ?? 0) + x.bandwidth() / 2}
           y={(point) => y2(point.secondary ?? 0)}
           stroke={EVIDENCE}
           strokeWidth={1.75}
@@ -461,7 +504,14 @@ function BarWithLineInner({
           tickFormat={(value) => `${Math.round(Number(value) * 100)}%`}
           stroke={HAIRLINE}
           tickStroke={HAIRLINE}
-          tickLabelProps={() => ({ fill: EVIDENCE, fontSize: 10, textAnchor: 'start', dx: 6, dy: 3, fontFamily: 'var(--font-mono)' })}
+          tickLabelProps={() => ({
+            fill: EVIDENCE,
+            fontSize: 10,
+            textAnchor: 'start',
+            dx: 6,
+            dy: 3,
+            fontFamily: 'var(--font-mono)',
+          })}
         />
       ) : null}
       <AxisBottom
@@ -469,7 +519,14 @@ function BarWithLineInner({
         top={height - MARGIN.bottom}
         stroke={HAIRLINE}
         tickStroke={HAIRLINE}
-        tickLabelProps={() => ({ fill: INK_FAINT, fontSize: 9, textAnchor: 'end', dx: -4, dy: 4, fontFamily: 'var(--font-mono)' })}
+        tickLabelProps={() => ({
+          fill: INK_FAINT,
+          fontSize: 9,
+          textAnchor: 'end',
+          dx: -4,
+          dy: 4,
+          fontFamily: 'var(--font-mono)',
+        })}
       />
     </svg>
   );
@@ -488,7 +545,11 @@ export type WaterfallRow = {
 
 /** SHAP waterfall. Bars are drawn from the running total so the reader can add the
  *  column by eye, which is the same claim the scorecard points table makes. */
-export function Waterfall({ rows, ariaLabel, formatValue }: { rows: readonly WaterfallRow[]; ariaLabel: string; formatValue?: (value: number) => string }): ReactElement {
+export function Waterfall({
+  rows,
+  ariaLabel,
+  formatValue,
+}: { rows: readonly WaterfallRow[]; ariaLabel: string; formatValue?: (value: number) => string }): ReactElement {
   const note = minimumSeriesNote(rows.length, 'waterfall');
   if (note !== null) return <ChartFrame height={120} note={note} label={ariaLabel} />;
 
@@ -498,23 +559,45 @@ export function Waterfall({ rows, ariaLabel, formatValue }: { rows: readonly Wat
     running += row.value;
     return { row, start, end: running };
   });
-  const domain = [Math.min(0, ...segments.map((s) => Math.min(s.start, s.end))), Math.max(0, ...segments.map((s) => Math.max(s.start, s.end)))] as const;
+  const domain = [
+    Math.min(0, ...segments.map((s) => Math.min(s.start, s.end))),
+    Math.max(0, ...segments.map((s) => Math.max(s.start, s.end))),
+  ] as const;
   const scale = bandLinear({ domain: [domain[0], domain[1] === domain[0] ? 1 : domain[1]], range: [0, 100] });
   const tick = formatValue ?? ((value: number) => value.toFixed(2));
 
   return (
-    <ol data-chart="waterfall" data-points={rows.length} aria-label={ariaLabel} style={{ listStyle: 'none', margin: 0, padding: 0 }}>
+    <ol
+      data-chart="waterfall"
+      data-points={rows.length}
+      aria-label={ariaLabel}
+      style={{ listStyle: 'none', margin: 0, padding: 0 }}
+    >
       {segments.map((segment) => {
         const { row, start, end } = segment;
         const low = Math.min(start, end);
         const high = Math.max(start, end);
         return (
-          <li key={row.label} style={{ display: 'grid', gridTemplateColumns: 'minmax(0,1fr) 84px 68px', alignItems: 'center', gap: 8, height: 'var(--spacing-row)', borderBottom: '1px solid var(--color-hairline)' }}>
+          <li
+            key={row.label}
+            style={{
+              display: 'grid',
+              gridTemplateColumns: 'minmax(0,1fr) 84px 68px',
+              alignItems: 'center',
+              gap: 8,
+              height: 'var(--spacing-row)',
+              borderBottom: '1px solid var(--color-hairline)',
+            }}
+          >
             <button
               type="button"
               onClick={row.onSelect}
               disabled={row.onSelect === undefined}
-              title={row.onSelect === undefined ? row.label : 'Cross-filter the evidence and transaction panes to this contribution'}
+              title={
+                row.onSelect === undefined
+                  ? row.label
+                  : 'Cross-filter the evidence and transaction panes to this contribution'
+              }
               style={{
                 textAlign: 'left',
                 background: row.selected ? 'var(--color-elev-2)' : 'transparent',
@@ -543,7 +626,15 @@ export function Waterfall({ rows, ariaLabel, formatValue }: { rows: readonly Wat
                 }}
               />
             </span>
-            <span className="u-num" style={{ textAlign: 'right', fontSize: 'var(--text-micro)', color: 'var(--color-ink-muted)', fontFamily: 'var(--font-mono)' }}>
+            <span
+              className="u-num"
+              style={{
+                textAlign: 'right',
+                fontSize: 'var(--text-micro)',
+                color: 'var(--color-ink-muted)',
+                fontFamily: 'var(--font-mono)',
+              }}
+            >
               {row.value >= 0 ? `+${tick(row.value)}` : tick(row.value)}
             </span>
           </li>

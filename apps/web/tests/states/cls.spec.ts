@@ -40,7 +40,10 @@ const INSTALL_OBSERVER = () => {
   }).observe({ type: 'layout-shift', buffered: true });
 };
 
-async function measureCls(page: import('@playwright/test').Page, route: string): Promise<{ total: number; entries: unknown[] }> {
+async function measureCls(
+  page: import('@playwright/test').Page,
+  route: string,
+): Promise<{ total: number; entries: unknown[] }> {
   await page.addInitScript(INSTALL_OBSERVER);
   await page.goto(route, { waitUntil: 'load' });
   // The skeleton→resolution (or →error) transition lands inside ~5 s: TanStack

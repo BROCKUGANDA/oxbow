@@ -19,7 +19,9 @@ export type DecodeError = {
   readonly message: string;
 };
 
-export type DecodeResult<T> = { readonly ok: true; readonly value: T } | { readonly ok: false; readonly error: DecodeError };
+export type DecodeResult<T> =
+  | { readonly ok: true; readonly value: T }
+  | { readonly ok: false; readonly error: DecodeError };
 
 /** Thrown at the fetch boundary when a body does not satisfy its declared shape. */
 export class ContractViolation extends Error {
@@ -214,7 +216,7 @@ export function decodeOrThrow<T>(decoder: Decoder<T>, value: unknown): T {
 /** Non-null narrowing for a field decoded as nullable at the boundary. */
 export function expect<T>(value: T | null | undefined, what: string): T {
   if (value === null || value === undefined) {
-    throw new ContractViolation(what, `required by the renderer but absent from the response`);
+    throw new ContractViolation(what, 'required by the renderer but absent from the response');
   }
   return value;
 }

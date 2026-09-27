@@ -21,23 +21,23 @@
 
 'use client';
 
-import { Fragment, type CSSProperties, type ReactElement } from 'react';
+import { type CSSProperties, Fragment, type ReactElement } from 'react';
 
-import { Icon } from '@/design/icons/Icon';
 import { Pane } from '@/components/Pane';
-import { ErrorPane } from '@/design/primitives/ErrorPane';
-import { EmptyState } from '@/design/primitives/EmptyState';
-import { BarWithLine, LineChart, minimumSeriesNote, ChartFrame } from '@/components/charts/charts';
-import { Assumptions, Hairline, RunIdChip, Timestamp } from '@/components/ui/provenance';
-import { BandBadge } from '@/components/ui/BandBadge';
+import { BarWithLine, ChartFrame, LineChart, minimumSeriesNote } from '@/components/charts/charts';
 import { glyphFor } from '@/components/typology';
-import { ROUTES, type AssumptionLine, type Validation } from '@/lib/api/contract';
-import { useResource, type QueryState } from '@/lib/api/hooks';
+import { BandBadge } from '@/components/ui/BandBadge';
+import { Assumptions, Hairline, RunIdChip, Timestamp } from '@/components/ui/provenance';
+import { GAP_TIGHT, HAIRLINE_BOTTOM, PANEL_SUNKEN, T_LABEL, T_MICRO, T_MONO } from '@/components/ui/sx';
+import { Icon } from '@/design/icons/Icon';
+import { EmptyState } from '@/design/primitives/EmptyState';
+import { ErrorPane } from '@/design/primitives/ErrorPane';
+import { type AssumptionLine, ROUTES, type Validation } from '@/lib/api/contract';
+import { type QueryState, useResource } from '@/lib/api/hooks';
 import { failureDetail, failureRunId, failureTitle, isRunNotFound } from '@/lib/api/problem';
 import { PIPELINE_COMMAND, RUNTIME_ESTIMATE_FALLBACK } from '@/lib/copy';
 import { compactFromMinor, count, percent, ratio } from '@/lib/format/money';
 import { formatDate } from '@/lib/format/time';
-import { GAP_TIGHT, HAIRLINE_BOTTOM, PANEL_SUNKEN, T_LABEL, T_MICRO, T_MONO } from '@/components/ui/sx';
 
 /* ---------------------------------------------------------------- geometry --
 
@@ -57,11 +57,36 @@ type PaneGeometry = {
   body: number;
 };
 
-type PaneKey = 'dataset' | 'folds' | 'baselines' | 'pr' | 'reliability' | 'confusion' | 'typologies' | 'ablation' | 'importance' | 'fairness' | 'tail' | 'degraded' | 'limitations';
+type PaneKey =
+  | 'dataset'
+  | 'folds'
+  | 'baselines'
+  | 'pr'
+  | 'reliability'
+  | 'confusion'
+  | 'typologies'
+  | 'ablation'
+  | 'importance'
+  | 'fairness'
+  | 'tail'
+  | 'degraded'
+  | 'limitations';
 
 const PANES: Record<PaneKey, PaneGeometry> = {
-  dataset: { title: 'Dataset card', operation: 'Loading the dataset card', columns: [{ key: 'd', width: '100%' }], rows: 5, body: 309 },
-  folds: { title: 'Walk-forward folds', operation: 'Loading the folds', columns: [{ key: 'f', width: '100%' }], rows: 5, body: 309 },
+  dataset: {
+    title: 'Dataset card',
+    operation: 'Loading the dataset card',
+    columns: [{ key: 'd', width: '100%' }],
+    rows: 5,
+    body: 309,
+  },
+  folds: {
+    title: 'Walk-forward folds',
+    operation: 'Loading the folds',
+    columns: [{ key: 'f', width: '100%' }],
+    rows: 5,
+    body: 309,
+  },
   baselines: {
     title: 'Baselines against the final system, per corpus',
     operation: 'Loading the comparison',
@@ -76,9 +101,29 @@ const PANES: Record<PaneKey, PaneGeometry> = {
     rows: 6,
     body: 172,
   },
-  pr: { title: 'Precision–recall, with the operating point', operation: 'Loading the PR curve', columns: [{ key: 'c', width: '100%' }], rows: 1, rowHeight: 284, body: 284 },
-  reliability: { title: 'Reliability diagram', operation: 'Loading the reliability bins', columns: [{ key: 'c', width: '100%' }], rows: 1, rowHeight: 284, body: 284 },
-  confusion: { title: 'Confusion at the budget', operation: 'Loading the confusion matrix', columns: [{ key: 'c', width: '100%' }], rows: 4, body: 224 },
+  pr: {
+    title: 'Precision–recall, with the operating point',
+    operation: 'Loading the PR curve',
+    columns: [{ key: 'c', width: '100%' }],
+    rows: 1,
+    rowHeight: 284,
+    body: 284,
+  },
+  reliability: {
+    title: 'Reliability diagram',
+    operation: 'Loading the reliability bins',
+    columns: [{ key: 'c', width: '100%' }],
+    rows: 1,
+    rowHeight: 284,
+    body: 284,
+  },
+  confusion: {
+    title: 'Confusion at the budget',
+    operation: 'Loading the confusion matrix',
+    columns: [{ key: 'c', width: '100%' }],
+    rows: 4,
+    body: 224,
+  },
   typologies: {
     title: 'Per-typology recall',
     operation: 'Loading typology recall',
@@ -103,7 +148,16 @@ const PANES: Record<PaneKey, PaneGeometry> = {
     rows: 5,
     body: 289,
   },
-  importance: { title: 'Global SHAP importance', operation: 'Loading importances', columns: [{ key: 'f', width: '60%' }, { key: 'v', width: '40%' }], rows: 8, body: 356 },
+  importance: {
+    title: 'Global SHAP importance',
+    operation: 'Loading importances',
+    columns: [
+      { key: 'f', width: '60%' },
+      { key: 'v', width: '40%' },
+    ],
+    rows: 8,
+    body: 356,
+  },
   fairness: {
     title: 'Fairness and perturbation',
     operation: 'Loading the fairness checks',
@@ -115,13 +169,43 @@ const PANES: Record<PaneKey, PaneGeometry> = {
     rows: 8,
     body: 356,
   },
-  tail: { title: 'Tail behaviour and seed stability', operation: 'Loading the tail metrics', columns: [{ key: 't', width: '100%' }], rows: 5, body: 322 },
-  degraded: { title: 'Degradation this run', operation: 'Listing degraded dependencies', columns: [{ key: 'n', width: '40%' }, { key: 'f', width: '60%' }], rows: 3, body: 322 },
-  limitations: { title: 'Limitations', operation: 'Loading the limitations', columns: [{ key: 'l', width: '100%' }], rows: 5, body: 281 },
+  tail: {
+    title: 'Tail behaviour and seed stability',
+    operation: 'Loading the tail metrics',
+    columns: [{ key: 't', width: '100%' }],
+    rows: 5,
+    body: 322,
+  },
+  degraded: {
+    title: 'Degradation this run',
+    operation: 'Listing degraded dependencies',
+    columns: [
+      { key: 'n', width: '40%' },
+      { key: 'f', width: '60%' },
+    ],
+    rows: 3,
+    body: 322,
+  },
+  limitations: {
+    title: 'Limitations',
+    operation: 'Loading the limitations',
+    columns: [{ key: 'l', width: '100%' }],
+    rows: 5,
+    body: 281,
+  },
 };
 
-const PAGE: CSSProperties = { padding: 'var(--spacing-pane-gap)', display: 'flex', flexDirection: 'column', gap: 'var(--spacing-pane-gap)' };
-const HALF: CSSProperties = { display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1fr)', gap: 'var(--spacing-pane-gap)' };
+const PAGE: CSSProperties = {
+  padding: 'var(--spacing-pane-gap)',
+  display: 'flex',
+  flexDirection: 'column',
+  gap: 'var(--spacing-pane-gap)',
+};
+const HALF: CSSProperties = {
+  display: 'grid',
+  gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1fr)',
+  gap: 'var(--spacing-pane-gap)',
+};
 
 /**
  * The same thirteen panes, empty, while the run has not answered — plus the failure
@@ -225,47 +309,116 @@ export default function ModelPage(): ReactElement {
     <div style={PAGE}>
       <div style={HALF}>
         {dataset.data === null ? (
-          <Pane id="dataset" title={PANES.dataset.title} operation={PANES.dataset.operation} meta={dataset.meta} skeleton={{ columns: PANES.dataset.columns, rows: PANES.dataset.rows }} reserveHeight={PANES.dataset.body}>
+          <Pane
+            id="dataset"
+            title={PANES.dataset.title}
+            operation={PANES.dataset.operation}
+            meta={dataset.meta}
+            skeleton={{ columns: PANES.dataset.columns, rows: PANES.dataset.rows }}
+            reserveHeight={PANES.dataset.body}
+          >
             <span />
           </Pane>
         ) : (
           <DatasetCard />
         )}
 
-        <Pane id="folds" title={PANES.folds.title} operation={PANES.folds.operation} meta={validation.meta} skeleton={{ columns: PANES.folds.columns, rows: PANES.folds.rows }} reserveHeight={PANES.folds.body}>
+        <Pane
+          id="folds"
+          title={PANES.folds.title}
+          operation={PANES.folds.operation}
+          meta={validation.meta}
+          skeleton={{ columns: PANES.folds.columns, rows: PANES.folds.rows }}
+          reserveHeight={PANES.folds.body}
+        >
           <Folds folds={data} timeZone={timeZone} />
         </Pane>
       </div>
 
-      <Pane id="baselines" title={PANES.baselines.title} operation={PANES.baselines.operation} meta={validation.meta} skeleton={{ columns: PANES.baselines.columns, rows: PANES.baselines.rows }} reserveHeight={PANES.baselines.body}>
+      <Pane
+        id="baselines"
+        title={PANES.baselines.title}
+        operation={PANES.baselines.operation}
+        meta={validation.meta}
+        skeleton={{ columns: PANES.baselines.columns, rows: PANES.baselines.rows }}
+        reserveHeight={PANES.baselines.body}
+      >
         <BaselineTable data={data} assumptions={assumptions} />
       </Pane>
 
       <div style={HALF}>
-        <Pane id="pr" title={PANES.pr.title} operation={PANES.pr.operation} meta={validation.meta} skeleton={{ columns: PANES.pr.columns, rows: PANES.pr.rows, rowHeight: PANES.pr.rowHeight }} reserveHeight={PANES.pr.body}>
+        <Pane
+          id="pr"
+          title={PANES.pr.title}
+          operation={PANES.pr.operation}
+          meta={validation.meta}
+          skeleton={{ columns: PANES.pr.columns, rows: PANES.pr.rows, rowHeight: PANES.pr.rowHeight }}
+          reserveHeight={PANES.pr.body}
+        >
           <PrCurve data={data} />
         </Pane>
-        <Pane id="reliability" title={PANES.reliability.title} operation={PANES.reliability.operation} meta={validation.meta} skeleton={{ columns: PANES.reliability.columns, rows: PANES.reliability.rows, rowHeight: PANES.reliability.rowHeight }} reserveHeight={PANES.reliability.body}>
+        <Pane
+          id="reliability"
+          title={PANES.reliability.title}
+          operation={PANES.reliability.operation}
+          meta={validation.meta}
+          skeleton={{
+            columns: PANES.reliability.columns,
+            rows: PANES.reliability.rows,
+            rowHeight: PANES.reliability.rowHeight,
+          }}
+          reserveHeight={PANES.reliability.body}
+        >
           <Reliability data={data} />
         </Pane>
       </div>
 
       <div style={HALF}>
-        <Pane id="confusion" title={PANES.confusion.title} operation={PANES.confusion.operation} meta={validation.meta} skeleton={{ columns: PANES.confusion.columns, rows: PANES.confusion.rows }} reserveHeight={PANES.confusion.body}>
+        <Pane
+          id="confusion"
+          title={PANES.confusion.title}
+          operation={PANES.confusion.operation}
+          meta={validation.meta}
+          skeleton={{ columns: PANES.confusion.columns, rows: PANES.confusion.rows }}
+          reserveHeight={PANES.confusion.body}
+        >
           <Confusion data={data} />
         </Pane>
-        <Pane id="typologies" title={PANES.typologies.title} operation={PANES.typologies.operation} meta={validation.meta} skeleton={{ columns: PANES.typologies.columns, rows: PANES.typologies.rows }} reserveHeight={PANES.typologies.body}>
+        <Pane
+          id="typologies"
+          title={PANES.typologies.title}
+          operation={PANES.typologies.operation}
+          meta={validation.meta}
+          skeleton={{ columns: PANES.typologies.columns, rows: PANES.typologies.rows }}
+          reserveHeight={PANES.typologies.body}
+        >
           <TypologyRecall data={data} />
         </Pane>
       </div>
 
       {/* The ablation table. 00 §F: never cut. */}
-      <Pane id="ablation" title={PANES.ablation.title} operation={PANES.ablation.operation} meta={validation.meta} skeleton={{ columns: PANES.ablation.columns, rows: PANES.ablation.rows }} reserveHeight={PANES.ablation.body}>
+      <Pane
+        id="ablation"
+        title={PANES.ablation.title}
+        operation={PANES.ablation.operation}
+        meta={validation.meta}
+        skeleton={{ columns: PANES.ablation.columns, rows: PANES.ablation.rows }}
+        reserveHeight={PANES.ablation.body}
+      >
         <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 'var(--text-label)' }}>
           <thead>
             <tr>
               {['variant', 'question it answers', 'corpus', 'PR-AUC', '95% CI', 'net benefit'].map((heading) => (
-                <th key={heading} style={{ textAlign: 'left', padding: '4px 6px', ...HAIRLINE_BOTTOM, color: 'var(--color-ink-faint)', fontWeight: 500 }}>
+                <th
+                  key={heading}
+                  style={{
+                    textAlign: 'left',
+                    padding: '4px 6px',
+                    ...HAIRLINE_BOTTOM,
+                    color: 'var(--color-ink-faint)',
+                    fontWeight: 500,
+                  }}
+                >
                   {heading}
                 </th>
               ))}
@@ -275,14 +428,24 @@ export default function ModelPage(): ReactElement {
             {data.ablation.map((row) => (
               <tr key={`${row.corpus}-${row.variant}`} data-ablation-row={row.variant}>
                 <td style={{ padding: '5px 6px', ...HAIRLINE_BOTTOM, color: 'var(--color-ink)' }}>{row.variant}</td>
-                <td style={{ padding: '5px 6px', ...HAIRLINE_BOTTOM, color: 'var(--color-ink-muted)' }}>{row.question}</td>
-                <td style={{ padding: '5px 6px', ...HAIRLINE_BOTTOM, ...T_MONO, fontSize: 'var(--text-micro)' }}>{row.corpus}</td>
-                <td className="u-num" style={{ padding: '5px 6px', ...HAIRLINE_BOTTOM }}>{row.pr_auc.toFixed(3)}</td>
-                <td className="u-num" style={{ padding: '5px 6px', ...HAIRLINE_BOTTOM, color: 'var(--color-ink-muted)' }}>
+                <td style={{ padding: '5px 6px', ...HAIRLINE_BOTTOM, color: 'var(--color-ink-muted)' }}>
+                  {row.question}
+                </td>
+                <td style={{ padding: '5px 6px', ...HAIRLINE_BOTTOM, ...T_MONO, fontSize: 'var(--text-micro)' }}>
+                  {row.corpus}
+                </td>
+                <td className="u-num" style={{ padding: '5px 6px', ...HAIRLINE_BOTTOM }}>
+                  {row.pr_auc.toFixed(3)}
+                </td>
+                <td
+                  className="u-num"
+                  style={{ padding: '5px 6px', ...HAIRLINE_BOTTOM, color: 'var(--color-ink-muted)' }}
+                >
                   {row.ci.length === 2 ? `${row.ci[0]?.toFixed(3)} – ${row.ci[1]?.toFixed(3)}` : 'no interval recorded'}
                 </td>
                 <td className="u-num" style={{ padding: '5px 6px', ...HAIRLINE_BOTTOM }}>
-                  {compactFromMinor(row.net_benefit.value.minor, row.net_benefit.value.decimals)} {row.net_benefit.value.currency}
+                  {compactFromMinor(row.net_benefit.value.minor, row.net_benefit.value.decimals)}{' '}
+                  {row.net_benefit.value.currency}
                 </td>
               </tr>
             ))}
@@ -298,21 +461,48 @@ export default function ModelPage(): ReactElement {
       </Pane>
 
       <div style={HALF}>
-        <Pane id="importance" title={PANES.importance.title} operation={PANES.importance.operation} meta={validation.meta} skeleton={{ columns: PANES.importance.columns, rows: PANES.importance.rows }} reserveHeight={PANES.importance.body}>
+        <Pane
+          id="importance"
+          title={PANES.importance.title}
+          operation={PANES.importance.operation}
+          meta={validation.meta}
+          skeleton={{ columns: PANES.importance.columns, rows: PANES.importance.rows }}
+          reserveHeight={PANES.importance.body}
+        >
           <BarWithLine
-            rows={data.shap_importance.map((entry) => ({ label: entry.label, value: entry.mean_abs, colour: 'var(--color-band-c)' }))}
+            rows={data.shap_importance.map((entry) => ({
+              label: entry.label,
+              value: entry.mean_abs,
+              colour: 'var(--color-band-c)',
+            }))}
             valueLabel="mean |SHAP|"
             formatValue={(value) => value.toFixed(3)}
             ariaLabel="Mean absolute SHAP value per feature"
           />
         </Pane>
 
-        <Pane id="fairness" title={PANES.fairness.title} operation={PANES.fairness.operation} meta={validation.meta} skeleton={{ columns: PANES.fairness.columns, rows: PANES.fairness.rows }} reserveHeight={PANES.fairness.body}>
+        <Pane
+          id="fairness"
+          title={PANES.fairness.title}
+          operation={PANES.fairness.operation}
+          meta={validation.meta}
+          skeleton={{ columns: PANES.fairness.columns, rows: PANES.fairness.rows }}
+          reserveHeight={PANES.fairness.body}
+        >
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
             <Hairline label="false-positive rate by proxy dimension" />
             <ul style={{ listStyle: 'none', margin: 0, padding: 0 }}>
               {data.fairness.map((entry) => (
-                <li key={`${entry.dimension}-${entry.bucket}`} style={{ display: 'flex', justifyContent: 'space-between', gap: 8, padding: '3px 0', ...HAIRLINE_BOTTOM }}>
+                <li
+                  key={`${entry.dimension}-${entry.bucket}`}
+                  style={{
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    gap: 8,
+                    padding: '3px 0',
+                    ...HAIRLINE_BOTTOM,
+                  }}
+                >
                   <span style={{ ...T_LABEL, color: 'var(--color-ink-muted)' }}>
                     {entry.dimension} · {entry.bucket}
                   </span>
@@ -331,7 +521,9 @@ export default function ModelPage(): ReactElement {
                     {' '}
                     · {entry.measure} {ratio(entry.result, 3)}
                   </span>
-                  {entry.note.length > 0 ? <p style={{ ...T_MICRO, color: 'var(--color-ink-faint)', margin: 0 }}>{entry.note}</p> : null}
+                  {entry.note.length > 0 ? (
+                    <p style={{ ...T_MICRO, color: 'var(--color-ink-faint)', margin: 0 }}>{entry.note}</p>
+                  ) : null}
                 </li>
               ))}
             </ul>
@@ -343,43 +535,73 @@ export default function ModelPage(): ReactElement {
       </div>
 
       <div style={HALF}>
-        <Pane id="tail" title={PANES.tail.title} operation={PANES.tail.operation} meta={validation.meta} skeleton={{ columns: PANES.tail.columns, rows: PANES.tail.rows }} reserveHeight={PANES.tail.body}>
+        <Pane
+          id="tail"
+          title={PANES.tail.title}
+          operation={PANES.tail.operation}
+          meta={validation.meta}
+          skeleton={{ columns: PANES.tail.columns, rows: PANES.tail.rows }}
+          reserveHeight={PANES.tail.body}
+        >
           <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
             {data.drawdown.map((entry) => (
               <div key={entry.policy} style={{ ...PANEL_SUNKEN, padding: 10 }}>
                 <p style={{ ...T_LABEL, margin: 0 }}>{entry.policy} · max drawdown</p>
-                <p className="u-num" style={{ ...T_MONO, fontSize: 'var(--text-kpi)', fontWeight: 600, margin: '2px 0' }}>
+                <p
+                  className="u-num"
+                  style={{ ...T_MONO, fontSize: 'var(--text-kpi)', fontWeight: 600, margin: '2px 0' }}
+                >
                   {compactFromMinor(entry.value.minor, entry.value.decimals)} {entry.value.currency}
                 </p>
-                {entry.zero_because !== null ? <p style={{ ...T_MICRO, color: 'var(--color-state-done)', margin: 0 }}>{entry.zero_because}</p> : null}
+                {entry.zero_because !== null ? (
+                  <p style={{ ...T_MICRO, color: 'var(--color-state-done)', margin: 0 }}>{entry.zero_because}</p>
+                ) : null}
               </div>
             ))}
             <div style={{ ...PANEL_SUNKEN, padding: 10 }} data-risk-adjusted>
               <p style={{ ...T_LABEL, margin: 0 }}>Risk-adjusted benefit ratio</p>
-              <p className="u-num" style={{ ...T_MONO, fontSize: 'var(--text-kpi)', fontWeight: 600, margin: '2px 0' }}>{ratio(data.risk_adjusted.value, 2)}</p>
+              <p className="u-num" style={{ ...T_MONO, fontSize: 'var(--text-kpi)', fontWeight: 600, margin: '2px 0' }}>
+                {ratio(data.risk_adjusted.value, 2)}
+              </p>
               <p style={{ ...T_MICRO, color: 'var(--color-ink-muted)', margin: 0 }}>{data.risk_adjusted.formula}</p>
               <p style={{ ...T_MICRO, color: 'var(--color-state-running)', margin: '4px 0 0' }}>
                 explicitly not a Sharpe ratio: {data.risk_adjusted.not_sharpe_because}
               </p>
             </div>
             <p style={{ ...T_MICRO, color: 'var(--color-ink-muted)' }}>
-              {String(data.seeds.count)} seeds · {data.seeds.metric} {ratio(data.seeds.mean, 3)} ± {ratio(data.seeds.sd, 3)} —
-              reported as a spread, not as the lucky run
+              {String(data.seeds.count)} seeds · {data.seeds.metric} {ratio(data.seeds.mean, 3)} ±{' '}
+              {ratio(data.seeds.sd, 3)} — reported as a spread, not as the lucky run
             </p>
             <Assumptions assumptions={assumptions} />
           </div>
         </Pane>
 
-        <Pane id="degraded" title={PANES.degraded.title} operation={PANES.degraded.operation} meta={validation.meta} skeleton={{ columns: PANES.degraded.columns, rows: PANES.degraded.rows }} reserveHeight={PANES.degraded.body}>
+        <Pane
+          id="degraded"
+          title={PANES.degraded.title}
+          operation={PANES.degraded.operation}
+          meta={validation.meta}
+          skeleton={{ columns: PANES.degraded.columns, rows: PANES.degraded.rows }}
+          reserveHeight={PANES.degraded.body}
+        >
           {data.degraded_dependencies.length === 0 ? (
             <p style={{ ...T_LABEL, color: 'var(--color-ink-muted)' }}>
-              Every dependency answered for this run. When one does not, it appears here with the deterministic path that
-              replaced it, and the affected pane keeps working.
+              Every dependency answered for this run. When one does not, it appears here with the deterministic path
+              that replaced it, and the affected pane keeps working.
             </p>
           ) : (
             <ul style={{ listStyle: 'none', margin: 0, padding: 0 }}>
               {data.degraded_dependencies.map((entry) => (
-                <li key={entry.name} style={{ display: 'grid', gridTemplateColumns: 'minmax(0,1fr) minmax(0,1fr)', gap: 8, padding: '5px 0', ...HAIRLINE_BOTTOM }}>
+                <li
+                  key={entry.name}
+                  style={{
+                    display: 'grid',
+                    gridTemplateColumns: 'minmax(0,1fr) minmax(0,1fr)',
+                    gap: 8,
+                    padding: '5px 0',
+                    ...HAIRLINE_BOTTOM,
+                  }}
+                >
                   <span style={{ ...T_LABEL, color: 'var(--color-ink)' }}>{entry.name}</span>
                   <span style={{ ...T_LABEL, color: 'var(--color-ink-muted)' }}>fallback: {entry.fallback}</span>
                 </li>
@@ -387,15 +609,25 @@ export default function ModelPage(): ReactElement {
             </ul>
           )}
           <p style={{ ...T_MICRO, color: 'var(--color-ink-faint)', marginTop: 8 }}>
-            graceful degradation under partial failure is a design requirement here, not an accident of the demo: a
-            dead solver or a missing tracking store changes what is claimed, never whether the screen works.
+            graceful degradation under partial failure is a design requirement here, not an accident of the demo: a dead
+            solver or a missing tracking store changes what is claimed, never whether the screen works.
           </p>
         </Pane>
       </div>
 
       {/* Limitations, first person, never cut. */}
-      <Pane id="limitations" title={PANES.limitations.title} operation={PANES.limitations.operation} meta={validation.meta} skeleton={{ columns: PANES.limitations.columns, rows: PANES.limitations.rows }} reserveHeight={PANES.limitations.body}>
-        <ol data-limitations style={{ margin: 0, padding: '0 0 0 18px', display: 'flex', flexDirection: 'column', gap: 8 }}>
+      <Pane
+        id="limitations"
+        title={PANES.limitations.title}
+        operation={PANES.limitations.operation}
+        meta={validation.meta}
+        skeleton={{ columns: PANES.limitations.columns, rows: PANES.limitations.rows }}
+        reserveHeight={PANES.limitations.body}
+      >
+        <ol
+          data-limitations
+          style={{ margin: 0, padding: '0 0 0 18px', display: 'flex', flexDirection: 'column', gap: 8 }}
+        >
           {data.limitations.map((entry, index) => (
             <li key={index} style={{ ...T_LABEL, color: 'var(--color-ink-muted)', maxWidth: '84ch' }}>
               {entry}
@@ -410,7 +642,14 @@ export default function ModelPage(): ReactElement {
     const card = dataset.data;
     if (card === null) return <span />;
     return (
-      <Pane id="dataset" title={PANES.dataset.title} operation={PANES.dataset.operation} meta={dataset.meta} skeleton={{ columns: PANES.dataset.columns, rows: PANES.dataset.rows }} reserveHeight={PANES.dataset.body}>
+      <Pane
+        id="dataset"
+        title={PANES.dataset.title}
+        operation={PANES.dataset.operation}
+        meta={dataset.meta}
+        skeleton={{ columns: PANES.dataset.columns, rows: PANES.dataset.rows }}
+        reserveHeight={PANES.dataset.body}
+      >
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
           <p style={{ ...T_LABEL, color: 'var(--color-ink)', fontWeight: 600 }}>{card.name}</p>
           <p style={{ ...T_MICRO, color: 'var(--color-ink-muted)' }}>
@@ -419,15 +658,23 @@ export default function ModelPage(): ReactElement {
           <p style={{ ...T_MICRO, color: 'var(--color-ink-faint)' }}>{card.citation}</p>
           <ul style={{ listStyle: 'none', margin: 0, padding: 0 }}>
             {card.files.map((file) => (
-              <li key={file.filename} style={{ display: 'flex', gap: 8, alignItems: 'baseline', padding: '3px 0', ...HAIRLINE_BOTTOM }}>
-                <span style={{ ...T_MONO, fontSize: 'var(--text-micro)', color: 'var(--color-ink)' }}>{file.filename}</span>
+              <li
+                key={file.filename}
+                style={{ display: 'flex', gap: 8, alignItems: 'baseline', padding: '3px 0', ...HAIRLINE_BOTTOM }}
+              >
+                <span style={{ ...T_MONO, fontSize: 'var(--text-micro)', color: 'var(--color-ink)' }}>
+                  {file.filename}
+                </span>
                 <span className="u-num" style={{ ...T_MICRO, color: 'var(--color-ink-muted)', marginLeft: 'auto' }}>
                   {count(file.rows)} rows · {count(file.bytes)} bytes
                 </span>
               </li>
             ))}
           </ul>
-          <p data-sha style={{ ...T_MICRO, color: 'var(--color-ink-faint)', ...GAP_TIGHT, display: 'flex', flexWrap: 'wrap' }}>
+          <p
+            data-sha
+            style={{ ...T_MICRO, color: 'var(--color-ink-faint)', ...GAP_TIGHT, display: 'flex', flexWrap: 'wrap' }}
+          >
             {card.files.map((file) => (
               <code key={file.sha256} style={{ ...T_MONO, fontSize: '0.625rem' }}>
                 {file.sha256.slice(0, 16)}…{' '}
@@ -442,8 +689,13 @@ export default function ModelPage(): ReactElement {
               </li>
             ))}
           </ul>
-          {card.sampling_rule !== null ? <p style={{ ...T_MICRO, color: 'var(--color-ink-muted)' }}>{card.sampling_rule}</p> : null}
-          <Assumptions assumptions={assumptions} source={`retrieved ${formatDate(card.retrieved_at, timeZone ?? '')}`} />
+          {card.sampling_rule !== null ? (
+            <p style={{ ...T_MICRO, color: 'var(--color-ink-muted)' }}>{card.sampling_rule}</p>
+          ) : null}
+          <Assumptions
+            assumptions={assumptions}
+            source={`retrieved ${formatDate(card.retrieved_at, timeZone ?? '')}`}
+          />
           <RunIdChip runId={validation.meta?.run_id ?? null} traceId={validation.meta?.trace_id ?? null} />
         </div>
       </Pane>
@@ -457,21 +709,35 @@ function Folds({ folds, timeZone }: { folds: Validation; timeZone: string | null
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
       {folds.folds.map((fold) => (
-        <div key={fold.index} data-fold={fold.index} style={{ display: 'grid', gridTemplateColumns: '36px minmax(0,1fr)', gap: 8, alignItems: 'start' }}>
+        <div
+          key={fold.index}
+          data-fold={fold.index}
+          style={{ display: 'grid', gridTemplateColumns: '36px minmax(0,1fr)', gap: 8, alignItems: 'start' }}
+        >
           <span className="u-num" style={{ ...T_MONO, fontSize: 'var(--text-micro)', color: 'var(--color-ink-faint)' }}>
             f{String(fold.index)}
           </span>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
             {/* train | embargo gap | test, drawn to a shared scale so the gap is visible
                 as a gap rather than described in a caption. */}
-            <div style={{ display: 'flex', height: 14, borderRadius: 'var(--radius-cell)', overflow: 'hidden' }} aria-hidden="true">
+            <div
+              style={{ display: 'flex', height: 14, borderRadius: 'var(--radius-cell)', overflow: 'hidden' }}
+              aria-hidden="true"
+            >
               <span style={{ flex: 3, background: 'var(--color-band-a)' }} />
-              <span style={{ width: 14, background: 'var(--color-canvas-sunken)', borderLeft: '1px solid var(--color-hairline-strong)', borderRight: '1px solid var(--color-hairline-strong)' }} />
+              <span
+                style={{
+                  width: 14,
+                  background: 'var(--color-canvas-sunken)',
+                  borderLeft: '1px solid var(--color-hairline-strong)',
+                  borderRight: '1px solid var(--color-hairline-strong)',
+                }}
+              />
               <span style={{ flex: 1, background: 'var(--color-band-e)' }} />
             </div>
             <p style={{ ...T_MICRO, color: 'var(--color-ink-muted)', margin: 0 }}>
-              train {formatDate(fold.train_from, timeZone ?? '')} → {formatDate(fold.train_to, timeZone ?? '')} · embargo{' '}
-              {String(fold.embargo_days)} d · test {formatDate(fold.test_from, timeZone ?? '')} →{' '}
+              train {formatDate(fold.train_from, timeZone ?? '')} → {formatDate(fold.train_to, timeZone ?? '')} ·
+              embargo {String(fold.embargo_days)} d · test {formatDate(fold.test_from, timeZone ?? '')} →{' '}
               {formatDate(fold.test_to, timeZone ?? '')} · {count(fold.positives)} positives
             </p>
             {fold.skipped_reason !== null ? (
@@ -495,15 +761,37 @@ function Folds({ folds, timeZone }: { folds: Validation; timeZone: string | null
   );
 }
 
-function BaselineTable({ data, assumptions }: { data: Validation; assumptions: readonly AssumptionLine[] }): ReactElement {
+function BaselineTable({
+  data,
+  assumptions,
+}: { data: Validation; assumptions: readonly AssumptionLine[] }): ReactElement {
   return (
     <>
       <div className="u-scroll" style={{ overflowX: 'auto' }}>
         <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 'var(--text-label)', minWidth: 700 }}>
           <thead>
             <tr>
-              {['corpus', 'variant', 'PR-AUC', '95% CI', 'precision at budget', 'recall at budget', 'net benefit', 'per analyst-hour'].map((heading) => (
-                <th key={heading} style={{ textAlign: 'left', padding: '4px 6px', ...HAIRLINE_BOTTOM, color: 'var(--color-ink-faint)', fontWeight: 500, whiteSpace: 'nowrap' }}>
+              {[
+                'corpus',
+                'variant',
+                'PR-AUC',
+                '95% CI',
+                'precision at budget',
+                'recall at budget',
+                'net benefit',
+                'per analyst-hour',
+              ].map((heading) => (
+                <th
+                  key={heading}
+                  style={{
+                    textAlign: 'left',
+                    padding: '4px 6px',
+                    ...HAIRLINE_BOTTOM,
+                    color: 'var(--color-ink-faint)',
+                    fontWeight: 500,
+                    whiteSpace: 'nowrap',
+                  }}
+                >
                   {heading}
                 </th>
               ))}
@@ -512,21 +800,44 @@ function BaselineTable({ data, assumptions }: { data: Validation; assumptions: r
           <tbody>
             {data.baseline_table.map((row) => (
               <tr key={`${row.corpus}-${row.variant}`} data-baseline={row.variant}>
-                <td style={{ padding: '4px 6px', ...HAIRLINE_BOTTOM, ...T_MONO, fontSize: 'var(--text-micro)' }}>{row.corpus}</td>
-                <td style={{ padding: '4px 6px', ...HAIRLINE_BOTTOM, color: row.is_final ? 'var(--color-ink)' : 'var(--color-ink-muted)', fontWeight: row.is_final ? 600 : 400 }}>
+                <td style={{ padding: '4px 6px', ...HAIRLINE_BOTTOM, ...T_MONO, fontSize: 'var(--text-micro)' }}>
+                  {row.corpus}
+                </td>
+                <td
+                  style={{
+                    padding: '4px 6px',
+                    ...HAIRLINE_BOTTOM,
+                    color: row.is_final ? 'var(--color-ink)' : 'var(--color-ink-muted)',
+                    fontWeight: row.is_final ? 600 : 400,
+                  }}
+                >
                   {row.variant}
                 </td>
-                <td className="u-num" style={{ padding: '4px 6px', ...HAIRLINE_BOTTOM }}>{row.pr_auc.toFixed(3)}</td>
-                <td className="u-num" style={{ padding: '4px 6px', ...HAIRLINE_BOTTOM, color: 'var(--color-ink-faint)' }}>
-                  {row.pr_auc_ci.length === 2 ? `${row.pr_auc_ci[0]?.toFixed(3)} – ${row.pr_auc_ci[1]?.toFixed(3)}` : '—'}
+                <td className="u-num" style={{ padding: '4px 6px', ...HAIRLINE_BOTTOM }}>
+                  {row.pr_auc.toFixed(3)}
                 </td>
-                <td className="u-num" style={{ padding: '4px 6px', ...HAIRLINE_BOTTOM }}>{percent(row.precision_at_budget, 1)}</td>
-                <td className="u-num" style={{ padding: '4px 6px', ...HAIRLINE_BOTTOM }}>{percent(row.recall_at_budget, 1)}</td>
+                <td
+                  className="u-num"
+                  style={{ padding: '4px 6px', ...HAIRLINE_BOTTOM, color: 'var(--color-ink-faint)' }}
+                >
+                  {row.pr_auc_ci.length === 2
+                    ? `${row.pr_auc_ci[0]?.toFixed(3)} – ${row.pr_auc_ci[1]?.toFixed(3)}`
+                    : '—'}
+                </td>
+                <td className="u-num" style={{ padding: '4px 6px', ...HAIRLINE_BOTTOM }}>
+                  {percent(row.precision_at_budget, 1)}
+                </td>
+                <td className="u-num" style={{ padding: '4px 6px', ...HAIRLINE_BOTTOM }}>
+                  {percent(row.recall_at_budget, 1)}
+                </td>
                 <td className="u-num" style={{ padding: '4px 6px', ...HAIRLINE_BOTTOM }}>
                   {compactFromMinor(row.net_benefit.value.minor, row.net_benefit.value.decimals)}
                 </td>
                 <td className="u-num" style={{ padding: '4px 6px', ...HAIRLINE_BOTTOM }}>
-                  {compactFromMinor(row.benefit_per_analyst_hour.value.minor, row.benefit_per_analyst_hour.value.decimals)}
+                  {compactFromMinor(
+                    row.benefit_per_analyst_hour.value.minor,
+                    row.benefit_per_analyst_hour.value.decimals,
+                  )}
                 </td>
               </tr>
             ))}
@@ -553,7 +864,11 @@ function PrCurve({ data }: { data: Validation }): ReactElement {
   }
   const series = [...byCorpus.entries()].map(([corpus, points]) => ({
     label: corpus,
-    points: points.map((point, index) => ({ ...point, x: new Date(Date.UTC(1970, 0, 1 + index)).toISOString(), y: point.y })),
+    points: points.map((point, index) => ({
+      ...point,
+      x: new Date(Date.UTC(1970, 0, 1 + index)).toISOString(),
+      y: point.y,
+    })),
     is_policy: corpus === data.operating_point.corpus,
   }));
   return (
@@ -574,7 +889,11 @@ function PrCurve({ data }: { data: Validation }): ReactElement {
         </p>
       ))}
       {minimumSeriesNote(series[0]?.points.length ?? 0, 'line') !== null ? (
-        <ChartFrame height={60} note="The PR curve came back with fewer than two points, so no curve is drawn." label="pr curve guard" />
+        <ChartFrame
+          height={60}
+          note="The PR curve came back with fewer than two points, so no curve is drawn."
+          label="pr curve guard"
+        />
       ) : null}
     </div>
   );
@@ -584,15 +903,20 @@ function Reliability({ data }: { data: Validation }): ReactElement {
   return (
     <div>
       <BarWithLine
-        rows={data.reliability.map((entry) => ({ label: entry.bin, value: entry.predicted, secondary: entry.observed, colour: 'var(--color-band-b)' }))}
+        rows={data.reliability.map((entry) => ({
+          label: entry.bin,
+          value: entry.predicted,
+          secondary: entry.observed,
+          colour: 'var(--color-band-b)',
+        }))}
         valueLabel="predicted"
         secondaryLabel="observed"
         formatValue={(value) => value.toFixed(2)}
         ariaLabel="Predicted against observed rate, per calibration bin"
       />
       <p style={{ ...T_MICRO, color: 'var(--color-ink-muted)', marginTop: 6 }}>
-        Brier {ratio(data.brier, 4)} · method {data.calibration_floor.method} · floor {count(data.calibration_floor.min_positives)}{' '}
-        validation positives · calibration refused:{' '}
+        Brier {ratio(data.brier, 4)} · method {data.calibration_floor.method} · floor{' '}
+        {count(data.calibration_floor.min_positives)} validation positives · calibration refused:{' '}
         {data.calibration_floor.refused ? 'yes, and the UI says probabilities are uncalibrated' : 'no'}
       </p>
       <p style={{ ...T_MICRO, color: 'var(--color-ink-faint)', maxWidth: '72ch' }}>
@@ -639,12 +963,26 @@ function TypologyRecall({ data }: { data: Validation }): ReactElement {
     <Fragment>
       <ul style={{ listStyle: 'none', margin: 0, padding: 0 }}>
         {data.typology_recall.map((entry) => (
-          <li key={entry.rule_code} style={{ display: 'grid', gridTemplateColumns: 'minmax(0,1fr) 70px 70px', gap: 8, alignItems: 'center', padding: '5px 0', ...HAIRLINE_BOTTOM }}>
+          <li
+            key={entry.rule_code}
+            style={{
+              display: 'grid',
+              gridTemplateColumns: 'minmax(0,1fr) 70px 70px',
+              gap: 8,
+              alignItems: 'center',
+              padding: '5px 0',
+              ...HAIRLINE_BOTTOM,
+            }}
+          >
             <span style={{ ...T_LABEL, color: 'var(--color-ink)' }}>
               <Icon name={glyphFor(entry.typology)} size={14} /> {entry.rule_code}
             </span>
-            <span className="u-num" style={{ ...T_LABEL }}>{percent(entry.recall, 1)}</span>
-            <span className="u-num" style={{ ...T_MICRO, color: 'var(--color-ink-faint)' }}>n={count(entry.support)}</span>
+            <span className="u-num" style={{ ...T_LABEL }}>
+              {percent(entry.recall, 1)}
+            </span>
+            <span className="u-num" style={{ ...T_MICRO, color: 'var(--color-ink-faint)' }}>
+              n={count(entry.support)}
+            </span>
           </li>
         ))}
       </ul>

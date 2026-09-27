@@ -20,14 +20,14 @@
 
 'use client';
 
-import { ErrorBoundary } from 'react-error-boundary';
 import type { ReactElement, ReactNode } from 'react';
+import { ErrorBoundary } from 'react-error-boundary';
 
 import { ErrorPane } from '../design/primitives/ErrorPane';
 import { Skeleton, type SkeletonColumn } from '../design/primitives/Skeleton';
+import type { ListMeta } from '../lib/api/contract';
 import type { ApiFailure } from '../lib/api/problem';
 import { failureDetail, failureStatus, failureTitle, toApiFailure } from '../lib/api/problem';
-import type { ListMeta } from '../lib/api/contract';
 import { DegradedBanner } from './ui/provenance';
 import { HAIRLINE_BOTTOM, PANEL, T_LABEL, T_MICRO } from './ui/sx';
 
@@ -108,20 +108,39 @@ export function Pane({
           flexWrap: 'wrap',
         }}
       >
-        <h2 style={{ ...T_LABEL, margin: 0, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--color-ink)' }}>
+        <h2
+          style={{
+            ...T_LABEL,
+            margin: 0,
+            textTransform: 'uppercase',
+            letterSpacing: '0.06em',
+            color: 'var(--color-ink)',
+          }}
+        >
           {title}
         </h2>
         <span style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 8 }}>{actions}</span>
       </header>
 
-      <div style={{ flex: 1, minWidth: 0, padding: padded ? '12px' : 0, ...(reserveHeight === undefined ? {} : { minHeight: reserveHeight }) }}>
+      <div
+        style={{
+          flex: 1,
+          minWidth: 0,
+          padding: padded ? '12px' : 0,
+          ...(reserveHeight === undefined ? {} : { minHeight: reserveHeight }),
+        }}
+      >
         <ErrorBoundary
           fallbackRender={({ error, resetErrorBoundary }) => (
             <PaneFailure id={id} operation={operation} error={error} onRetry={resetErrorBoundary} />
           )}
         >
           {meta?.degraded === true ? (
-            <DegradedBanner dependency={title} fallback={meta.degraded_reason ?? 'the deterministic path'} meta={meta} />
+            <DegradedBanner
+              dependency={title}
+              fallback={meta.degraded_reason ?? 'the deterministic path'}
+              meta={meta}
+            />
           ) : null}
           <MaybeSuspense
             skeleton={skeleton}
@@ -238,13 +257,7 @@ function PaneFailure({
   const failure: ApiFailure | null = toApiFailure(error);
   const problem = failureToProblem(failure);
   return (
-    <ErrorPane
-      paneId={id}
-      operation={operation}
-      error={problem}
-      onRetry={onRetry}
-      siblingsIntact
-    >
+    <ErrorPane paneId={id} operation={operation} error={problem} onRetry={onRetry} siblingsIntact>
       <p style={{ ...T_MICRO, color: 'var(--color-ink-faint)', margin: 0 }}>
         This pane failed on its own. Every other pane on the page resolved and is still interactive.
       </p>

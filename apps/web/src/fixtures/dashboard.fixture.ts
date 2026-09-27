@@ -35,7 +35,11 @@ function patterns(count: number): Dashboard['latest_patterns'] {
   return out;
 }
 
-function series(label: string, multiplier: number, isPolicy: boolean): Dashboard['cumulative_benefit']['series'][number] {
+function series(
+  label: string,
+  multiplier: number,
+  isPolicy: boolean,
+): Dashboard['cumulative_benefit']['series'][number] {
   const next = seeded(label.length * 97 + 11);
   const points = [];
   let cumulative = 0;
@@ -58,7 +62,13 @@ export const dashboard: Dashboard = {
   high_risk_networks: 9,
   capacity: { reviewed: 200, available: 12_000, unit: 'analyst-minutes', period_label: 'week to 25 Sep 2026' },
   model_quality: {
-    pr_auc: { value: 0.412, delta_vs_baseline: 0.147, baseline_label: 'rules-only', unit: 'PR-AUC', ci: [0.371, 0.455] },
+    pr_auc: {
+      value: 0.412,
+      delta_vs_baseline: 0.147,
+      baseline_label: 'rules-only',
+      unit: 'PR-AUC',
+      ci: [0.371, 0.455],
+    },
     precision_at_budget: {
       value: 0.635,
       delta_vs_baseline: 0.211,

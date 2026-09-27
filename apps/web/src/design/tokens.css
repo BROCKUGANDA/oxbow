@@ -160,6 +160,15 @@
   --spacing-row: 32px;
   --spacing-table-row: 36px;
 
+  /* The shell chrome a route cannot use: the sticky header (41 px measured at the
+     desktop breakpoint) plus the disclaimer footer (140 px, the height the swap-stable
+     rule in globals.css pins it to). The queue is the one route that scrolls its own
+     body instead of the document — deliberately, because a box whose height does not
+     depend on the response is the only way resolution and failure can both cost zero
+     layout shift (§5). It subtracts this, so the number is a tunable in the token file
+     rather than a guess inside a component. */
+  --shell-chrome-height: 181px;
+
   --z-pane: 1;
   --z-sticky: 20;
   --z-overlay: 60;
@@ -170,7 +179,7 @@
    The same token names, re-pointed. A component never branches on theme; it reads
    the token and the cascade does the work. Risk bands keep their hue and gain
    lightness-adjusted chroma so they still sit at equal lightness against paper. */
-[data-theme='paper'] {
+[data-theme="paper"] {
   --color-canvas: var(--color-paper);
   --color-canvas-raised: var(--color-paper-raised);
   --color-canvas-sunken: var(--color-paper-sunken);
@@ -214,7 +223,7 @@
    figure, axis tick or ledger duration. */
 .u-tabular {
   font-variant-numeric: tabular-nums;
-  font-feature-settings: 'tnum' 1, 'zero' 1;
+  font-feature-settings: "tnum" 1, "zero" 1;
 }
 
 /* Visually hidden, still announced. For the live-region text that sits beside a

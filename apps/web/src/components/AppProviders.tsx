@@ -15,7 +15,7 @@
 
 import { QueryClientProvider } from '@tanstack/react-query';
 import { MotionConfig } from 'motion/react';
-import { createContext, useContext, useMemo, useState, type ReactElement, type ReactNode } from 'react';
+import { type ReactElement, type ReactNode, createContext, useContext, useMemo, useState } from 'react';
 
 import { createQueryClient } from '../lib/api/client';
 

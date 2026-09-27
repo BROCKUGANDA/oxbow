@@ -30,8 +30,7 @@ export const RECOVERY_BAND_WIDTH = 3;
 export class MissingAssumptions extends Error {
   constructor(figure: string) {
     super(
-      `currency figure "${figure}" has no assumption line: every money value must name the ` +
-        `config/economics.yaml keys it depends on (plan §11, DESIGN.md §7)`,
+      `currency figure "${figure}" has no assumption line: every money value must name the config/economics.yaml keys it depends on (plan §11, DESIGN.md §7)`,
     );
     this.name = 'MissingAssumptions';
   }

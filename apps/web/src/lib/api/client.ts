@@ -21,10 +21,10 @@
    ============================================================================= */
 
 import { QueryClient, type QueryKey } from '@tanstack/react-query';
-import { ContractViolation, decodeOrThrow, type Decoder } from '../codec';
-import { ListMetaDecoder, type ListMeta } from './contract';
-import { assertOk, asContractFailure, getTransport, withInjectedFailure } from './transport';
-import { ApiError, isRetryable, type ApiFailure } from './problem';
+import { type ContractViolation, type Decoder, decodeOrThrow } from '../codec';
+import { type ListMeta, ListMetaDecoder } from './contract';
+import { ApiError, type ApiFailure, isRetryable } from './problem';
+import { asContractFailure, assertOk, getTransport, withInjectedFailure } from './transport';
 
 /** The only success shape the client knows: the envelope's two keys, typed. */
 export type Payload<T> = { data: T; meta: ListMeta };

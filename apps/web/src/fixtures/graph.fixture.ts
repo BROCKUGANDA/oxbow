@@ -197,7 +197,6 @@ export function traversedSubgraph(account: string, hops: number): Subgraph {
   };
 }
 
-
 /** The 1,500-node cap variant, with two community meta-nodes carrying their true size. */
 export function stressSubgraph(target = 1_500): Subgraph {
   const built = stress(target);
@@ -217,18 +216,21 @@ export function stressSubgraph(target = 1_500): Subgraph {
     hops: 1,
     true_size: entry.true_size,
   }));
-  const edges = [...built.edges, ...metaNodes.map((node, index) => ({
-    id: `meta-${String(index)}`,
-    source: node.key,
-    target: built.nodes[index]?.key ?? node.key,
-    ts_first: new Date(START).toISOString(),
-    ts_last: new Date(START + DAY_MS).toISOString(),
-    count: node.degree,
-    total: money(100_000_000),
-    typology: null,
-    is_reversal: false,
-    high_velocity: false,
-  }))];
+  const edges = [
+    ...built.edges,
+    ...metaNodes.map((node, index) => ({
+      id: `meta-${String(index)}`,
+      source: node.key,
+      target: built.nodes[index]?.key ?? node.key,
+      ts_first: new Date(START).toISOString(),
+      ts_last: new Date(START + DAY_MS).toISOString(),
+      count: node.degree,
+      total: money(100_000_000),
+      typology: null,
+      is_reversal: false,
+      high_velocity: false,
+    })),
+  ];
   return {
     nodes: [...built.nodes, ...metaNodes],
     edges,

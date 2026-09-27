@@ -22,36 +22,28 @@
 'use client';
 
 import { useParams, useSearchParams } from 'next/navigation';
-import { Suspense, useState, type CSSProperties, type ReactElement } from 'react';
+import { type CSSProperties, type ReactElement, Suspense, useState } from 'react';
 import { useOptimistic } from 'react';
 
-import { Icon } from '@/design/icons/Icon';
-import { MoneyFigure } from '@/components/ui/MoneyFigure';
-import { BandBadge } from '@/components/ui/BandBadge';
-import { AccountChip, Timestamp } from '@/components/ui/provenance';
 import { Pane } from '@/components/Pane';
 import { Waterfall, type WaterfallRow } from '@/components/charts/charts';
 import { TYPOLOGY_META, glyphFor } from '@/components/typology';
+import { BandBadge } from '@/components/ui/BandBadge';
+import { MoneyFigure } from '@/components/ui/MoneyFigure';
+import { AccountChip, Timestamp } from '@/components/ui/provenance';
+import { ELLIPSIS, HAIRLINE_BOTTOM, PANEL_SUNKEN, T_BODY, T_LABEL, T_MICRO, T_MONO } from '@/components/ui/sx';
+import { Icon } from '@/design/icons/Icon';
 import {
-  DecisionReceiptDecoder,
-  ROUTES,
   type AssumptionLine,
   type CasePayload,
   type Decision,
+  DecisionReceiptDecoder,
+  ROUTES,
 } from '@/lib/api/contract';
 import { useResource, useRuntime, useWrite } from '@/lib/api/hooks';
-import { ApiError, failureDetail, failureFields, failureTitle, type ApiFailure } from '@/lib/api/problem';
+import { ApiError, type ApiFailure, failureDetail, failureFields, failureTitle } from '@/lib/api/problem';
 import { compactFromMinor, count } from '@/lib/format/money';
 import { formatDuration } from '@/lib/format/time';
-import {
-  ELLIPSIS,
-  HAIRLINE_BOTTOM,
-  PANEL_SUNKEN,
-  T_BODY,
-  T_LABEL,
-  T_MICRO,
-  T_MONO,
-} from '@/components/ui/sx';
 
 /** What a decision looks like before the server has agreed to it. */
 type DraftDecision = { decision: Decision['decision']; reason: string };
@@ -91,13 +83,28 @@ function CaseRouteSkeleton(): ReactElement {
         alignItems: 'start',
       }}
     >
-      <Pane id="score" title="Score" operation="Loading the score header" skeleton={{ columns: [{ key: 'score', width: '100%' }], rows: 5 }}>
+      <Pane
+        id="score"
+        title="Score"
+        operation="Loading the score header"
+        skeleton={{ columns: [{ key: 'score', width: '100%' }], rows: 5 }}
+      >
         <span />
       </Pane>
-      <Pane id="evidence" title="Evidence" operation="Loading the evidence pane" skeleton={{ columns: [{ key: 'row', width: '100%' }], rows: 9, rowHeight: 36 }}>
+      <Pane
+        id="evidence"
+        title="Evidence"
+        operation="Loading the evidence pane"
+        skeleton={{ columns: [{ key: 'row', width: '100%' }], rows: 9, rowHeight: 36 }}
+      >
         <span />
       </Pane>
-      <Pane id="decision" title="Decision" operation="Loading the decision rail" skeleton={{ columns: [{ key: 'rail', width: '100%' }], rows: 4 }}>
+      <Pane
+        id="decision"
+        title="Decision"
+        operation="Loading the decision rail"
+        skeleton={{ columns: [{ key: 'rail', width: '100%' }], rows: 4 }}
+      >
         <span />
       </Pane>
     </div>
@@ -151,8 +158,12 @@ function CaseWorkspace(): ReactElement {
   const timeZone = runtime.data?.deployment_timezone ?? null;
 
   const txnSet = filter === null ? null : new Set(filter.txnIds);
-  const evidence = filter === null ? payload.evidence : payload.evidence.filter((event) => event.txn_ids.some((id) => txnSet?.has(id) ?? false));
-  const transactions = filter === null ? payload.transactions : payload.transactions.filter((txn) => txnSet?.has(txn.txn_id) ?? false);
+  const evidence =
+    filter === null
+      ? payload.evidence
+      : payload.evidence.filter((event) => event.txn_ids.some((id) => txnSet?.has(id) ?? false));
+  const transactions =
+    filter === null ? payload.transactions : payload.transactions.filter((txn) => txnSet?.has(txn.txn_id) ?? false);
 
   const submit = async (decision: Decision['decision']): Promise<void> => {
     const text = reason.trim();
@@ -190,7 +201,13 @@ function CaseWorkspace(): ReactElement {
     >
       {/* ----------------------------------------------------- left pane -- */}
       <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--spacing-pane-gap)' }}>
-        <Pane id="score" title="Score" operation="Loading the score header" meta={caseResource.meta} skeleton={{ columns: [{ key: 'score', width: '100%' }], rows: 5 }}>
+        <Pane
+          id="score"
+          title="Score"
+          operation="Loading the score header"
+          meta={caseResource.meta}
+          skeleton={{ columns: [{ key: 'score', width: '100%' }], rows: 5 }}
+        >
           <ScoreHeader payload={payload} />
         </Pane>
 
@@ -199,21 +216,49 @@ function CaseWorkspace(): ReactElement {
           title="Scorecard points"
           operation="Loading the points table"
           meta={caseResource.meta}
-          skeleton={{ columns: [{ key: 'attr', width: '62%' }, { key: 'pts', width: '38%', align: 'end' }], rows: Math.max(payload.header.points.length, 3) }}
+          skeleton={{
+            columns: [
+              { key: 'attr', width: '62%' },
+              { key: 'pts', width: '38%', align: 'end' },
+            ],
+            rows: Math.max(payload.header.points.length, 3),
+          }}
         >
           <PointsTable payload={payload} onSelect={setFilter} filter={filter} />
         </Pane>
 
-        <Pane id="economics" title="Economics" operation="Loading the economics block" meta={caseResource.meta} skeleton={{ columns: [{ key: 'e', width: '100%' }], rows: 4 }}>
+        <Pane
+          id="economics"
+          title="Economics"
+          operation="Loading the economics block"
+          meta={caseResource.meta}
+          skeleton={{ columns: [{ key: 'e', width: '100%' }], rows: 4 }}
+        >
           <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-            <MoneyFigure figure={payload.header.economics.exposure} assumptions={assumptions} label="Exposure at risk" source={caseResource.meta === null ? null : 'config/economics.yaml'} />
-            <MoneyFigure figure={payload.header.economics.expected_value} assumptions={assumptions} label="Expected value of reviewing" source={caseResource.meta === null ? null : 'EV = p·E·r − c − (1−p)·f'} />
+            <MoneyFigure
+              figure={payload.header.economics.exposure}
+              assumptions={assumptions}
+              label="Exposure at risk"
+              source={caseResource.meta === null ? null : 'config/economics.yaml'}
+            />
+            <MoneyFigure
+              figure={payload.header.economics.expected_value}
+              assumptions={assumptions}
+              label="Expected value of reviewing"
+              source={caseResource.meta === null ? null : 'EV = p·E·r − c − (1−p)·f'}
+            />
             <p style={{ ...T_MICRO, color: 'var(--color-ink-muted)' }}>
               review cost{' '}
-              {compactFromMinor(payload.header.economics.analyst_cost.value.minor, payload.header.economics.analyst_cost.value.decimals)}{' '}
-              {payload.header.economics.analyst_cost.value.currency} for {formatDuration(payload.header.economics.review_minutes)} ·
-              friction if wrongly touched{' '}
-              {compactFromMinor(payload.header.economics.friction_cost.minor, payload.header.economics.friction_cost.decimals)}
+              {compactFromMinor(
+                payload.header.economics.analyst_cost.value.minor,
+                payload.header.economics.analyst_cost.value.decimals,
+              )}{' '}
+              {payload.header.economics.analyst_cost.value.currency} for{' '}
+              {formatDuration(payload.header.economics.review_minutes)} · friction if wrongly touched{' '}
+              {compactFromMinor(
+                payload.header.economics.friction_cost.minor,
+                payload.header.economics.friction_cost.decimals,
+              )}
             </p>
             <MonteCarlo payload={payload} />
           </div>
@@ -238,13 +283,23 @@ function CaseWorkspace(): ReactElement {
         >
           <Tabs tab={tab} onChange={setTab} />
           {tab === 'why' ? <WhyPanel payload={payload} filter={filter} onFilter={setFilter} /> : null}
-          {tab === 'timeline' ? <Timeline payload={payload} evidence={evidence} timeZone={timeZone} filter={filter} /> : null}
-          {tab === 'transactions' ? <Transactions payload={payload} transactions={transactions} timeZone={timeZone} /> : null}
+          {tab === 'timeline' ? (
+            <Timeline payload={payload} evidence={evidence} timeZone={timeZone} filter={filter} />
+          ) : null}
+          {tab === 'transactions' ? (
+            <Transactions payload={payload} transactions={transactions} timeZone={timeZone} />
+          ) : null}
           {tab === 'rules' ? <RuleHits payload={payload} timeZone={timeZone} /> : null}
           {tab === 'counterfactual' ? <CounterfactualPanel payload={payload} assumptions={assumptions} /> : null}
         </Pane>
 
-        <Pane id="narrative" title="Case narrative" operation="Loading the narrative" meta={caseResource.meta} skeleton={{ columns: [{ key: 'n', width: '100%' }], rows: 2 }}>
+        <Pane
+          id="narrative"
+          title="Case narrative"
+          operation="Loading the narrative"
+          meta={caseResource.meta}
+          skeleton={{ columns: [{ key: 'n', width: '100%' }], rows: 2 }}
+        >
           <Narrative payload={payload} />
         </Pane>
       </div>
@@ -263,7 +318,13 @@ function CaseWorkspace(): ReactElement {
           deepAction={DEEP_ACTIONS.includes(search.get('decide') ?? '') ? search.get('decide') : null}
         />
 
-        <Pane id="history" title="Decision history" operation="Loading the decision log" meta={caseResource.meta} skeleton={{ columns: [{ key: 'hash', width: '100%' }], rows: Math.max(optimistic.length, 2) }}>
+        <Pane
+          id="history"
+          title="Decision history"
+          operation="Loading the decision log"
+          meta={caseResource.meta}
+          skeleton={{ columns: [{ key: 'hash', width: '100%' }], rows: Math.max(optimistic.length, 2) }}
+        >
           <DecisionHistory decisions={optimistic} timeZone={timeZone} />
         </Pane>
       </div>
@@ -273,7 +334,10 @@ function CaseWorkspace(): ReactElement {
 
 /* ------------------------------------------------------------- skeleton --- */
 
-function CaseSkeleton({ resource, accountKey }: { resource: ReturnType<typeof useResource<CasePayload>>; accountKey: string }): ReactElement {
+function CaseSkeleton({
+  resource,
+  accountKey,
+}: { resource: ReturnType<typeof useResource<CasePayload>>; accountKey: string }): ReactElement {
   const loading = resource.isPending && resource.failure === null;
   return (
     <div
@@ -299,10 +363,20 @@ function CaseSkeleton({ resource, accountKey }: { resource: ReturnType<typeof us
           {loading ? `Reading ${accountKey} from the recorded run.` : 'Nothing returned.'}
         </p>
       </Pane>
-      <Pane id="evidence" title="Evidence" operation="Loading the evidence pane" skeleton={{ columns: [{ key: 'row', width: '100%' }], rows: 9, rowHeight: 36 }}>
+      <Pane
+        id="evidence"
+        title="Evidence"
+        operation="Loading the evidence pane"
+        skeleton={{ columns: [{ key: 'row', width: '100%' }], rows: 9, rowHeight: 36 }}
+      >
         <span />
       </Pane>
-      <Pane id="decision" title="Decision" operation="Loading the decision rail" skeleton={{ columns: [{ key: 'rail', width: '100%' }], rows: 4 }}>
+      <Pane
+        id="decision"
+        title="Decision"
+        operation="Loading the decision rail"
+        skeleton={{ columns: [{ key: 'rail', width: '100%' }], rows: 4 }}
+      >
         <span />
       </Pane>
     </div>
@@ -315,10 +389,16 @@ function ScoreHeader({ payload }: { payload: CasePayload }): ReactElement {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-        <AccountChip accountKey={payload.header.account_key} href={`/network?account=${encodeURIComponent(payload.header.account_key)}`} />
+        <AccountChip
+          accountKey={payload.header.account_key}
+          href={`/network?account=${encodeURIComponent(payload.header.account_key)}`}
+        />
         <BandBadge band={payload.header.band} />
       </div>
-      <p className="u-num" style={{ ...T_MONO, fontSize: 'var(--text-hero)', fontWeight: 600, margin: 0, color: 'var(--color-ink)' }}>
+      <p
+        className="u-num"
+        style={{ ...T_MONO, fontSize: 'var(--text-hero)', fontWeight: 600, margin: 0, color: 'var(--color-ink)' }}
+      >
         {payload.header.score.toFixed(3)}
       </p>
       <p style={{ ...T_LABEL, color: 'var(--color-ink-muted)', maxWidth: '40ch' }}>
@@ -330,7 +410,11 @@ function ScoreHeader({ payload }: { payload: CasePayload }): ReactElement {
       </p>
       {payload.header.typology !== null ? (
         <p style={{ ...T_MICRO, color: 'var(--color-ink-muted)' }}>
-          <Icon name={glyphFor(payload.header.typology)} size={13} title={TYPOLOGY_META[payload.header.typology].name} />{' '}
+          <Icon
+            name={glyphFor(payload.header.typology)}
+            size={13}
+            title={TYPOLOGY_META[payload.header.typology].name}
+          />{' '}
           {TYPOLOGY_META[payload.header.typology].name} — {TYPOLOGY_META[payload.header.typology].reads}
         </p>
       ) : null}
@@ -342,9 +426,13 @@ function ScoreHeader({ payload }: { payload: CasePayload }): ReactElement {
           : 'scored on the current run'}
       </p>
       {payload.header.fusion !== null ? (
-        <p style={{ ...T_MICRO, color: 'var(--color-ink-muted)' }} title="the fusion meta-learner prints its own coefficients">
-          fused from scorecard {payload.header.fusion.p_scorecard.toFixed(3)} and GBM {payload.header.fusion.p_gbm.toFixed(3)};
-          weights {payload.header.fusion.coefficients.map((entry) => `${entry.input} ${entry.weight.toFixed(2)}`).join(', ')}
+        <p
+          style={{ ...T_MICRO, color: 'var(--color-ink-muted)' }}
+          title="the fusion meta-learner prints its own coefficients"
+        >
+          fused from scorecard {payload.header.fusion.p_scorecard.toFixed(3)} and GBM{' '}
+          {payload.header.fusion.p_gbm.toFixed(3)}; weights{' '}
+          {payload.header.fusion.coefficients.map((entry) => `${entry.input} ${entry.weight.toFixed(2)}`).join(', ')}
         </p>
       ) : null}
     </div>
@@ -370,7 +458,10 @@ function PointsTable({
           const row = (
             <>
               <span>
-                <span style={{ ...T_LABEL, color: 'var(--color-ink)', display: 'block', ...ELLIPSIS }} title={point.label}>
+                <span
+                  style={{ ...T_LABEL, color: 'var(--color-ink)', display: 'block', ...ELLIPSIS }}
+                  title={point.label}
+                >
                   {point.label}
                 </span>
                 <span style={{ ...T_MICRO, color: 'var(--color-ink-faint)' }}>
@@ -378,20 +469,43 @@ function PointsTable({
                   {(point.bad_rate * 100).toFixed(1)}%
                 </span>
               </span>
-              <span className="u-num" style={{ ...T_MONO, color: point.points < 0 ? 'var(--color-band-e)' : 'var(--color-band-b)' }}>
+              <span
+                className="u-num"
+                style={{ ...T_MONO, color: point.points < 0 ? 'var(--color-band-e)' : 'var(--color-band-b)' }}
+              >
                 {point.points > 0 ? `+${String(point.points)}` : String(point.points)}
               </span>
             </>
           );
           return (
-            <li key={point.attribute} style={{ display: 'grid', gridTemplateColumns: 'minmax(0,1fr) auto', gap: 8, alignItems: 'baseline', padding: '4px 0', ...HAIRLINE_BOTTOM }}>
+            <li
+              key={point.attribute}
+              style={{
+                display: 'grid',
+                gridTemplateColumns: 'minmax(0,1fr) auto',
+                gap: 8,
+                alignItems: 'baseline',
+                padding: '4px 0',
+                ...HAIRLINE_BOTTOM,
+              }}
+            >
               {contribution !== undefined && contribution.txn_ids.length > 0 ? (
                 <button
                   type="button"
-                  onClick={() => onSelect(active ? null : { feature: contribution.feature, txnIds: contribution.txn_ids })}
+                  onClick={() =>
+                    onSelect(active ? null : { feature: contribution.feature, txnIds: contribution.txn_ids })
+                  }
                   aria-pressed={active}
                   title="Cross-filter the evidence and transaction panes to the transactions behind this attribute"
-                  style={{ display: 'contents', background: active ? 'var(--color-elev-2)' : 'transparent', border: 'none', color: 'inherit', font: 'inherit', textAlign: 'left', cursor: 'pointer' }}
+                  style={{
+                    display: 'contents',
+                    background: active ? 'var(--color-elev-2)' : 'transparent',
+                    border: 'none',
+                    color: 'inherit',
+                    font: 'inherit',
+                    textAlign: 'left',
+                    cursor: 'pointer',
+                  }}
                 >
                   {row}
                 </button>
@@ -422,8 +536,19 @@ function MonteCarlo({ payload }: { payload: CasePayload }): ReactElement {
   }
   return (
     <div data-monte-carlo style={{ ...PANEL_SUNKEN, padding: 10 }}>
-      <p style={{ ...T_LABEL, textTransform: 'uppercase', letterSpacing: '0.06em', margin: 0 }}>Exposure if unactioned</p>
-      <p className="u-num" style={{ ...T_MONO, fontSize: 'var(--text-kpi)', fontWeight: 600, margin: '4px 0 0', color: 'var(--color-ink)' }}>
+      <p style={{ ...T_LABEL, textTransform: 'uppercase', letterSpacing: '0.06em', margin: 0 }}>
+        Exposure if unactioned
+      </p>
+      <p
+        className="u-num"
+        style={{
+          ...T_MONO,
+          fontSize: 'var(--text-kpi)',
+          fontWeight: 600,
+          margin: '4px 0 0',
+          color: 'var(--color-ink)',
+        }}
+      >
         {compactFromMinor(interval.lower.minor, interval.lower.decimals)} –{' '}
         {compactFromMinor(interval.upper.minor, interval.upper.decimals)} {interval.upper.currency}
       </p>
@@ -443,7 +568,13 @@ const TABS: readonly { id: 'why' | 'timeline' | 'transactions' | 'rules' | 'coun
   { id: 'counterfactual', label: 'Counterfactual' },
 ];
 
-function Tabs({ tab, onChange }: { tab: 'why' | 'timeline' | 'transactions' | 'rules' | 'counterfactual'; onChange: (next: typeof tab) => void }): ReactElement {
+function Tabs({
+  tab,
+  onChange,
+}: {
+  tab: 'why' | 'timeline' | 'transactions' | 'rules' | 'counterfactual';
+  onChange: (next: typeof tab) => void;
+}): ReactElement {
   return (
     <div role="tablist" style={{ display: 'flex', gap: 2, marginBottom: 10, flexWrap: 'wrap' }}>
       {TABS.map((entry) => (
@@ -481,9 +612,17 @@ function WhyPanel({
     value: contribution.value,
     direction: contribution.direction,
     selected: filter?.feature === contribution.feature,
-    onSelect: () => onFilter(filter?.feature === contribution.feature ? null : { feature: contribution.feature, txnIds: contribution.txn_ids }),
+    onSelect: () =>
+      onFilter(
+        filter?.feature === contribution.feature
+          ? null
+          : { feature: contribution.feature, txnIds: contribution.txn_ids },
+      ),
   }));
-  const named = filter === null ? 0 : payload.contributions.find((entry) => entry.feature === filter.feature)?.txn_ids.length ?? 0;
+  const named =
+    filter === null
+      ? 0
+      : (payload.contributions.find((entry) => entry.feature === filter.feature)?.txn_ids.length ?? 0);
   return (
     <div>
       <p style={{ ...T_MICRO, color: 'var(--color-ink-faint)', maxWidth: '72ch' }}>
@@ -491,7 +630,11 @@ function WhyPanel({
           ? 'TreeExplainer values persisted with the scored row — this panel computes nothing on request. Selecting a contribution filters the timeline and the transaction table to the transactions that caused it.'
           : 'SHAP is unavailable because this row fell through a degenerate tree, so the waterfall below is the scorecard’s own point contributions, labelled as such.'}
       </p>
-      <Waterfall rows={rows} ariaLabel="Contribution waterfall for this case" formatValue={(value) => value.toFixed(3)} />
+      <Waterfall
+        rows={rows}
+        ariaLabel="Contribution waterfall for this case"
+        formatValue={(value) => value.toFixed(3)}
+      />
       {filter !== null ? (
         <p style={{ ...T_MICRO, color: 'var(--color-evidence)', marginTop: 8 }} data-cross-filter>
           filtering the other panes to the {count(named)} transactions named by {filter.feature}
@@ -524,7 +667,16 @@ function Timeline({
   return (
     <ol className="u-scroll" style={{ listStyle: 'none', margin: 0, padding: 0, maxHeight: 320, overflowY: 'auto' }}>
       {evidence.map((event) => (
-        <li key={event.id} style={{ display: 'grid', gridTemplateColumns: '170px minmax(0,1fr) 130px', gap: 8, padding: '6px 0', ...HAIRLINE_BOTTOM }}>
+        <li
+          key={event.id}
+          style={{
+            display: 'grid',
+            gridTemplateColumns: '170px minmax(0,1fr) 130px',
+            gap: 8,
+            padding: '6px 0',
+            ...HAIRLINE_BOTTOM,
+          }}
+        >
           <Timestamp iso={event.ts_utc} timeZone={timeZone} />
           <span style={{ minWidth: 0 }}>
             <span style={{ ...T_LABEL, color: 'var(--color-ink)', display: 'block', ...ELLIPSIS }} title={event.title}>
@@ -533,7 +685,9 @@ function Timeline({
             <span style={{ ...T_MICRO, color: 'var(--color-ink-faint)' }}>{event.detail}</span>
           </span>
           <span className="u-num" style={{ ...T_LABEL, textAlign: 'right', color: 'var(--color-ink-muted)' }}>
-            {event.amount === null ? '—' : `${compactFromMinor(event.amount.minor, event.amount.decimals)} ${event.amount.currency}`}
+            {event.amount === null
+              ? '—'
+              : `${compactFromMinor(event.amount.minor, event.amount.decimals)} ${event.amount.currency}`}
           </span>
         </li>
       ))}
@@ -541,7 +695,11 @@ function Timeline({
   );
 }
 
-function Transactions({ payload, transactions, timeZone }: { payload: CasePayload; transactions: CasePayload['transactions']; timeZone: string | null }): ReactElement {
+function Transactions({
+  payload,
+  transactions,
+  timeZone,
+}: { payload: CasePayload; transactions: CasePayload['transactions']; timeZone: string | null }): ReactElement {
   if (transactions.length === 0) {
     return (
       <p style={{ ...T_LABEL, color: 'var(--color-ink-muted)', maxWidth: '72ch' }}>
@@ -556,7 +714,16 @@ function Transactions({ payload, transactions, timeZone }: { payload: CasePayloa
         <thead>
           <tr>
             {['transaction', 'when', 'type', 'counterparty', 'amount', 'rules'].map((heading) => (
-              <th key={heading} style={{ textAlign: heading === 'amount' ? 'right' : 'left', ...HAIRLINE_BOTTOM, padding: '4px 6px', color: 'var(--color-ink-faint)', fontWeight: 500 }}>
+              <th
+                key={heading}
+                style={{
+                  textAlign: heading === 'amount' ? 'right' : 'left',
+                  ...HAIRLINE_BOTTOM,
+                  padding: '4px 6px',
+                  color: 'var(--color-ink-faint)',
+                  fontWeight: 500,
+                }}
+              >
                 {heading}
               </th>
             ))}
@@ -565,19 +732,33 @@ function Transactions({ payload, transactions, timeZone }: { payload: CasePayloa
         <tbody>
           {transactions.map((txn) => (
             <tr key={txn.txn_id} style={{ height: 'var(--spacing-table-row)' }}>
-              <td style={{ ...T_MONO, fontSize: 'var(--text-micro)', padding: '4px 6px', ...HAIRLINE_BOTTOM }}>{txn.txn_id}</td>
+              <td style={{ ...T_MONO, fontSize: 'var(--text-micro)', padding: '4px 6px', ...HAIRLINE_BOTTOM }}>
+                {txn.txn_id}
+              </td>
               <td style={{ padding: '4px 6px', ...HAIRLINE_BOTTOM }}>
                 <Timestamp iso={txn.ts_utc} timeZone={timeZone} />
               </td>
               <td style={{ padding: '4px 6px', ...HAIRLINE_BOTTOM, color: 'var(--color-ink-muted)' }}>
                 {txn.type} · {txn.direction}
               </td>
-              <td style={{ padding: '4px 6px', ...HAIRLINE_BOTTOM, ...T_MONO, fontSize: 'var(--text-micro)' }}>{txn.counterparty_key ?? 'external'}</td>
-              <td className="u-num" style={{ padding: '4px 6px', textAlign: 'right', ...HAIRLINE_BOTTOM, color: txn.is_zero_value ? 'var(--color-ink-faint)' : 'var(--color-ink)' }}>
+              <td style={{ padding: '4px 6px', ...HAIRLINE_BOTTOM, ...T_MONO, fontSize: 'var(--text-micro)' }}>
+                {txn.counterparty_key ?? 'external'}
+              </td>
+              <td
+                className="u-num"
+                style={{
+                  padding: '4px 6px',
+                  textAlign: 'right',
+                  ...HAIRLINE_BOTTOM,
+                  color: txn.is_zero_value ? 'var(--color-ink-faint)' : 'var(--color-ink)',
+                }}
+              >
                 {compactFromMinor(txn.amount.minor, txn.amount.decimals)} {txn.amount.currency}
                 {txn.is_zero_value ? ' · zero value, kept and flagged' : ''}
               </td>
-              <td style={{ padding: '4px 6px', ...HAIRLINE_BOTTOM, color: 'var(--color-ink-muted)' }}>{txn.rule_codes.join(', ') || '—'}</td>
+              <td style={{ padding: '4px 6px', ...HAIRLINE_BOTTOM, color: 'var(--color-ink-muted)' }}>
+                {txn.rule_codes.join(', ') || '—'}
+              </td>
             </tr>
           ))}
         </tbody>
@@ -608,15 +789,22 @@ function RuleHits({ payload, timeZone }: { payload: CasePayload; timeZone: strin
               severity {(hit.severity * 100).toFixed(0)} of 100
             </span>
             {hit.overlap_group !== null ? (
-              <span style={{ ...T_MICRO, color: 'var(--color-ink-faint)' }} title="overlapping rules are grouped; the score counts the group once">
+              <span
+                style={{ ...T_MICRO, color: 'var(--color-ink-faint)' }}
+                title="overlapping rules are grouped; the score counts the group once"
+              >
                 overlap group {hit.overlap_group} · {hit.counted_once ? 'counted once' : 'counts again'}
               </span>
             ) : null}
           </div>
           <p style={{ ...T_LABEL, color: 'var(--color-ink-muted)', margin: '4px 0' }}>{hit.observed}</p>
-          <p style={{ ...T_MICRO, color: 'var(--color-ink-faint)' }} title="thresholds are config/rules.yaml values, fitted on the training window">
+          <p
+            style={{ ...T_MICRO, color: 'var(--color-ink-faint)' }}
+            title="thresholds are config/rules.yaml values, fitted on the training window"
+          >
             parameters {hit.parameters.map((entry) => `${entry.key}=${String(entry.value)}`).join(' · ')} · first{' '}
-            <Timestamp iso={hit.first_hit} timeZone={timeZone} /> · last <Timestamp iso={hit.last_hit} timeZone={timeZone} />
+            <Timestamp iso={hit.first_hit} timeZone={timeZone} /> · last{' '}
+            <Timestamp iso={hit.last_hit} timeZone={timeZone} />
           </p>
         </li>
       ))}
@@ -624,7 +812,10 @@ function RuleHits({ payload, timeZone }: { payload: CasePayload; timeZone: strin
   );
 }
 
-function CounterfactualPanel({ payload, assumptions }: { payload: CasePayload; assumptions: readonly AssumptionLine[] }): ReactElement {
+function CounterfactualPanel({
+  payload,
+  assumptions,
+}: { payload: CasePayload; assumptions: readonly AssumptionLine[] }): ReactElement {
   const counterfactual = payload.counterfactual;
   if (counterfactual === null) {
     return (
@@ -650,7 +841,12 @@ function CounterfactualPanel({ payload, assumptions }: { payload: CasePayload; a
             </>
           ) : null}
         </p>
-        <MoneyFigure figure={counterfactual.expected_value_without} assumptions={assumptions} label="Expected value without it" compact />
+        <MoneyFigure
+          figure={counterfactual.expected_value_without}
+          assumptions={assumptions}
+          label="Expected value without it"
+          compact
+        />
       </div>
       <p style={{ ...T_MICRO, color: 'var(--color-ink-faint)' }}>
         Computed by the server on the same feature matrix as the score. This client re-derives nothing.
@@ -707,11 +903,18 @@ function DecisionRail({
     { id: 'dismiss', label: 'Dismiss', hint: 'close it, and say why' },
   ];
   const fields = failure === null ? [] : failureFields(failure);
-  const conflict = failure !== null && failure.kind === 'problem' && failure.class === 'conflict' ? failure.problem.conflict : null;
+  const conflict =
+    failure !== null && failure.kind === 'problem' && failure.class === 'conflict' ? failure.problem.conflict : null;
   const exposure = payload.header.economics.exposure.value;
 
   return (
-    <Pane id="decision" title="Decision" operation="Recording the decision" meta={null} skeleton={{ columns: [{ key: 'rail', width: '100%' }], rows: 4 }}>
+    <Pane
+      id="decision"
+      title="Decision"
+      operation="Recording the decision"
+      meta={null}
+      skeleton={{ columns: [{ key: 'rail', width: '100%' }], rows: 4 }}
+    >
       <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
         <label style={{ ...T_LABEL, display: 'flex', flexDirection: 'column', gap: 4 }}>
           Written reason — required
@@ -736,12 +939,21 @@ function DecisionRail({
 
         {/* Tier 1 of the error ladder: the inline field error, naming the field. */}
         {reasonError !== null ? (
-          <p role="alert" data-field-error="reason" style={{ ...T_MICRO, color: 'var(--color-state-failed)', margin: 0 }}>
+          <p
+            role="alert"
+            data-field-error="reason"
+            style={{ ...T_MICRO, color: 'var(--color-state-failed)', margin: 0 }}
+          >
             {reasonError}
           </p>
         ) : null}
         {fields.map((field) => (
-          <p key={field.location} role="alert" data-field-error={field.location} style={{ ...T_MICRO, color: 'var(--color-state-failed)', margin: 0 }}>
+          <p
+            key={field.location}
+            role="alert"
+            data-field-error={field.location}
+            style={{ ...T_MICRO, color: 'var(--color-state-failed)', margin: 0 }}
+          >
             {field.location}: {field.message}
           </p>
         ))}
@@ -771,8 +983,8 @@ function DecisionRail({
         {conflict !== null ? (
           <div data-merge-view style={{ ...PANEL_SUNKEN, padding: 10 }}>
             <p style={{ ...T_LABEL, color: 'var(--color-ink)', margin: 0 }}>
-              Another decision was recorded on this case while you were writing: #{String(conflict.current_seq ?? '')} by{' '}
-              {conflict.decided_by ?? 'another analyst'}.
+              Another decision was recorded on this case while you were writing: #{String(conflict.current_seq ?? '')}{' '}
+              by {conflict.decided_by ?? 'another analyst'}.
             </p>
             <p style={{ ...T_MICRO, color: 'var(--color-ink-muted)', marginTop: 4 }}>
               Your text is still in the box. Nothing was written and nothing was overwritten — retry against version{' '}
@@ -788,7 +1000,13 @@ function DecisionRail({
           </p>
         ) : null}
 
-        <MoneyFigure figure={payload.header.economics.exposure} assumptions={assumptions} label="What is at stake" compact showBand={false} />
+        <MoneyFigure
+          figure={payload.header.economics.exposure}
+          assumptions={assumptions}
+          label="What is at stake"
+          compact
+          showBand={false}
+        />
         <p style={{ ...T_MICRO, color: 'var(--color-ink-faint)' }}>
           {count(exposure.minor)} minor {exposure.currency} on this line · {count(payload.decisions.length)} decisions
           recorded · an empty reason is refused here and again by the server, because a decision nobody can explain is
@@ -803,8 +1021,8 @@ function DecisionHistory({ decisions, timeZone }: { decisions: Decision[]; timeZ
   return (
     <>
       <p style={{ ...T_MICRO, color: 'var(--color-ink-faint)', margin: '0 0 8px' }}>
-        Append-only and hash-chained. A reversal is a new row that references the original, so both stay in the timeline:
-        mutating a record is what would destroy the integrity claim.
+        Append-only and hash-chained. A reversal is a new row that references the original, so both stay in the
+        timeline: mutating a record is what would destroy the integrity claim.
       </p>
       {decisions.length === 0 ? (
         <p style={{ ...T_LABEL, color: 'var(--color-ink-muted)' }}>
@@ -815,7 +1033,9 @@ function DecisionHistory({ decisions, timeZone }: { decisions: Decision[]; timeZ
           {decisions.map((decision) => (
             <li key={`${String(decision.seq)}-${decision.hash}`} style={{ padding: '8px 0', ...HAIRLINE_BOTTOM }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-                <strong style={{ ...T_LABEL, fontWeight: 600, textTransform: 'capitalize', color: 'var(--color-ink)' }}>{decision.decision}</strong>
+                <strong style={{ ...T_LABEL, fontWeight: 600, textTransform: 'capitalize', color: 'var(--color-ink)' }}>
+                  {decision.decision}
+                </strong>
                 <span className="u-num" style={{ ...T_MICRO, color: 'var(--color-ink-faint)' }}>
                   #{count(decision.seq)} · {decision.actor} ({decision.role})
                 </span>
@@ -828,20 +1048,36 @@ function DecisionHistory({ decisions, timeZone }: { decisions: Decision[]; timeZ
                   <span style={{ ...T_MICRO, color: 'var(--color-ink-muted)' }}>four-eyes required</span>
                 ) : null}
               </div>
-              <p style={{ ...T_LABEL, color: 'var(--color-ink-muted)', margin: '4px 0', whiteSpace: 'pre-wrap' }}>{decision.reason}</p>
+              <p style={{ ...T_LABEL, color: 'var(--color-ink-muted)', margin: '4px 0', whiteSpace: 'pre-wrap' }}>
+                {decision.reason}
+              </p>
               <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
                 <span title="audit hash" style={{ color: 'var(--color-evidence)' }}>
                   <Icon name="hash-link" size={12} />
                 </span>
-                <code data-hash-chip={decision.hash === 'pending' ? 'pending' : 'recorded'} style={{ ...T_MONO, fontSize: '0.625rem', color: decision.hash === 'pending' ? 'var(--color-ink-faint)' : 'var(--color-ink)', wordBreak: 'break-all' }}>
+                <code
+                  data-hash-chip={decision.hash === 'pending' ? 'pending' : 'recorded'}
+                  style={{
+                    ...T_MONO,
+                    fontSize: '0.625rem',
+                    color: decision.hash === 'pending' ? 'var(--color-ink-faint)' : 'var(--color-ink)',
+                    wordBreak: 'break-all',
+                  }}
+                >
                   {decision.hash === 'pending' ? 'awaiting the server’s chain entry' : decision.hash.slice(0, 24)}
                 </code>
                 {decision.reversible_of !== null ? (
-                  <span style={{ ...T_MICRO, color: 'var(--color-ink-faint)' }}>reverses #{String(decision.reversible_of)}</span>
+                  <span style={{ ...T_MICRO, color: 'var(--color-ink-faint)' }}>
+                    reverses #{String(decision.reversible_of)}
+                  </span>
                 ) : null}
               </div>
               <div style={{ marginTop: 4 }}>
-                <Timestamp iso={decision.pending === true ? null : decision.recorded_at} timeZone={timeZone} sense="recorded" />
+                <Timestamp
+                  iso={decision.pending === true ? null : decision.recorded_at}
+                  timeZone={timeZone}
+                  sense="recorded"
+                />
               </div>
             </li>
           ))}

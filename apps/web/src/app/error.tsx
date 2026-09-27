@@ -12,12 +12,15 @@
 
 import type { ReactElement } from 'react';
 
-import { ErrorPane } from '@/design/primitives/ErrorPane';
 import { RunIdChip } from '@/components/ui/provenance';
-import { failureDetail, failureRunId, failureTitle, toApiFailure } from '@/lib/api/problem';
 import { T_LABEL } from '@/components/ui/sx';
+import { ErrorPane } from '@/design/primitives/ErrorPane';
+import { failureDetail, failureRunId, failureTitle, toApiFailure } from '@/lib/api/problem';
 
-export default function RouteError({ error, reset }: { error: Error & { digest?: string }; reset: () => void }): ReactElement {
+export default function RouteError({
+  error,
+  reset,
+}: { error: Error & { digest?: string }; reset: () => void }): ReactElement {
   const failure = toApiFailure(error);
   return (
     <div style={{ padding: 'var(--spacing-pane-gap)', display: 'flex', flexDirection: 'column', gap: 10 }}>
@@ -26,7 +29,7 @@ export default function RouteError({ error, reset }: { error: Error & { digest?:
         operation="This screen"
         error={{
           title: failure === null ? error.name || 'The route failed to render' : failureTitle(failure),
-          detail: failure === null ? error.message : failureDetail(failure) ?? undefined,
+          detail: failure === null ? error.message : (failureDetail(failure) ?? undefined),
           run_id: failure === null ? (error.digest ?? undefined) : (failureRunId(failure) ?? undefined),
         }}
         onRetry={reset}

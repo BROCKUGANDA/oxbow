@@ -8,10 +8,10 @@
  */
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { begin, isStale } from '@/lib/api/client';
 import { StaleRow } from '@/app/dev/states/gallery-rows';
-import { cleanupAll, flush, render, text } from '@/test/render';
+import { begin, isStale } from '@/lib/api/client';
 import { StaleResponseError } from '@/lib/api/hooks';
+import { cleanupAll, flush, render, text } from '@/test/render';
 
 afterEach(cleanupAll);
 

@@ -21,26 +21,26 @@
 
 'use client';
 
-import { useCallback, useEffect, useMemo, useRef, type ReactElement } from 'react';
 import cytoscape from 'cytoscape';
 import type { ElementDefinition } from 'cytoscape';
 import fcose from 'cytoscape-fcose';
+import { type ReactElement, useCallback, useEffect, useMemo, useRef } from 'react';
 
+import { BandBadge } from '@/components/ui/BandBadge';
+import { T_MICRO, T_MONO } from '@/components/ui/sx';
 import {
   BAND_COLOURS,
   EVIDENCE,
   INK,
   INK_FAINT,
   INK_MUTED,
-  tokens,
   TYPOGRAPHY_COLOURS,
   bandMeterSegments,
+  tokens,
 } from '@/design/tokens';
-import { BandBadge } from '@/components/ui/BandBadge';
-import { T_MICRO, T_MONO } from '@/components/ui/sx';
-import { count } from '@/lib/format/money';
-import { canvasColour, resolveFontStack } from '@/lib/colour';
 import type { GraphEdge, GraphNode, Typology } from '@/lib/api/contract';
+import { canvasColour, resolveFontStack } from '@/lib/colour';
+import { count } from '@/lib/format/money';
 
 cytoscape.use(fcose);
 
@@ -177,7 +177,10 @@ function styles(monoStack: string): cytoscape.StylesheetJson {
         'line-style': 'solid',
       } as cytoscape.Css.Edge,
     },
-    { selector: 'edge[reversal = "yes"]', style: { 'line-style': 'dotted', 'target-arrow-shape': 'none' } as cytoscape.Css.Edge },
+    {
+      selector: 'edge[reversal = "yes"]',
+      style: { 'line-style': 'dotted', 'target-arrow-shape': 'none' } as cytoscape.Css.Edge,
+    },
     {
       selector: '.highlight',
       style: {
@@ -324,25 +327,34 @@ export function GraphCanvas({ nodes, edges, overlays, selected, onSelect, trunca
     layout.run();
   }, [nodes, edges]);
 
-  /* Overlays and selection are style passes only — never a re-layout. */
+  /* Overlays and selection are style passes only — never a re-layout. The element set is rebuilt
+     by the layout effect above and Cytoscape classes live on the elements, so a new nodes/edges
+     identity is precisely what makes this style pass necessary — the body reads neither name,
+     which is what the exhaustive-deps rule can see. */
+  // biome-ignore lint/correctness/useExhaustiveDependencies: nodes/edges are the re-style trigger
   useEffect(() => {
     const cy = instanceRef.current;
     if (cy === null) return;
     cy.batch(() => {
       cy.elements().removeClass('faded highlight');
-      const focus = overlays.length === 0 ? null : cy.nodes().filter((node) => {
-        const data = node.data();
-        if (overlays.includes('cycles')) return Boolean(data.cycle);
-        if (overlays.includes('flagged')) return Boolean(data.flagged);
-        if (overlays.includes('fans')) return Number(data.degree) > 8;
-        return false;
-      });
+      const focus =
+        overlays.length === 0
+          ? null
+          : cy.nodes().filter((node) => {
+              const data = node.data();
+              if (overlays.includes('cycles')) return Boolean(data.cycle);
+              if (overlays.includes('flagged')) return Boolean(data.flagged);
+              if (overlays.includes('fans')) return Number(data.degree) > 8;
+              return false;
+            });
       if (focus !== null && focus.length > 0) {
         focus.addClass('highlight');
         cy.elements().not(focus).not('edge').addClass('faded');
       }
       if (overlays.includes('velocity')) {
-        cy.edges().filter((edge) => Boolean(edge.data('velocity'))).addClass('highlight');
+        cy.edges()
+          .filter((edge) => Boolean(edge.data('velocity')))
+          .addClass('highlight');
       }
       if (selected !== null) {
         const node = cy.getElementById(selected);
@@ -364,8 +376,8 @@ export function GraphCanvas({ nodes, edges, overlays, selected, onSelect, trunca
       [
         `Directed transaction graph: ${count(nodes.length)} accounts and ${count(edges.length)} edges.`,
         truncated
-          ? `The server capped this subgraph, so the drawn network is smaller than the real one; collapsed communities are labelled with their true size.`
-          : `Not capped — every account the query returned is drawn.`,
+          ? 'The server capped this subgraph, so the drawn network is smaller than the real one; collapsed communities are labelled with their true size.'
+          : 'Not capped — every account the query returned is drawn.',
         `Overlays active: ${overlays.length === 0 ? 'none' : overlays.join(', ')}.`,
         selected === null ? 'No node selected.' : `Selected account ${selected}.`,
       ].join(' '),
@@ -375,7 +387,10 @@ export function GraphCanvas({ nodes, edges, overlays, selected, onSelect, trunca
   /* The keyboard path into the graph. Order is exposure-descending, which is the same
      priority order the queue uses, so the analyst reaches the consequential accounts
      first rather than meeting an arbitrary traversal order. */
-  const outline = useMemo(() => nodes.slice().sort((a, b) => (b.exposure?.minor ?? 0) - (a.exposure?.minor ?? 0)), [nodes]);
+  const outline = useMemo(
+    () => nodes.slice().sort((a, b) => (b.exposure?.minor ?? 0) - (a.exposure?.minor ?? 0)),
+    [nodes],
+  );
 
   const step = useCallback(
     (delta: number): void => {
@@ -396,7 +411,13 @@ export function GraphCanvas({ nodes, edges, overlays, selected, onSelect, trunca
         data-truncated={truncated}
         role="img"
         aria-label={canvasSummary}
-        style={{ position: 'relative', flex: 1, minHeight: 0, background: 'var(--color-canvas-sunken)', fontFamily: 'var(--font-mono)' }}
+        style={{
+          position: 'relative',
+          flex: 1,
+          minHeight: 0,
+          background: 'var(--color-canvas-sunken)',
+          fontFamily: 'var(--font-mono)',
+        }}
       />
       {/* The frame counter the performance test reads; written by a rAF loop that is
           started and stopped by the test itself so it costs nothing when idle. */}
@@ -404,11 +425,15 @@ export function GraphCanvas({ nodes, edges, overlays, selected, onSelect, trunca
 
       <div
         data-graph-outline
-        style={{ borderTop: '1px solid var(--color-hairline)', background: 'var(--color-canvas-raised)', padding: '6px 10px' }}
+        style={{
+          borderTop: '1px solid var(--color-hairline)',
+          background: 'var(--color-canvas-raised)',
+          padding: '6px 10px',
+        }}
       >
         <p style={{ ...T_MICRO, margin: 0, color: 'var(--color-ink-faint)' }}>
-          Graph outline — arrow keys move through the {count(outline.length)} drawn accounts, highest exposure
-          first. The canvas itself is a pointer surface; this list is the keyboard and screen-reader route to the same
+          Graph outline — arrow keys move through the {count(outline.length)} drawn accounts, highest exposure first.
+          The canvas itself is a pointer surface; this list is the keyboard and screen-reader route to the same
           selection.
         </p>
         <ul
@@ -435,6 +460,7 @@ export function GraphCanvas({ nodes, edges, overlays, selected, onSelect, trunca
               key={node.key}
               id={`graph-option-${node.key}`}
               role="option"
+              tabIndex={-1}
               aria-selected={node.key === selected}
               onClick={() => onSelect(node.key)}
               style={{
@@ -470,8 +496,8 @@ export function GraphCanvas({ nodes, edges, overlays, selected, onSelect, trunca
         </ul>
         {outline.length > VISIBLE_OUTLINE ? (
           <p role="status" style={{ ...T_MICRO, margin: '4px 0 0', color: 'var(--color-ink-faint)' }}>
-            The outline lists the first {count(VISIBLE_OUTLINE)} of {count(outline.length)} accounts by
-            exposure; the count in the pane header is the whole drawn set, not the listed set.
+            The outline lists the first {count(VISIBLE_OUTLINE)} of {count(outline.length)} accounts by exposure; the
+            count in the pane header is the whole drawn set, not the listed set.
           </p>
         ) : null}
       </div>

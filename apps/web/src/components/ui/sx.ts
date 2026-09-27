@@ -113,7 +113,8 @@ export const CONTROL: CSSProperties = {
   borderRadius: 'var(--radius-control)',
   padding: '4px 10px',
   cursor: 'pointer',
-  transition: `background var(--duration-fast) var(--ease-out-quint), border-color var(--duration-fast) var(--ease-out-quint)`,
+  transition:
+    'background var(--duration-fast) var(--ease-out-quint), border-color var(--duration-fast) var(--ease-out-quint)',
 };
 
 export const CONTROL_PRIMARY: CSSProperties = {

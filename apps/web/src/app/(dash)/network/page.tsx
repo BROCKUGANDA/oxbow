@@ -23,22 +23,22 @@
 
 import dynamic from 'next/dynamic';
 import { useSearchParams } from 'next/navigation';
-import { Suspense, useCallback, useMemo, useState, type ReactElement } from 'react';
+import { type ReactElement, Suspense, useCallback, useMemo, useState } from 'react';
 
-import { EmptyState } from '@/design/primitives/EmptyState';
-import { Shimmer } from '@/design/primitives/Shimmer';
-import { Icon } from '@/design/icons/Icon';
 import { Pane } from '@/components/Pane';
+import { TYPOLOGY_META, glyphFor } from '@/components/typology';
 import { BandBadge } from '@/components/ui/BandBadge';
 import { AccountChip, Assumptions } from '@/components/ui/provenance';
-import { TYPOLOGY_META, glyphFor } from '@/components/typology';
-import { ROUTES, type GraphEdge, type GraphNode, type Subgraph } from '@/lib/api/contract';
+import { PANEL_SUNKEN, T_LABEL, T_MICRO, T_MONO } from '@/components/ui/sx';
+import { Icon } from '@/design/icons/Icon';
+import { EmptyState } from '@/design/primitives/EmptyState';
+import { Shimmer } from '@/design/primitives/Shimmer';
+import { type GraphEdge, type GraphNode, ROUTES, type Subgraph } from '@/lib/api/contract';
 import { useListResource, useRuntime } from '@/lib/api/hooks';
 import { isRunNotFound } from '@/lib/api/problem';
 import { PIPELINE_COMMAND, RUNTIME_ESTIMATE_FALLBACK } from '@/lib/copy';
 import { compactFromMinor, count } from '@/lib/format/money';
 import { formatDate } from '@/lib/format/time';
-import { PANEL_SUNKEN, T_LABEL, T_MICRO, T_MONO } from '@/components/ui/sx';
 
 /** The explorer canvas. `ssr: false` — see the note above. */
 const GraphCanvas = dynamic(() => import('./canvas').then((module) => module.GraphCanvas), {
@@ -46,7 +46,12 @@ const GraphCanvas = dynamic(() => import('./canvas').then((module) => module.Gra
   loading: () => (
     <div
       aria-hidden="true"
-      style={{ height: '100%', minHeight: 420, background: 'var(--color-canvas-sunken)', borderRadius: 'var(--radius-cell)' }}
+      style={{
+        height: '100%',
+        minHeight: 420,
+        background: 'var(--color-canvas-sunken)',
+        borderRadius: 'var(--radius-cell)',
+      }}
     />
   ),
 });
@@ -62,7 +67,11 @@ const CANVAS_HEIGHT = 'min(62vh, 640px)';
  *  mirrored: it is the number the "re-run wider" actions name, so it is one constant. */
 const MAX_HOPS = 4;
 
-const OVERLAYS: readonly { id: Overlay; label: string; glyph: 'cycle' | 'velocity-spike' | 'fan-in' | 'chain' | 'hash-link' }[] = [
+const OVERLAYS: readonly {
+  id: Overlay;
+  label: string;
+  glyph: 'cycle' | 'velocity-spike' | 'fan-in' | 'chain' | 'hash-link';
+}[] = [
   { id: 'cycles', label: 'cycles', glyph: 'cycle' },
   { id: 'velocity', label: 'high-velocity hops', glyph: 'velocity-spike' },
   { id: 'fans', label: 'fan stars', glyph: 'fan-in' },
@@ -103,7 +112,12 @@ function NetworkSkeleton(): ReactElement {
       }}
     >
       <div style={{ display: 'flex', flexDirection: 'column', gap: 8, minWidth: 0 }}>
-        <Pane id="graph" title="Network" operation="Loading the subgraph" skeleton={{ columns: [{ key: 'canvas', width: '100%' }], rows: 1 }}>
+        <Pane
+          id="graph"
+          title="Network"
+          operation="Loading the subgraph"
+          skeleton={{ columns: [{ key: 'canvas', width: '100%' }], rows: 1 }}
+        >
           <div style={{ height: CANVAS_HEIGHT }} aria-hidden="true">
             <Shimmer width="100%" height="100%" radius="var(--radius-cell)" />
           </div>
@@ -242,7 +256,9 @@ function NetworkExplorer(): ReactElement {
             </div>
           ) : (
             <p style={{ ...T_MICRO, color: 'var(--color-ink-faint)' }}>
-              {graph.failure === null ? 'Reading the subgraph the run built for this account.' : 'The explorer pane failed; the rest of the page is unaffected.'}
+              {graph.failure === null
+                ? 'Reading the subgraph the run built for this account.'
+                : 'The explorer pane failed; the rest of the page is unaffected.'}
             </p>
           )}
         </Pane>
@@ -266,7 +282,15 @@ function NetworkExplorer(): ReactElement {
   const noCyclesSurvived = !empty && cyclesRequested && data.overlays.cycles === 0;
 
   return (
-    <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) 320px', gap: 'var(--spacing-pane-gap)', padding: 'var(--spacing-pane-gap)', alignItems: 'start' }}>
+    <div
+      style={{
+        display: 'grid',
+        gridTemplateColumns: 'minmax(0, 1fr) 320px',
+        gap: 'var(--spacing-pane-gap)',
+        padding: 'var(--spacing-pane-gap)',
+        alignItems: 'start',
+      }}
+    >
       <div style={{ display: 'flex', flexDirection: 'column', gap: 8, minWidth: 0 }}>
         <Pane
           id="graph"
@@ -339,8 +363,20 @@ function NetworkExplorer(): ReactElement {
 
         {/* Scrubber: real bucket boundaries from the response, so the replay is the
             server's edge-formation order and not an invented animation. */}
-        <div data-print-hide style={{ ...PANEL_SUNKEN, padding: '8px 12px', display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-          <span style={{ ...T_MICRO, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--color-ink-faint)' }}>
+        <div
+          data-print-hide
+          style={{
+            ...PANEL_SUNKEN,
+            padding: '8px 12px',
+            display: 'flex',
+            alignItems: 'center',
+            gap: 10,
+            flexWrap: 'wrap',
+          }}
+        >
+          <span
+            style={{ ...T_MICRO, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--color-ink-faint)' }}
+          >
             time scrubber
           </span>
           <input
@@ -348,7 +384,9 @@ function NetworkExplorer(): ReactElement {
             min={0}
             max={buckets.length}
             value={frame === null ? buckets.length : frame}
-            onChange={(event) => setFrame(Number(event.target.value) === buckets.length ? null : Number(event.target.value))}
+            onChange={(event) =>
+              setFrame(Number(event.target.value) === buckets.length ? null : Number(event.target.value))
+            }
             aria-label="Replay edge formation up to a point in the window"
             style={{ flex: 1, minWidth: 160, accentColor: 'var(--color-evidence)' }}
           />
@@ -392,7 +430,13 @@ function NetworkExplorer(): ReactElement {
 
       {/* ------------------------------------------------------- side rail */}
       <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--spacing-pane-gap)' }}>
-        <Pane id="controls" title="Subgraph query" operation="Adjusting the subgraph" meta={graph.meta} skeleton={{ columns: [{ key: 'c', width: '100%' }], rows: 3 }}>
+        <Pane
+          id="controls"
+          title="Subgraph query"
+          operation="Adjusting the subgraph"
+          meta={graph.meta}
+          skeleton={{ columns: [{ key: 'c', width: '100%' }], rows: 3 }}
+        >
           <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
             <label style={{ ...T_LABEL, display: 'flex', flexDirection: 'column', gap: 4 }}>
               hops · {String(hops)}
@@ -412,7 +456,9 @@ function NetworkExplorer(): ReactElement {
                 min={0}
                 max={100}
                 value={Math.min(100, Math.round((minAmount / 100_000_000) * 100))}
-                onChange={(event) => publish({ min_minor: String(Math.round((Number(event.target.value) / 100) * 100_000_000)) })}
+                onChange={(event) =>
+                  publish({ min_minor: String(Math.round((Number(event.target.value) / 100) * 100_000_000)) })
+                }
                 style={{ accentColor: 'var(--color-evidence)' }}
               />
             </label>
@@ -424,23 +470,48 @@ function NetworkExplorer(): ReactElement {
         </Pane>
 
         {data.truncated ? (
-          <Pane id="cap" title="Cap reached" operation="Reporting the subgraph cap" meta={graph.meta} skeleton={{ columns: [{ key: 'c', width: '100%' }], rows: 2 }}>
+          <Pane
+            id="cap"
+            title="Cap reached"
+            operation="Reporting the subgraph cap"
+            meta={graph.meta}
+            skeleton={{ columns: [{ key: 'c', width: '100%' }], rows: 2 }}
+          >
             <p style={{ ...T_LABEL, color: 'var(--color-ink-muted)', maxWidth: '40ch' }}>
               The server capped this subgraph at {count(data.cap)} nodes. {count(data.collapsed_communities.length)}{' '}
               communities are drawn as meta-nodes, each labelled with its true size:
             </p>
             <ul style={{ listStyle: 'none', margin: '8px 0 0', padding: 0 }}>
               {data.collapsed_communities.map((entry) => (
-                <li key={entry.community_id} style={{ display: 'flex', justifyContent: 'space-between', ...HAIRLINE_BOTTOM_ROW, padding: '3px 0' }}>
-                  <span style={{ ...T_MONO, fontSize: 'var(--text-micro)', color: 'var(--color-ink)' }}>community {String(entry.community_id)}</span>
-                  <span className="u-num" style={{ ...T_LABEL, color: 'var(--color-ink-muted)' }}>{count(entry.true_size)} accounts</span>
+                <li
+                  key={entry.community_id}
+                  style={{ display: 'flex', justifyContent: 'space-between', ...HAIRLINE_BOTTOM_ROW, padding: '3px 0' }}
+                >
+                  <span style={{ ...T_MONO, fontSize: 'var(--text-micro)', color: 'var(--color-ink)' }}>
+                    community {String(entry.community_id)}
+                  </span>
+                  <span className="u-num" style={{ ...T_LABEL, color: 'var(--color-ink-muted)' }}>
+                    {count(entry.true_size)} accounts
+                  </span>
                 </li>
               ))}
             </ul>
           </Pane>
         ) : null}
 
-        <Pane id="overlay-counts" title="What the overlays select" operation="Counting overlay members" meta={graph.meta} skeleton={{ columns: [{ key: 'k', width: '70%' }, { key: 'v', width: '30%', align: 'end' }], rows: 5 }}>
+        <Pane
+          id="overlay-counts"
+          title="What the overlays select"
+          operation="Counting overlay members"
+          meta={graph.meta}
+          skeleton={{
+            columns: [
+              { key: 'k', width: '70%' },
+              { key: 'v', width: '30%', align: 'end' },
+            ],
+            rows: 5,
+          }}
+        >
           <OverlayCounts subgraph={data} />
         </Pane>
 
@@ -477,16 +548,29 @@ function OverlayCounts({ subgraph }: { subgraph: Subgraph }): ReactElement {
   return (
     <ul style={{ listStyle: 'none', margin: 0, padding: 0 }}>
       {rows.map((row) => (
-        <li key={row.label} style={{ display: 'flex', justifyContent: 'space-between', padding: '3px 0', ...HAIRLINE_BOTTOM_ROW }}>
+        <li
+          key={row.label}
+          style={{ display: 'flex', justifyContent: 'space-between', padding: '3px 0', ...HAIRLINE_BOTTOM_ROW }}
+        >
           <span style={{ ...T_LABEL, color: 'var(--color-ink-muted)' }}>{row.label}</span>
-          <span className="u-num" style={{ ...T_LABEL, color: 'var(--color-ink)' }}>{count(row.value)}</span>
+          <span className="u-num" style={{ ...T_LABEL, color: 'var(--color-ink)' }}>
+            {count(row.value)}
+          </span>
         </li>
       ))}
     </ul>
   );
 }
 
-function NodeDetail({ node, edges, assumptions }: { node: GraphNode | null; edges: GraphEdge[]; assumptions: readonly { key: string; value: string | number; source: string; note: string | null }[] }): ReactElement {
+function NodeDetail({
+  node,
+  edges,
+  assumptions,
+}: {
+  node: GraphNode | null;
+  edges: GraphEdge[];
+  assumptions: readonly { key: string; value: string | number; source: string; note: string | null }[];
+}): ReactElement {
   if (node === null) return <span />;
   /* One currency or none: summing minor units across two currencies would be a number
      about nothing, so the total is only formed when every drawn edge prices in the same
@@ -496,11 +580,24 @@ function NodeDetail({ node, edges, assumptions }: { node: GraphNode | null; edge
   const total =
     first === null || !shared
       ? null
-      : { minor: edges.reduce((sum, edge) => sum + edge.total.minor, 0), decimals: first.decimals, currency: first.currency };
+      : {
+          minor: edges.reduce((sum, edge) => sum + edge.total.minor, 0),
+          decimals: first.decimals,
+          currency: first.currency,
+        };
   return (
-    <Pane id="node" title="Selected node" operation="Reading the selected node" meta={null} skeleton={{ columns: [{ key: 'n', width: '100%' }], rows: 3 }}>
+    <Pane
+      id="node"
+      title="Selected node"
+      operation="Reading the selected node"
+      meta={null}
+      skeleton={{ columns: [{ key: 'n', width: '100%' }], rows: 3 }}
+    >
       <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-        <AccountChip accountKey={node.key} href={node.node_type === 'meta' ? `/network?account=${node.key}` : `/cases/${node.key}`} />
+        <AccountChip
+          accountKey={node.key}
+          href={node.node_type === 'meta' ? `/network?account=${node.key}` : `/cases/${node.key}`}
+        />
         <p style={{ ...T_MICRO, color: 'var(--color-ink-muted)' }}>
           {node.node_type} · community {String(node.community_id)} · degree {count(node.degree)} ·{' '}
           {node.hops === 0 ? 'the root' : `${String(node.hops)} hop${node.hops === 1 ? '' : 's'} out`}
@@ -512,11 +609,15 @@ function NodeDetail({ node, edges, assumptions }: { node: GraphNode | null; edge
         ) : null}
         {node.node_type === 'rail' ? (
           <p style={{ ...T_MICRO, color: 'var(--color-state-running)' }}>
-            typed as a rail by the supernode guard: excluded from fan-in and fan-out scoring, shown because it is part of
-            the topology
+            typed as a rail by the supernode guard: excluded from fan-in and fan-out scoring, shown because it is part
+            of the topology
           </p>
         ) : null}
-        {node.band !== null ? <p style={{ ...T_LABEL }}>band <BandBadge band={node.band} describe={false} /></p> : null}
+        {node.band !== null ? (
+          <p style={{ ...T_LABEL }}>
+            band <BandBadge band={node.band} describe={false} />
+          </p>
+        ) : null}
         {node.exposure !== null ? (
           <p style={{ ...T_LABEL, color: 'var(--color-ink)' }}>
             exposure {compactFromMinor(node.exposure.minor, node.exposure.decimals)} {node.exposure.currency}
@@ -535,7 +636,13 @@ function NodeDetail({ node, edges, assumptions }: { node: GraphNode | null; edge
         {edges.some((edge) => edge.typology !== null) ? (
           <p style={{ ...T_MICRO, color: 'var(--color-ink-muted)' }}>
             typologies on these edges:{' '}
-            {[...new Set(edges.map((edge) => edge.typology).filter((entry): entry is NonNullable<typeof entry> => entry !== null))].map((typology) => (
+            {[
+              ...new Set(
+                edges
+                  .map((edge) => edge.typology)
+                  .filter((entry): entry is NonNullable<typeof entry> => entry !== null),
+              ),
+            ].map((typology) => (
               <span key={typology} title={TYPOLOGY_META[typology].name}>
                 {' '}
                 <Icon name={glyphFor(typology)} size={12} /> {TYPOLOGY_META[typology].code}
@@ -547,4 +654,3 @@ function NodeDetail({ node, edges, assumptions }: { node: GraphNode | null; edge
     </Pane>
   );
 }
-

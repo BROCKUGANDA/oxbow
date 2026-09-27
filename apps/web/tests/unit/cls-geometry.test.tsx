@@ -64,11 +64,15 @@ describe('matched-geometry skeletons', () => {
   });
 
   it('with a header, reserves header + rows — the full column height, announced', () => {
-    const view = render(<Skeleton label="Loading the transaction table" rows={6} rowHeight={36} columns={QUEUE_COLUMNS} />);
+    const view = render(
+      <Skeleton label="Loading the transaction table" rows={6} rowHeight={36} columns={QUEUE_COLUMNS} />,
+    );
     const status = view.container.querySelector('[role="status"]');
     expect(status).not.toBeNull();
     expect(status?.getAttribute('aria-busy')).toBe('true');
-    const heights = mustFindAll<HTMLDivElement>(view.container, 'div[aria-hidden="true"]').map((row) => row.style.height);
+    const heights = mustFindAll<HTMLDivElement>(view.container, 'div[aria-hidden="true"]').map(
+      (row) => row.style.height,
+    );
     expect(heights[0]).toBe('32px'); // the default header height, part of the reserved box
     expect(heights.filter((h) => h === '36px')).toHaveLength(6);
     view.cleanup();
@@ -76,15 +80,18 @@ describe('matched-geometry skeletons', () => {
 
   it('scales to the stress page the queue asks for (1,500 rows at matched height)', () => {
     const view = render(
-      <Skeleton label="Loading a 1,500-row queue" rows={1500} rowHeight={172} showHeader={false} columns={QUEUE_COLUMNS} />,
+      <Skeleton
+        label="Loading a 1,500-row queue"
+        rows={1500}
+        rowHeight={172}
+        showHeader={false}
+        columns={QUEUE_COLUMNS}
+      />,
     );
     // Rows are the aria-hidden children of the status root; the cells inside them are
     // aria-hidden too, so the loose selector this test first used counted 9,000
     // elements for a 1,500-row skeleton and "failed" against a correct component.
-    const rows = mustFindAll<HTMLDivElement>(
-      view.container,
-      'div[role="status"] > div[aria-hidden="true"]',
-    );
+    const rows = mustFindAll<HTMLDivElement>(view.container, 'div[role="status"] > div[aria-hidden="true"]');
     expect(rows).toHaveLength(1500);
     // The reserved height is linear in the row count: the virtualiser's totalSize is
     // count × estimateSize, so the scroll box never re-sizes on resolution.
@@ -105,7 +112,14 @@ describe('pane reserved geometry across all three states', () => {
 
   it('pending, resolved and failed occupy the same reserved box', () => {
     const pending = render(
-      <Pane id="scorecard-strip" title="Strip" operation="Loading the strip" skeleton={skeleton} reserveHeight={320} meta={null}>
+      <Pane
+        id="scorecard-strip"
+        title="Strip"
+        operation="Loading the strip"
+        skeleton={skeleton}
+        reserveHeight={320}
+        meta={null}
+      >
         <span />
       </Pane>,
     );
@@ -135,7 +149,14 @@ describe('pane reserved geometry across all three states', () => {
         operation="Loading the strip"
         skeleton={skeleton}
         reserveHeight={320}
-        failure={{ kind: 'network', class: 'network', message: 'socket hang up', status: null, run_id: null, retry_after_ms: null }}
+        failure={{
+          kind: 'network',
+          class: 'network',
+          message: 'socket hang up',
+          status: null,
+          run_id: null,
+          retry_after_ms: null,
+        }}
         onRetry={() => undefined}
       >
         <span />

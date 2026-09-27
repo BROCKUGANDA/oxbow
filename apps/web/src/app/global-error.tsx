@@ -14,7 +14,10 @@
 
 import type { ReactElement } from 'react';
 
-export default function GlobalError({ error, reset }: { error: Error & { digest?: string }; reset: () => void }): ReactElement {
+export default function GlobalError({
+  error,
+  reset,
+}: { error: Error & { digest?: string }; reset: () => void }): ReactElement {
   return (
     <html lang="en">
       <body

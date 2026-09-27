@@ -1,5 +1,5 @@
-@import 'tailwindcss';
-@import '../design/tokens.css';
+@import "tailwindcss";
+@import "../design/tokens.css";
 
 /* =============================================================================
    Application base. The token file owns every value; this file owns only the
@@ -64,6 +64,16 @@
   footer[data-print-block] {
     min-height: 140px;
   }
+
+  /* Same doctrine, one element down. The footer prints `meta.disclaimer` when a payload
+     carries it and the standing constant until one does, and the two are not the same
+     number of lines at this column width — the constant wraps to five (70 px), a
+     payload's copy to four (56 px). The swap is a resolution like any other, so the
+     paragraph is reserved at the taller of the two and the scenario note under it cannot
+     be pulled up 14 px when the response lands. */
+  footer [data-disclaimer] {
+    min-height: 70px;
+  }
 }
 
 /* ------------------------------------------------------------- motion -----
@@ -87,15 +97,15 @@
 /* The gallery's forced-reduced-motion path: /dev/states?motion=reduced sets this
    attribute so the guarantee is demonstrable without changing the OS setting, which
    is the difference between a tested path and an assertion. */
-html[data-motion='reduced'] *,
-html[data-motion='reduced'] *::before,
-html[data-motion='reduced'] *::after {
+html[data-motion="reduced"] *,
+html[data-motion="reduced"] *::before,
+html[data-motion="reduced"] *::after {
   animation-duration: 0.001ms !important;
   animation-iteration-count: 1 !important;
   transition-duration: 0.001ms !important;
 }
 
-html[data-motion='reduced'] [data-shimmer-sweep] {
+html[data-motion="reduced"] [data-shimmer-sweep] {
   display: none;
 }
 
@@ -128,19 +138,19 @@ html[data-motion='reduced'] [data-shimmer-sweep] {
 
   /* Bands print greyscale-dark, ordered, so A to E remain distinguishable after the
      colour channel is gone. The letter and the meter stay because they are markup. */
-  [data-band='A'] {
+  [data-band="A"] {
     color: oklch(0.32 0 0) !important;
   }
-  [data-band='B'] {
+  [data-band="B"] {
     color: oklch(0.4 0 0) !important;
   }
-  [data-band='C'] {
+  [data-band="C"] {
     color: oklch(0.48 0 0) !important;
   }
-  [data-band='D'] {
+  [data-band="D"] {
     color: oklch(0.28 0 0) !important;
   }
-  [data-band='E'] {
+  [data-band="E"] {
     color: oklch(0.14 0 0) !important;
   }
 
@@ -154,8 +164,8 @@ html[data-motion='reduced'] [data-shimmer-sweep] {
     color: oklch(0.25 0 0) !important;
   }
 
-  a[href^='/']::after {
-    content: ' (' attr(href) ')';
+  a[href^="/"]::after {
+    content: " (" attr(href) ")";
     font-family: var(--font-mono);
     font-size: 8pt;
   }
@@ -167,6 +177,17 @@ html[data-motion='reduced'] [data-shimmer-sweep] {
 .u-scroll {
   overflow-y: auto;
   overscroll-behavior: contain;
+}
+
+/* The same, sideways. One route needs it — the queue's facet rail, whose chips are
+   server-determined and so must scroll rather than wrap into a third line and push the
+   list down. Same thin hairline chrome as the vertical case, so the two rails read as
+   one system. */
+.u-scroll-x {
+  overflow-x: auto;
+  overflow-y: hidden;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
 }
 
 .u-grid-2 {

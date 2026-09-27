@@ -22,7 +22,7 @@
      id is unreportable, which is the same defect as a progress bar that lies.
    ============================================================================= */
 
-import { array, boolean, integer, nullable, number, object, string, type Decoder } from '../codec';
+import { type Decoder, array, boolean, integer, nullable, number, object, string } from '../codec';
 
 /** A JSON scalar, which is what `ProblemFieldError.value` is on the server. */
 export const scalarOrNull: Decoder<string | number | boolean | null> = {
@@ -113,9 +113,7 @@ export const ProblemDetailDecoder: Decoder<ProblemDetail> = {
     const hasConflict = raw.current_version !== undefined && raw.current_version !== null;
     if (!hasConflict) return { ok: true, value: { ...parsed.value, status: known, conflict: null } };
     const conflict = VersionConflictDecoder.decode(raw, path);
-    return conflict.ok
-      ? { ok: true, value: { ...parsed.value, status: known, conflict: conflict.value } }
-      : conflict;
+    return conflict.ok ? { ok: true, value: { ...parsed.value, status: known, conflict: conflict.value } } : conflict;
   },
 };
 
@@ -245,4 +243,3 @@ export class ApiError extends Error {
 export function toApiFailure(error: unknown): ApiFailure | null {
   return error instanceof ApiError ? error.failure : null;
 }
-

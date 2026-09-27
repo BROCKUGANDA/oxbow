@@ -30,7 +30,12 @@ function propsCatalogue() {
       />
     ),
     'no-run': (
-      <EmptyState kind="no-run" command={PIPELINE_COMMAND} expectedRuntime={RUNTIME_ESTIMATE_FALLBACK} corpus="IBM-AML HI-Small and PaySim" />
+      <EmptyState
+        kind="no-run"
+        command={PIPELINE_COMMAND}
+        expectedRuntime={RUNTIME_ESTIMATE_FALLBACK}
+        corpus="IBM-AML HI-Small and PaySim"
+      />
     ),
     'window-empty': (
       <EmptyState

@@ -14,8 +14,8 @@
    the contract tier of the error ladder is the one nobody can otherwise reach.
    ============================================================================= */
 
-import type { TransportRequest, TransportResponse } from './transport';
 import { send as fixtureSend } from '../../fixtures/transport.fixture';
+import type { TransportRequest, TransportResponse } from './transport';
 
 function problem(
   status: number,

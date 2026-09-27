@@ -1,11 +1,11 @@
+import fs from 'node:fs';
+import path from 'node:path';
 /**
  * §14 P8 gate, second clause: axe reports zero critical violations, on every route,
  * run from the axe-core already vendored in node_modules — injected into the live
  * page, not a mocked audit.
  */
-import { expect, test, type Page } from '@playwright/test';
-import fs from 'node:fs';
-import path from 'node:path';
+import { type Page, expect, test } from '@playwright/test';
 
 const ROUTES = [
   '/',

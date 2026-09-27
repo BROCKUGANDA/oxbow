@@ -2,7 +2,15 @@
   "$schema": "https://json.schemastore.org/biome",
   "organizeImports": { "enabled": true, "ignore": ["node_modules", ".next", "out"] },
   "files": {
-    "ignore": ["node_modules", ".next", "out", "playwright-report", "test-results", "src/design/tokens.ts", "src/design/icons/sprite.svg"],
+    "ignore": [
+      "node_modules",
+      ".next",
+      "out",
+      "playwright-report",
+      "test-results",
+      "src/design/tokens.ts",
+      "src/design/icons/sprite.svg"
+    ],
     "maxSize": 4194304
   },
   "formatter": {
@@ -39,6 +47,7 @@
         "useButtonType": "error",
         "noSvgWithoutTitle": "off",
         "useSemanticElements": "off",
+        "noNoninteractiveElementToInteractiveRole": "off",
         "useMediaCaption": "error"
       },
       "correctness": {
@@ -52,5 +61,15 @@
       },
       "security": { "noDangerouslySetInnerHtml": "error" }
     }
-  }
+  },
+  "overrides": [
+    {
+      "include": ["**/design/icons/build.mjs"],
+      "linter": {
+        "rules": {
+          "style": { "noUnusedTemplateLiteral": "off", "useTemplate": "off" }
+        }
+      }
+    }
+  ]
 }

@@ -18,8 +18,8 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { Shimmer } from '@/design/primitives/Shimmer';
 import { StatesGallery } from '@/app/dev/states/gallery';
+import { Shimmer } from '@/design/primitives/Shimmer';
 import { cleanupAll, render, text } from '@/test/render';
 import { setPrefersReducedMotion } from '@/test/setup';
 
@@ -83,8 +83,16 @@ describe('the shimmer under reduced motion', () => {
 describe('the CSS contract for the forced path', () => {
   it('globals.css pauses every animation under both the media query and the data-motion attribute', () => {
     expect(globalsCss).toMatch(/@media \(prefers-reduced-motion: reduce\)/);
-    expect(globalsCss).toMatch(/html\[data-motion='reduced'\]/);
-    expect(globalsCss).toMatch(/html\[data-motion='reduced'\] \[data-shimmer-sweep\]/);
+    // Quoting is not the contract; the selector and the rules it carries are.
+    expect(globalsCss).toMatch(/html\[data-motion=["']reduced["']\]/);
+    expect(globalsCss).toMatch(/html\[data-motion=["']reduced["']\] \[data-shimmer-sweep\]/);
+    // ...and the selector must have a writer. It was read by the CSS and set by nothing
+    // for the whole life of this file: the gallery's own comment claimed "?motion=reduced
+    // sets this attribute" while no code did, so every rule in that block matched no
+    // element. A CSS-only assertion cannot see that; this one can.
+    const gallery = readFileSync('src/app/dev/states/gallery.tsx', 'utf8');
+    expect(gallery).toMatch(/setAttribute\(\s*['"]data-motion['"]\s*,\s*['"]reduced['"]\s*\)/);
+    expect(gallery).toMatch(/removeAttribute\(\s*['"]data-motion['"]\s*\)/);
   });
 
   it('the gallery says which mode it is in, from the server-read query string', () => {

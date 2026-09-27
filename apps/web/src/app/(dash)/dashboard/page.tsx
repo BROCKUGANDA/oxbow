@@ -21,22 +21,22 @@
 import Link from 'next/link';
 import type { CSSProperties, ReactElement } from 'react';
 
+import { Pane } from '@/components/Pane';
+import { MultiLineChart } from '@/components/charts/charts';
+import { TYPOLOGY_META, glyphFor } from '@/components/typology';
+import { BandBadge } from '@/components/ui/BandBadge';
+import { MoneyFigure } from '@/components/ui/MoneyFigure';
+import { Assumptions, Timestamp } from '@/components/ui/provenance';
+import { GAP_TIGHT, PANEL_SUNKEN, T_LABEL, T_MICRO } from '@/components/ui/sx';
 import { Icon } from '@/design/icons/Icon';
 import { EmptyState } from '@/design/primitives/EmptyState';
 import { ErrorPane } from '@/design/primitives/ErrorPane';
 import { Shimmer } from '@/design/primitives/Shimmer';
-import { TYPOLOGY_META, glyphFor } from '@/components/typology';
-import { Pane } from '@/components/Pane';
-import { MultiLineChart } from '@/components/charts/charts';
-import { MoneyFigure } from '@/components/ui/MoneyFigure';
-import { Assumptions, Timestamp } from '@/components/ui/provenance';
-import { BandBadge } from '@/components/ui/BandBadge';
-import { PIPELINE_COMMAND, RUNTIME_ESTIMATE_FALLBACK } from '@/lib/copy';
 import { ROUTES } from '@/lib/api/contract';
 import { useResource } from '@/lib/api/hooks';
 import { failureDetail, failureRunId, failureTitle, isRunNotFound } from '@/lib/api/problem';
+import { PIPELINE_COMMAND, RUNTIME_ESTIMATE_FALLBACK } from '@/lib/copy';
 import { compactFromMinor, count, moneyAxisFormatter } from '@/lib/format/money';
-import { GAP_TIGHT, PANEL_SUNKEN, T_LABEL, T_MICRO } from '@/components/ui/sx';
 
 /** The strip's geometry, measured on the resolved page at the desktop breakpoint:
  *  five cells in one `auto-fit minmax(220px,1fr)` row, 123px tall. The pending strip
@@ -146,28 +146,54 @@ export default function DashboardPage(): ReactElement {
             retrying={dashboard.isFetching}
           />
         ) : null}
-        <section aria-hidden="true" aria-label="Period economics, loading" style={{ ...STRIP_GRID, minHeight: STRIP_ROW_HEIGHT }}>
+        <section
+          aria-hidden="true"
+          aria-label="Period economics, loading"
+          style={{ ...STRIP_GRID, minHeight: STRIP_ROW_HEIGHT }}
+        >
           {STRIP_CELLS.map((key) => (
             <Shimmer key={key} width="100%" height={STRIP_ROW_HEIGHT} radius="var(--radius-panel)" />
           ))}
         </section>
 
-        <section aria-hidden="true" aria-label="Model quality, loading" style={{ display: 'flex', gap: 8, flexWrap: 'wrap', minHeight: CHIP_ROW_HEIGHT }}>
+        <section
+          aria-hidden="true"
+          aria-label="Model quality, loading"
+          style={{ display: 'flex', gap: 8, flexWrap: 'wrap', minHeight: CHIP_ROW_HEIGHT }}
+        >
           {['PR-AUC', 'Precision at budget', 'Brier'].map((label) => (
             <Shimmer key={label} width={220} height={CHIP_ROW_HEIGHT} radius="var(--radius-control)" />
           ))}
         </section>
 
         <div style={FIGURE_GRID}>
-          <Pane id="curve" title="Cumulative benefit by policy" operation="Loading the cumulative benefit curve" skeleton={PANE_CURVE} reserveHeight={CURVE_BODY}>
+          <Pane
+            id="curve"
+            title="Cumulative benefit by policy"
+            operation="Loading the cumulative benefit curve"
+            skeleton={PANE_CURVE}
+            reserveHeight={CURVE_BODY}
+          >
             <span />
           </Pane>
-          <Pane id="bands" title="Band distribution" operation="Loading the band distribution" skeleton={PANE_BANDS} reserveHeight={CURVE_BODY}>
+          <Pane
+            id="bands"
+            title="Band distribution"
+            operation="Loading the band distribution"
+            skeleton={PANE_BANDS}
+            reserveHeight={CURVE_BODY}
+          >
             <span />
           </Pane>
         </div>
 
-        <Pane id="patterns" title="Latest patterns" operation="Loading the pattern feed" skeleton={PANE_PATTERNS} reserveHeight={PATTERNS_BODY}>
+        <Pane
+          id="patterns"
+          title="Latest patterns"
+          operation="Loading the pattern feed"
+          skeleton={PANE_PATTERNS}
+          reserveHeight={PATTERNS_BODY}
+        >
           <span />
         </Pane>
       </div>
@@ -208,7 +234,15 @@ export default function DashboardPage(): ReactElement {
             "currency, not counts", so the two counts that still matter come after. */}
         <div style={{ ...PANEL_SUNKEN, padding: 10 }}>
           <p style={{ ...T_LABEL, textTransform: 'uppercase', letterSpacing: '0.06em' }}>Alerts generated</p>
-          <p className="u-num" style={{ fontFamily: 'var(--font-condensed)', fontSize: 'var(--text-kpi)', fontWeight: 600, margin: '2px 0 0' }}>
+          <p
+            className="u-num"
+            style={{
+              fontFamily: 'var(--font-condensed)',
+              fontSize: 'var(--text-kpi)',
+              fontWeight: 600,
+              margin: '2px 0 0',
+            }}
+          >
             {count(data.alerts_generated)}
           </p>
           <p style={{ ...T_MICRO, color: 'var(--color-ink-faint)' }}>
@@ -219,7 +253,15 @@ export default function DashboardPage(): ReactElement {
 
         <div style={{ ...PANEL_SUNKEN, padding: 10 }}>
           <p style={{ ...T_LABEL, textTransform: 'uppercase', letterSpacing: '0.06em' }}>High-risk networks</p>
-          <p className="u-num" style={{ fontFamily: 'var(--font-condensed)', fontSize: 'var(--text-kpi)', fontWeight: 600, margin: '2px 0 0' }}>
+          <p
+            className="u-num"
+            style={{
+              fontFamily: 'var(--font-condensed)',
+              fontSize: 'var(--text-kpi)',
+              fontWeight: 600,
+              margin: '2px 0 0',
+            }}
+          >
             {count(data.high_risk_networks)}
           </p>
           <p style={{ ...T_MICRO, color: 'var(--color-ink-faint)' }}>
@@ -239,7 +281,12 @@ export default function DashboardPage(): ReactElement {
       </section>
 
       {noRunYet ? (
-        <EmptyState kind="no-run" command={PIPELINE_COMMAND} expectedRuntime={RUNTIME_ESTIMATE_FALLBACK} corpus={runtime.data?.dataset ?? undefined} />
+        <EmptyState
+          kind="no-run"
+          command={PIPELINE_COMMAND}
+          expectedRuntime={RUNTIME_ESTIMATE_FALLBACK}
+          corpus={runtime.data?.dataset ?? undefined}
+        />
       ) : null}
 
       {/* ---- the curve, the distribution, the feed ---------------------- */}
@@ -271,9 +318,22 @@ export default function DashboardPage(): ReactElement {
         >
           <ul style={{ listStyle: 'none', margin: 0, padding: 0 }}>
             {data.band_distribution.map((bucket) => (
-              <li key={bucket.band} style={{ display: 'grid', gridTemplateColumns: '56px 1fr auto', alignItems: 'center', gap: 8, height: 'var(--spacing-row)', borderBottom: '1px solid var(--color-hairline)' }}>
+              <li
+                key={bucket.band}
+                style={{
+                  display: 'grid',
+                  gridTemplateColumns: '56px 1fr auto',
+                  alignItems: 'center',
+                  gap: 8,
+                  height: 'var(--spacing-row)',
+                  borderBottom: '1px solid var(--color-hairline)',
+                }}
+              >
                 <BandBadge band={bucket.band} describe={false} />
-                <span aria-hidden="true" style={{ height: 8, background: 'var(--color-hairline)', position: 'relative' }}>
+                <span
+                  aria-hidden="true"
+                  style={{ height: 8, background: 'var(--color-hairline)', position: 'relative' }}
+                >
                   <span
                     style={{
                       position: 'absolute',
@@ -307,24 +367,54 @@ export default function DashboardPage(): ReactElement {
         {data.latest_patterns.length === 0 ? (
           <p style={{ ...T_LABEL, color: 'var(--color-ink-muted)', maxWidth: '64ch' }}>
             No rule crossed its threshold in {data.capacity.period_label}, although {count(data.alerts_generated)}{' '}
-            accounts were scored. A feed that is quiet because nothing fired is a result, and it is worth checking
-            the thresholds before reading it as a clean period.
+            accounts were scored. A feed that is quiet because nothing fired is a result, and it is worth checking the
+            thresholds before reading it as a clean period.
           </p>
         ) : (
           <ul style={{ listStyle: 'none', margin: 0, padding: 0 }}>
             {data.latest_patterns.map((hit) => (
-              <li key={`${hit.rule_code}-${hit.account_key}`} style={{ display: 'grid', gridTemplateColumns: '44px 140px minmax(0, 1fr) 160px 200px', alignItems: 'center', gap: 8, minHeight: 'var(--spacing-row)', borderBottom: '1px solid var(--color-hairline)' }}>
-                <span title={`${hit.rule_code} · ${TYPOLOGY_META[hit.typology].reads}`} style={{ color: 'var(--color-ink-muted)' }}>
-                  <Icon name={glyphFor(hit.typology)} size={16} title={`${hit.rule_code} ${TYPOLOGY_META[hit.typology].name}`} />
+              <li
+                key={`${hit.rule_code}-${hit.account_key}`}
+                style={{
+                  display: 'grid',
+                  gridTemplateColumns: '44px 140px minmax(0, 1fr) 160px 200px',
+                  alignItems: 'center',
+                  gap: 8,
+                  minHeight: 'var(--spacing-row)',
+                  borderBottom: '1px solid var(--color-hairline)',
+                }}
+              >
+                <span
+                  title={`${hit.rule_code} · ${TYPOLOGY_META[hit.typology].reads}`}
+                  style={{ color: 'var(--color-ink-muted)' }}
+                >
+                  <Icon
+                    name={glyphFor(hit.typology)}
+                    size={16}
+                    title={`${hit.rule_code} ${TYPOLOGY_META[hit.typology].name}`}
+                  />
                 </span>
-                <Link href={hit.case_href} style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-label)', color: 'var(--color-ink)' }}>
+                <Link
+                  href={hit.case_href}
+                  style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-label)', color: 'var(--color-ink)' }}
+                >
                   {hit.account_key}
                 </Link>
-                <span style={{ ...T_LABEL, color: 'var(--color-ink-muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={hit.observed}>
+                <span
+                  style={{
+                    ...T_LABEL,
+                    color: 'var(--color-ink-muted)',
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    whiteSpace: 'nowrap',
+                  }}
+                  title={hit.observed}
+                >
                   {hit.rule_code} · {hit.observed}
                 </span>
                 <span className="u-num" style={{ ...T_LABEL, textAlign: 'right', color: 'var(--color-ink)' }}>
-                  {compactFromMinor(hit.exposure.value.minor, hit.exposure.value.decimals)} {hit.exposure.value.currency}
+                  {compactFromMinor(hit.exposure.value.minor, hit.exposure.value.decimals)}{' '}
+                  {hit.exposure.value.currency}
                 </span>
                 <span style={{ textAlign: 'right' }}>
                   <Timestamp iso={hit.first_seen} timeZone={timeZone} sense="first seen" />
@@ -343,18 +433,54 @@ export default function DashboardPage(): ReactElement {
 }
 
 /** A model-quality chip: the value, its delta, and the baseline the delta is against. */
-function Chip({ label, metric, lowerIsBetter = false }: { label: string; metric: { value: number; delta_vs_baseline: number | null; baseline_label: string | null; unit: string; ci: number[] | null }; lowerIsBetter?: boolean }): ReactElement {
+function Chip({
+  label,
+  metric,
+  lowerIsBetter = false,
+}: {
+  label: string;
+  metric: {
+    value: number;
+    delta_vs_baseline: number | null;
+    baseline_label: string | null;
+    unit: string;
+    ci: number[] | null;
+  };
+  lowerIsBetter?: boolean;
+}): ReactElement {
   const delta = metric.delta_vs_baseline;
   const improving = delta === null ? null : lowerIsBetter ? delta < 0 : delta > 0;
   return (
-    <div style={{ ...PANEL_SUNKEN, padding: '8px 10px', display: 'flex', flexDirection: 'column', ...GAP_TIGHT }} data-chip={label}>
+    <div
+      style={{ ...PANEL_SUNKEN, padding: '8px 10px', display: 'flex', flexDirection: 'column', ...GAP_TIGHT }}
+      data-chip={label}
+    >
       <p style={{ ...T_LABEL, textTransform: 'uppercase', letterSpacing: '0.06em' }}>{label}</p>
       <p style={{ display: 'flex', alignItems: 'baseline', gap: 6, margin: 0 }}>
-        <span className="u-num" style={{ fontFamily: 'var(--font-condensed)', fontSize: 'var(--text-kpi)', fontWeight: 600, color: 'var(--color-ink)' }}>
+        <span
+          className="u-num"
+          style={{
+            fontFamily: 'var(--font-condensed)',
+            fontSize: 'var(--text-kpi)',
+            fontWeight: 600,
+            color: 'var(--color-ink)',
+          }}
+        >
           {metric.value.toFixed(metric.unit === 'Brier' ? 4 : 3)}
         </span>
         {delta !== null ? (
-          <span className="u-num" style={{ ...T_MICRO, color: improving === null ? 'var(--color-ink-faint)' : improving ? 'var(--color-state-done)' : 'var(--color-state-failed)' }}>
+          <span
+            className="u-num"
+            style={{
+              ...T_MICRO,
+              color:
+                improving === null
+                  ? 'var(--color-ink-faint)'
+                  : improving
+                    ? 'var(--color-state-done)'
+                    : 'var(--color-state-failed)',
+            }}
+          >
             {delta > 0 ? '+' : ''}
             {delta.toFixed(metric.unit === 'Brier' ? 4 : 3)} vs {metric.baseline_label ?? 'baseline'}
           </span>
@@ -370,5 +496,3 @@ function Chip({ label, metric, lowerIsBetter = false }: { label: string; metric:
     </div>
   );
 }
-
-

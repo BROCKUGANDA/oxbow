@@ -6,22 +6,28 @@
    response it produces carries `provenance: 'fixture:developer-contract'`, which
    the app shell prints as a banner: a fixture can be seen, never mistaken. */
 
-import type { TransportRequest, TransportResponse } from '../lib/api/transport';
 import type { AlertPage } from '../lib/api/contract';
+import type { TransportRequest, TransportResponse } from '../lib/api/transport';
 import { alertPage, largeAlertPage } from './alerts.fixture';
 import { CASES } from './case.fixture';
 import { envelope } from './common.fixture';
-import { datasetCard, datasetCardPaysim, runtime, stageEvents, validation } from './meta.fixture';
 import { dashboard } from './dashboard.fixture';
-import { allocate, policyDefaults, type AllocateParams } from './policy.fixture';
-import { disagreement, disagreementEmpty, drift, scorecard } from './scorecard.fixture';
 import { stressSubgraph, traversedSubgraph } from './graph.fixture';
+import { datasetCard, datasetCardPaysim, runtime, stageEvents, validation } from './meta.fixture';
+import { type AllocateParams, allocate, policyDefaults } from './policy.fixture';
+import { disagreement, disagreementEmpty, drift, scorecard } from './scorecard.fixture';
 
 function json(status: number, body: unknown): TransportResponse {
   return { status, contentType: 'application/json', body, retryAfterMs: null };
 }
 
-function problem(status: number, title: string, detail: string, runId: string | null, extra: Record<string, unknown> = {}): TransportResponse {
+function problem(
+  status: number,
+  title: string,
+  detail: string,
+  runId: string | null,
+  extra: Record<string, unknown> = {},
+): TransportResponse {
   return {
     status,
     contentType: 'application/problem+json',
@@ -76,7 +82,10 @@ function filteredAlerts(params: URLSearchParams): AlertPage {
               : bands.length > 0
                 ? `Band is ${bands.join(' or ')}`
                 : `Text search “${search}”`,
-          rows_if_removed: typology.length > 0 ? alertPage.rows.length - rows.filter((r) => r.typology === null).length : alertPage.rows.length,
+          rows_if_removed:
+            typology.length > 0
+              ? alertPage.rows.length - rows.filter((r) => r.typology === null).length
+              : alertPage.rows.length,
           unfiltered_rows: alertPage.rows.length,
         }
       : null,
@@ -175,9 +184,15 @@ function decide(route: string, body: unknown): TransportResponse {
     // Server-side refusal of an empty reason, mirrored here so the UI's own block
     // is demonstrably not the only thing standing between an analyst and a
     // reasonless decision record.
-    return problem(422, 'Request could not be processed', 'a written reason is required', '01J4Z7M2QK9N7V1C4X6E8G0B2D', {
-      errors: [{ location: 'reason', message: 'must not be empty', value: write.reason }],
-    });
+    return problem(
+      422,
+      'Request could not be processed',
+      'a written reason is required',
+      '01J4Z7M2QK9N7V1C4X6E8G0B2D',
+      {
+        errors: [{ location: 'reason', message: 'must not be empty', value: write.reason }],
+      },
+    );
   }
   if (write.expected_version !== record.decision_version) {
     return problem(409, 'Conflict', 'another decision was recorded first', '01J4Z7M2QK9N7V1C4X6E8G0B2D', {

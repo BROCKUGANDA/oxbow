@@ -21,18 +21,68 @@ export type TypologyMeta = {
 };
 
 export const TYPOLOGY_META: Record<Typology, TypologyMeta> = {
-  R1: { glyph: 'pass-through', code: 'RAPID_PASS_THROUGH', name: 'Rapid pass-through', reads: 'receives, then forwards most of it on inside the window' },
+  R1: {
+    glyph: 'pass-through',
+    code: 'RAPID_PASS_THROUGH',
+    name: 'Rapid pass-through',
+    reads: 'receives, then forwards most of it on inside the window',
+  },
   R2: { glyph: 'fan-in', code: 'FAN_IN', name: 'Fan-in', reads: 'gathers from many senders in small amounts' },
   R3: { glyph: 'fan-out', code: 'FAN_OUT', name: 'Fan-out', reads: 'scatters to many receivers' },
-  R4: { glyph: 'cycle', code: 'CYCLE_MEMBER', name: 'Cycle member', reads: 'value leaves and comes back, time-respecting and value-retaining' },
-  R5: { glyph: 'structuring', code: 'STRUCTURING', name: 'Structuring', reads: 'repeats just under a reporting threshold' },
-  R6: { glyph: 'velocity-spike', code: 'VELOCITY_SPIKE', name: 'Velocity spike', reads: 'activity breaks against its own baseline' },
-  R7: { glyph: 'dormant-wake', code: 'DORMANT_REACTIVATION', name: 'Dormant reactivation', reads: 'quiet for a long stretch, then busy inside a day' },
-  R8: { glyph: 'velocity-spike', code: 'ODD_HOUR_SHIFT', name: 'Odd-hour shift', reads: 'volume moves into historically quiet hours' },
-  R9: { glyph: 'structuring', code: 'AMOUNT_REGIME_SHIFT', name: 'Amount regime shift', reads: 'typical amount changes level' },
-  R10: { glyph: 'fast-cash-out', code: 'FAST_CASH_OUT', name: 'Fast cash-out', reads: 'inflow leaves again as cash almost immediately' },
-  R11: { glyph: 'fan-out', code: 'NEW_COUNTERPARTY_SURGE', name: 'New-counterparty surge', reads: 'most counterparties are first-time' },
-  R12: { glyph: 'chain', code: 'CHAIN_MEMBER', name: 'Chain member', reads: 'a layering path of hops, each smaller than the last' },
+  R4: {
+    glyph: 'cycle',
+    code: 'CYCLE_MEMBER',
+    name: 'Cycle member',
+    reads: 'value leaves and comes back, time-respecting and value-retaining',
+  },
+  R5: {
+    glyph: 'structuring',
+    code: 'STRUCTURING',
+    name: 'Structuring',
+    reads: 'repeats just under a reporting threshold',
+  },
+  R6: {
+    glyph: 'velocity-spike',
+    code: 'VELOCITY_SPIKE',
+    name: 'Velocity spike',
+    reads: 'activity breaks against its own baseline',
+  },
+  R7: {
+    glyph: 'dormant-wake',
+    code: 'DORMANT_REACTIVATION',
+    name: 'Dormant reactivation',
+    reads: 'quiet for a long stretch, then busy inside a day',
+  },
+  R8: {
+    glyph: 'velocity-spike',
+    code: 'ODD_HOUR_SHIFT',
+    name: 'Odd-hour shift',
+    reads: 'volume moves into historically quiet hours',
+  },
+  R9: {
+    glyph: 'structuring',
+    code: 'AMOUNT_REGIME_SHIFT',
+    name: 'Amount regime shift',
+    reads: 'typical amount changes level',
+  },
+  R10: {
+    glyph: 'fast-cash-out',
+    code: 'FAST_CASH_OUT',
+    name: 'Fast cash-out',
+    reads: 'inflow leaves again as cash almost immediately',
+  },
+  R11: {
+    glyph: 'fan-out',
+    code: 'NEW_COUNTERPARTY_SURGE',
+    name: 'New-counterparty surge',
+    reads: 'most counterparties are first-time',
+  },
+  R12: {
+    glyph: 'chain',
+    code: 'CHAIN_MEMBER',
+    name: 'Chain member',
+    reads: 'a layering path of hops, each smaller than the last',
+  },
 };
 
 export function glyphFor(typology: Typology | null): GlyphName {
@@ -44,4 +94,17 @@ export function ruleCode(typology: Typology | null): string {
 }
 
 /** The band's implied action, from the scorecard band table on the response. */
-export const BAND_ORDER: readonly Typology[] = ['R1', 'R2', 'R3', 'R4', 'R5', 'R6', 'R7', 'R8', 'R9', 'R10', 'R11', 'R12'];
+export const BAND_ORDER: readonly Typology[] = [
+  'R1',
+  'R2',
+  'R3',
+  'R4',
+  'R5',
+  'R6',
+  'R7',
+  'R8',
+  'R9',
+  'R10',
+  'R11',
+  'R12',
+];

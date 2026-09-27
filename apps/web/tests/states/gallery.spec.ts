@@ -1,3 +1,5 @@
+import fs from 'node:fs';
+import path from 'node:path';
 /**
  * §14 P8 gate, first clause: the screenshot suite over /dev/states.
  *
@@ -6,9 +8,7 @@
  * land under tests/states/.screens/ and are kept as the record of what was rendered;
  * the suite is screenshot-green by construction, not snapshot-brittle.
  */
-import { expect, test, type Page } from '@playwright/test';
-import fs from 'node:fs';
-import path from 'node:path';
+import { type Page, expect, test } from '@playwright/test';
 
 const SCREENS = path.join(__dirname, '.screens');
 
@@ -55,7 +55,13 @@ test.describe('/dev/states — the whole gallery', () => {
     }
     // The section's own caption is `Five empty states, none of which says "no data"` --
     // it names the rule, so it must be excluded before the rule is enforced on the arms.
-    const arms = body.split('\n').filter((line) => !line.startsWith('five empty states')).join('\n');
+    // Compared lower-cased, because the caption renders title-case and the assertion below
+    // folds the whole section: a case-sensitive exclusion lets the caption back in as a
+    // failure of the rule it is describing.
+    const arms = body
+      .split('\n')
+      .filter((line) => !line.toLowerCase().startsWith('five empty states'))
+      .join('\n');
     expect(arms.toLowerCase()).not.toContain('no data');
     // §14 copy obligations: narrowest predicate + the count that would return, and
     // the literal pipeline command with a copy button.
@@ -90,8 +96,12 @@ test.describe('/dev/states — the whole gallery', () => {
     await expect(page.getByText(/Degraded: CP-SAT solver port unavailable/)).toBeVisible();
     // a currency figure with no assumptions must REFUSE to render, visibly.
     await expect(page.getByText(/has no assumption line/)).toBeVisible();
-    // the minimum-series guard prints its note in the edges section.
-    await expect(page.getByText('One point was returned for this series')).toBeVisible();
+    // the minimum-series guard prints its note in the edges section. Addressed by its
+    // accessible name rather than by text: the note is a div[role=note] wrapping a <p>, so a
+    // bare getByText resolves to both and strict mode fails on the duplication, not on the copy.
+    await expect(page.getByRole('note', { name: 'Single point series' })).toContainText(
+      'One point was returned for this series',
+    );
   });
 
   test('the disclaimer is in the footer of every route, verbatim', async ({ page }) => {

@@ -17,37 +17,40 @@
 
 'use client';
 
-import { useEffect, useState, type ReactElement } from 'react';
-import { ErrorBoundary } from 'react-error-boundary';
+import { type ReactElement, useEffect, useState } from 'react';
 
-import { begin, isStale } from '@/lib/api/client';
-import type { MoneyFigure as MoneyFigureValue } from '@/lib/api/contract';
-import { MoneyFigure } from '@/components/ui/MoneyFigure';
-import { MissingAssumptions } from '@/lib/format/money';
 import { ELLIPSIS, PANEL_SUNKEN, T_LABEL, T_MICRO } from '@/components/ui/sx';
+import { begin, isStale } from '@/lib/api/client';
+import { MissingAssumptions, requireAssumptions } from '@/lib/format/money';
 
-/** Deliberately empty: the point is that the renderer refuses. */
-const NO_ASSUMPTIONS: MoneyFigureValue = {
-  value: { minor: 412_000_000, currency: 'UGX', decimals: 2 },
-  band: null,
-  band_rates: null,
-};
+const FIGURE_LABEL = 'Loss avoided, unlabelled';
 
+/**
+ * §14's "a currency figure with no assumptions must REFUSE to render, visibly".
+ *
+ * The refusal is asked for, not simulated: `requireAssumptions` is the same gate every
+ * currency renderer calls, so the sentence below is the one the product produces rather
+ * than a paraphrase of it. Wrapping `<MoneyFigure>` in an error boundary instead does not
+ * work here -- a throw during the server render is not caught by a boundary, React
+ * rethrows, and `/dev/states` answers 500. That is how this arm was observed failing: the
+ * gallery rendered the refusal under `vitest` (jsdom, client render) and took the page
+ * down in the browser.
+ */
 export function FigureRow(): ReactElement {
+  let refused: string | null = null;
+  try {
+    requireAssumptions(FIGURE_LABEL, []);
+  } catch (error) {
+    refused = error instanceof MissingAssumptions ? error.message : 'the renderer refused this figure';
+  }
   return (
     <div style={{ ...PANEL_SUNKEN, padding: 12 }}>
       <p style={{ ...T_MICRO, color: 'var(--color-ink-faint)', margin: '0 0 8px' }}>
         the same component, given a figure with no assumptions block
       </p>
-      <ErrorBoundary
-        fallbackRender={({ error }) => (
-          <p role="alert" data-money-refused style={{ ...T_LABEL, color: 'var(--color-state-failed)', margin: 0 }}>
-            {error instanceof MissingAssumptions ? error.message : 'the renderer refused this figure'}
-          </p>
-        )}
-      >
-        <MoneyFigure figure={NO_ASSUMPTIONS} assumptions={[]} label="Loss avoided, unlabelled" />
-      </ErrorBoundary>
+      <p role="alert" data-money-refused style={{ ...T_LABEL, color: 'var(--color-state-failed)', margin: 0 }}>
+        {refused ?? 'the renderer accepted a figure with no assumptions'}
+      </p>
     </div>
   );
 }
@@ -106,7 +109,9 @@ export function StaleRow(): ReactElement {
         paint();
       }, 200),
     ];
-    return () => timers.forEach((timer) => clearTimeout(timer));
+    return () => {
+      for (const timer of timers) clearTimeout(timer);
+    };
   }, []);
 
   return (

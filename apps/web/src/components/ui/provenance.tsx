@@ -15,8 +15,8 @@
      fallback, both have to be visible without reading the code.
    ============================================================================= */
 
-import type { ReactElement } from 'react';
 import Link from 'next/link';
+import type { ReactElement } from 'react';
 
 import { Icon } from '../../design/icons/Icon';
 import { CopyButton } from '../../design/primitives/EmptyState';
@@ -67,7 +67,11 @@ export function Timestamp({
 }): ReactElement {
   if (timeZone === null) {
     return (
-      <time dateTime={iso ?? undefined} data-timestamp-timezone={null} style={{ ...T_LABEL, color: 'var(--color-ink-faint)' }}>
+      <time
+        dateTime={iso ?? undefined}
+        data-timestamp-timezone={null}
+        style={{ ...T_LABEL, color: 'var(--color-ink-faint)' }}
+      >
         {iso ?? 'no instant recorded'} · zone unreported
       </time>
     );
@@ -127,7 +131,10 @@ export function RunIdChip({ runId, traceId = null }: { runId: string | null; tra
 /* ----------------------------------------------------- assumptions line --- */
 
 /** The assumption block on its own, for a pane header that has several figures. */
-export function Assumptions({ assumptions, source }: { assumptions: readonly AssumptionLine[]; source?: string }): ReactElement {
+export function Assumptions({
+  assumptions,
+  source,
+}: { assumptions: readonly AssumptionLine[]; source?: string }): ReactElement {
   return (
     <p
       data-assumption-line
@@ -166,7 +173,7 @@ export function ProvenanceBadge({ provenance }: { provenance: string | null }): 
   const isFixture = key === 'fixture';
   const label = isFixture
     ? `fixture data — ${provenance ?? ''} · not a pipeline run`
-    : (PROVENANCE_LABEL[key] ?? (provenance ?? 'provenance not reported'));
+    : (PROVENANCE_LABEL[key] ?? provenance ?? 'provenance not reported');
   return (
     <span
       data-provenance={provenance ?? 'unknown'}
@@ -181,6 +188,12 @@ export function ProvenanceBadge({ provenance }: { provenance: string | null }): 
         color: isFixture ? 'var(--color-state-failed)' : 'var(--color-ink-muted)',
         textTransform: 'uppercase',
         letterSpacing: '0.06em',
+        /* The pending label — "provenance not reported" — is the widest this chip is
+           ever *guaranteed* to be, so the chip is floored at it: a shorter real label
+           arriving later cannot pull the header rail in and slide the control beside it.
+           A longer label (the fixture stamp) is known at first paint, in the shell. */
+        minWidth: 170,
+        justifyContent: 'flex-start',
       }}
     >
       <Icon name={isFixture ? 'filter' : 'chain'} size={12} />
@@ -224,7 +237,8 @@ export function DegradedBanner({
         </strong>
       </div>
       <p style={{ ...T_MICRO, color: 'var(--color-ink-muted)' }}>
-        {meta.degraded_reason ?? 'The pane is rendering the deterministic fallback rather than failing, and every figure below carries that fallback’s label.'}
+        {meta.degraded_reason ??
+          'The pane is rendering the deterministic fallback rather than failing, and every figure below carries that fallback’s label.'}
       </p>
     </div>
   );
@@ -265,7 +279,6 @@ export function Meter({ share, band }: { share: number; band?: Band }): ReactEle
     </span>
   );
 }
-
 
 export function Hairline({ label }: { label: string }): ReactElement {
   return (

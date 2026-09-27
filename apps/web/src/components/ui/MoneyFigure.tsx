@@ -54,16 +54,15 @@ export function MoneyFigure({
   const legs = moneyAtBand(figure);
 
   return (
-    <figure
-      data-money-figure={label}
-      style={{ margin: 0, display: 'flex', flexDirection: 'column', gap: 2 }}
-    >
+    <figure data-money-figure={label} style={{ margin: 0, display: 'flex', flexDirection: 'column', gap: 2 }}>
       <figcaption style={{ ...T_LABEL, textTransform: 'uppercase', letterSpacing: '0.06em' }}>{label}</figcaption>
 
       <div
         className="u-tabular"
         style={{
-          ...(emphasis === 'kpi' ? T_KPI : { fontFamily: 'var(--font-sans)', fontSize: 'var(--text-body)', fontWeight: 600 }),
+          ...(emphasis === 'kpi'
+            ? T_KPI
+            : { fontFamily: 'var(--font-sans)', fontSize: 'var(--text-body)', fontWeight: 600 }),
           color: 'var(--color-ink)',
           display: 'flex',
           alignItems: 'baseline',

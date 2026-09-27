@@ -23,7 +23,7 @@
    (`apps/api/schemas/common.py`, `apps/api/problems.py`) this file mirrors it.
    ============================================================================= */
 
-import { array, boolean, integer, nullable, number, object, oneOf, record, string, type Decoder } from '../codec';
+import { type Decoder, array, boolean, integer, nullable, number, object, oneOf, record, string } from '../codec';
 import { ProblemDetailDecoder } from './problem';
 
 /* ============================================================ shared shapes */
@@ -150,19 +150,7 @@ export const TypologyDecoder = oneOf(
   'R11',
   'R12',
 );
-export type Typology =
-  | 'R1'
-  | 'R2'
-  | 'R3'
-  | 'R4'
-  | 'R5'
-  | 'R6'
-  | 'R7'
-  | 'R8'
-  | 'R9'
-  | 'R10'
-  | 'R11'
-  | 'R12';
+export type Typology = 'R1' | 'R2' | 'R3' | 'R4' | 'R5' | 'R6' | 'R7' | 'R8' | 'R9' | 'R10' | 'R11' | 'R12';
 
 /** A currency figure that is legally not allowed to render without its assumptions. */
 export type MoneyFigure = { value: Money; band: Money[] | null; band_rates: number[] | null };
@@ -520,7 +508,12 @@ export type CaseHeader = {
   points: ScorecardPoints[];
   reasons: ReasonCode[];
   economics: CaseEconomics;
-  fusion: { p_scorecard: number; p_gbm: number; p_fused: number; coefficients: { input: string; weight: number }[] } | null;
+  fusion: {
+    p_scorecard: number;
+    p_gbm: number;
+    p_fused: number;
+    coefficients: { input: string; weight: number }[];
+  } | null;
   decided_on_superseded_run: boolean;
   model_version: string | null;
   feature_spec_hash: string | null;
@@ -825,7 +818,13 @@ export type Subgraph = {
   window: { from: string; to: string };
   hops: number;
   edges_by_bucket: { bucket: string; edges: number }[];
-  overlays: { cycles: number; high_velocity_hops: number; fan_stars: number; dense_communities: number; flagged: number };
+  overlays: {
+    cycles: number;
+    high_velocity_hops: number;
+    fan_stars: number;
+    dense_communities: number;
+    flagged: number;
+  };
 };
 
 export const SubgraphDecoder: Decoder<Subgraph> = object('Subgraph', {
@@ -1009,7 +1008,10 @@ export type Allocation = {
   var95_unreviewed: MoneyFigure;
   es975_unreviewed: MoneyFigure;
   cumulative_curve: { label: string; points: SeriesPoint[]; is_policy: boolean }[];
-  frontier: { points: { capacity_minutes: number; loss_avoided: Money; wrongly_touched: number }[]; current_index: number };
+  frontier: {
+    points: { capacity_minutes: number; loss_avoided: Money; wrongly_touched: number }[];
+    current_index: number;
+  };
   changed: { entered: string[]; left: string[]; entered_count: number; left_count: number };
   solve_ms: number | null;
   degraded: boolean;
@@ -1033,9 +1035,7 @@ export const AllocationDecoder: Decoder<Allocation> = object('Allocation', {
   max_drawdown: MoneyFigureDecoder,
   var95_unreviewed: MoneyFigureDecoder,
   es975_unreviewed: MoneyFigureDecoder,
-  cumulative_curve: array(
-    object('Series', { label: string, points: array(SeriesPointDecoder), is_policy: boolean }),
-  ),
+  cumulative_curve: array(object('Series', { label: string, points: array(SeriesPointDecoder), is_policy: boolean })),
   frontier: object('Frontier', {
     points: array(
       object('FrontierPoint', {
@@ -1117,9 +1117,7 @@ export const DatasetCardDecoder: Decoder<DatasetCard> = object('DatasetCard', {
   licence_note: string,
   citation: string,
   retrieved_at: TimestampDecoder,
-  files: array(
-    object('FileEntry', { filename: string, sha256: string, rows: integer, bytes: integer }),
-  ),
+  files: array(object('FileEntry', { filename: string, sha256: string, rows: integer, bytes: integer })),
   rows: integer,
   period: object('Period', { from: TimestampDecoder, to: TimestampDecoder }),
   class_balance: array(object('Balance', { label: string, count: integer, rate: number })),
@@ -1218,9 +1216,7 @@ export const ValidationDecoder: Decoder<Validation> = object('Validation', {
     precision: number,
     budget_label: string,
   }),
-  reliability: array(
-    object('ReliabilityBin', { bin: string, predicted: number, observed: number, n: integer }),
-  ),
+  reliability: array(object('ReliabilityBin', { bin: string, predicted: number, observed: number, n: integer })),
   brier: number,
   calibration_floor: object('CalibrationFloor', {
     min_positives: number,
@@ -1255,9 +1251,7 @@ export const ValidationDecoder: Decoder<Validation> = object('Validation', {
   perturbations: array(
     object('Perturbation', { name: string, magnitude: number, measure: string, result: number, note: string }),
   ),
-  drawdown: array(
-    object('Drawdown', { policy: string, value: MoneyDecoder, zero_because: nullable(string) }),
-  ),
+  drawdown: array(object('Drawdown', { policy: string, value: MoneyDecoder, zero_because: nullable(string) })),
   risk_adjusted: object('RiskAdjusted', {
     value: number,
     formula: string,
@@ -1329,9 +1323,15 @@ export const SEAMS: { route: string; note: string }[] = [
   { route: 'GET /api/dashboard', note: 'P8a-1 command strip; currency-first figures with r band on each' },
   { route: 'GET /api/alerts', note: 'P8a-2 queue; data.capacity.cutoff_rank drives the capacity line' },
   { route: 'GET /api/cases/{account_key}', note: 'P8a-3 workspace; contributions carry txn_ids for cross-filter' },
-  { route: 'POST /api/cases/{account_key}/decisions', note: 'P8a-3 write; 409 with current_version for the merge view' },
+  {
+    route: 'POST /api/cases/{account_key}/decisions',
+    note: 'P8a-3 write; 409 with current_version for the merge view',
+  },
   { route: 'GET /api/graph/subgraph', note: 'P8b-4 explorer; edges_by_bucket feeds the time scrubber' },
-  { route: 'GET /api/scorecard + /drift + /disagreement', note: 'P8b-5 studio; scaling constants and the formula string' },
+  {
+    route: 'GET /api/scorecard + /drift + /disagreement',
+    note: 'P8b-5 studio; scaling constants and the formula string',
+  },
   { route: 'GET /api/policy + POST /api/policy/allocate', note: 'P8b-6 simulator; real re-allocation, no theatre' },
   { route: 'GET /api/validation', note: 'P8b-7 every chart served as data, not a screenshot' },
   { route: 'GET /api/meta/run', note: 'deployment_timezone + economics.yaml rendered verbatim' },

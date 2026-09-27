@@ -96,7 +96,9 @@ function rows(count: number, seed: number): AlertRow[] {
         };
       }),
       exposure: figure(exposureMinor),
-      expected_value: figure(Math.round(exposureMinor * score * 0.35 - reviewMinutes * 15_000 - (1 - score) * 2_500_000)),
+      expected_value: figure(
+        Math.round(exposureMinor * score * 0.35 - reviewMinutes * 15_000 - (1 - score) * 2_500_000),
+      ),
       rank: index + 1,
       policy_label: 'EV density under the active policy',
       review_minutes: reviewMinutes,

@@ -38,7 +38,9 @@ describe('the minimum-series guard', () => {
     expect(text(view.container)).toContain('no points');
     view.cleanup();
 
-    const framed = render(<ChartFrame height={220} note={minimumSeriesNote(0, 'line') ?? ''} label="empty series guard" />);
+    const framed = render(
+      <ChartFrame height={220} note={minimumSeriesNote(0, 'line') ?? ''} label="empty series guard" />,
+    );
     const frame = framed.container.querySelector('[data-chart-note]');
     expect(frame).not.toBeNull();
     expect((frame as HTMLElement).style.height).toBe('220px');

@@ -6,8 +6,8 @@
 import { describe, expect, it } from 'vitest';
 
 import { backoffMs, retryPolicy, unwrap } from '@/lib/api/client';
-import { ApiError, isRetryable, type ApiFailure, type ProblemStatus } from '@/lib/api/problem';
 import { DashboardDecoder } from '@/lib/api/contract';
+import { ApiError, type ApiFailure, type ProblemStatus, isRetryable } from '@/lib/api/problem';
 
 function problem(status: ProblemStatus, retryable: boolean): ApiFailure {
   return {
@@ -57,7 +57,15 @@ describe('the retry policy', () => {
     expect(
       retryPolicy(
         0,
-        new ApiError({ kind: 'contract', class: 'contract', message: 'x', path: '/api/x', status: 200, run_id: null, retry_after_ms: null }),
+        new ApiError({
+          kind: 'contract',
+          class: 'contract',
+          message: 'x',
+          path: '/api/x',
+          status: 200,
+          run_id: null,
+          retry_after_ms: null,
+        }),
       ),
     ).toBe(false);
   });
@@ -76,9 +84,7 @@ describe('the envelope doctrine', () => {
   it('accepts exactly { data, meta } and nothing else', () => {
     expect(() => unwrap({ data: {}, meta: null }, DashboardDecoder, '/api/dashboard')).toThrowError();
     // A server that grows a `success` key fails here, at the one unwrap point.
-    const error = captureThrow(() =>
-      unwrap({ data: {}, meta: {}, success: true }, DashboardDecoder, '/api/dashboard'),
-    );
+    const error = captureThrow(() => unwrap({ data: {}, meta: {}, success: true }, DashboardDecoder, '/api/dashboard'));
     expect(error).toBeInstanceOf(ApiError);
     const failure = (error as ApiError).failure;
     expect(failure.kind).toBe('contract');
@@ -86,9 +92,7 @@ describe('the envelope doctrine', () => {
     // problem-arm failure carries RFC 7807 `detail` instead. Narrowing here is the
     // point -- a `success` key must be classified as a contract breach, not a 5xx.
     if (failure.kind === 'contract') {
-      expect(failure.message).toContain(
-        'envelope keys were [data, meta, success], expected [data, meta]',
-      );
+      expect(failure.message).toContain('envelope keys were [data, meta, success], expected [data, meta]');
       expect(failure.path).toBe('/api/dashboard');
     }
   });

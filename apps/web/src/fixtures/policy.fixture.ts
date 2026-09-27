@@ -9,8 +9,8 @@
    what P7 will do properly. */
 
 import type { Allocation, PolicyDefaults } from '../lib/api/contract';
-import { figure, money, seeded } from './common.fixture';
 import { alertRows } from './alerts.fixture';
+import { figure, money, seeded } from './common.fixture';
 
 /** Per-account (p, exposure minor, review minutes) triples, from the queue fixture. */
 const CANDIDATES = alertRows.map((row) => ({
@@ -44,7 +44,11 @@ function curve(multiplier: number): { x: string; y: number; label: string | null
   const points = [];
   for (let week = 1; week <= 12; week += 1) {
     cumulative += Math.round((9_000_000 + next() * 26_000_000) * multiplier);
-    points.push({ x: new Date(Date.UTC(2026, 5, 8 + week * 7)).toISOString(), y: cumulative, label: `week ${String(week)}` });
+    points.push({
+      x: new Date(Date.UTC(2026, 5, 8 + week * 7)).toISOString(),
+      y: cumulative,
+      label: `week ${String(week)}`,
+    });
   }
   return points;
 }
@@ -95,7 +99,9 @@ export function allocate(params: AllocateParams, exactSolve: boolean): Allocatio
     benefit_per_analyst_hour: figure(hours > 0 ? Math.round(totalEv / hours) : 0),
     customers_wrongly_touched: Math.round(chosen.length * 0.31),
     optimality_gap: gap,
-    max_drawdown: figure(Math.round(Math.max(0, 6_400_000 * (12_000 / Math.max(params.capacity_minutes, 1)) - 4_100_000))),
+    max_drawdown: figure(
+      Math.round(Math.max(0, 6_400_000 * (12_000 / Math.max(params.capacity_minutes, 1)) - 4_100_000)),
+    ),
     var95_unreviewed: figure(Math.round(unreviewedExposure * 0.21)),
     es975_unreviewed: figure(Math.round(unreviewedExposure * 0.34)),
     cumulative_curve: [
@@ -108,10 +114,7 @@ export function allocate(params: AllocateParams, exactSolve: boolean): Allocatio
     ],
     frontier: {
       points: sweep(params),
-      current_index: Math.min(
-        30,
-        Math.max(0, Math.round((params.capacity_minutes - 0) / (30_000 / 30))),
-      ),
+      current_index: Math.min(30, Math.max(0, Math.round((params.capacity_minutes - 0) / (30_000 / 30)))),
     },
     changed: {
       entered: [...keys].filter((key) => !before.has(key)).slice(0, 12),
@@ -151,10 +154,7 @@ function sweep(params: AllocateParams): Allocation['frontier']['points'] {
   for (let index = 0; index < steps; index += 1) {
     const capacity = Math.round((index / (steps - 1)) * 30_000);
     const chosen = allocateAt(capacity, params);
-    const total = chosen.reduce(
-      (sum, key) => sum + (CANDIDATES.find((entry) => entry.key === key)?.exposure ?? 0),
-      0,
-    );
+    const total = chosen.reduce((sum, key) => sum + (CANDIDATES.find((entry) => entry.key === key)?.exposure ?? 0), 0);
     points.push({
       capacity_minutes: capacity,
       loss_avoided: money(Math.round(total * params.recovery_rate * 0.68)),
@@ -170,4 +170,3 @@ function sweep(params: AllocateParams): Allocation['frontier']['points'] {
   };
   return points;
 }
-

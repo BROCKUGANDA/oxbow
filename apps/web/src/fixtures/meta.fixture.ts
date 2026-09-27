@@ -17,14 +17,14 @@ export const runtime: RuntimeMeta = {
   minor_units_per_major: 100,
   economics_source: 'config/economics.yaml',
   economics: {
-    'currency': 1,
-    'minor_units_per_major': 100,
+    currency: 1,
+    minor_units_per_major: 100,
     'analyst.cost_per_hour_minor': 900_000,
     'analyst.cost_per_minute_minor': 15_000,
     'analyst.hours_per_period': 40,
     'analyst.min_review_minutes': 5,
     'recovery.rate': 0.35,
-    'friction_cost_minor': 2_500_000,
+    friction_cost_minor: 2_500_000,
     'exposure.window_hours': 24,
     'exposure.downstream_hops': 1,
     'capacity.review_minutes_per_period': 12_000,
@@ -71,9 +71,24 @@ export const datasetCard: DatasetCard = {
   period: { from: new Date(Date.UTC(2026, 2, 1)).toISOString(), to: new Date(Date.UTC(2026, 8, 20)).toISOString() },
   class_balance: [{ label: 'laundering (any of 8 typologies)', count: 3_209, rate: 0.1019 }],
   splits: [
-    { name: 'train', from: new Date(Date.UTC(2026, 2, 1)).toISOString(), to: new Date(Date.UTC(2026, 5, 30)).toISOString(), positives: 21_402 },
-    { name: 'validation', from: new Date(Date.UTC(2026, 6, 30)).toISOString(), to: new Date(Date.UTC(2026, 7, 30)).toISOString(), positives: 6_884 },
-    { name: 'test', from: new Date(Date.UTC(2026, 8, 29)).toISOString(), to: new Date(Date.UTC(2026, 9, 29)).toISOString(), positives: 3_771 },
+    {
+      name: 'train',
+      from: new Date(Date.UTC(2026, 2, 1)).toISOString(),
+      to: new Date(Date.UTC(2026, 5, 30)).toISOString(),
+      positives: 21_402,
+    },
+    {
+      name: 'validation',
+      from: new Date(Date.UTC(2026, 6, 30)).toISOString(),
+      to: new Date(Date.UTC(2026, 7, 30)).toISOString(),
+      positives: 6_884,
+    },
+    {
+      name: 'test',
+      from: new Date(Date.UTC(2026, 8, 29)).toISOString(),
+      to: new Date(Date.UTC(2026, 9, 29)).toISOString(),
+      positives: 3_771,
+    },
   ],
   label_definition:
     'A transaction is positive when it appears in HI-Small_Patterns.txt as a member of an annotated laundering attempt, in one of eight typologies.',
@@ -96,7 +111,8 @@ export const datasetCardPaysim: DatasetCard = {
   name: 'PaySim — primary for the tabular/volume module',
   url: 'https://www.kaggle.com/datasets/ealaxi/paysim1',
   licence: 'CC BY-SA 4.0',
-  licence_note: 'Share-alike on derivatives. Raw zips stay out of version control; content hashes are recorded instead.',
+  licence_note:
+    'Share-alike on derivatives. Raw zips stay out of version control; content hashes are recorded instead.',
   citation: 'Lopez-Rojas, Elmir, Axelsson. EMSS 2016.',
   rows: 6_362_620,
   class_balance: [
@@ -123,11 +139,41 @@ function folds(): Validation['folds'] {
     test_to: Triple;
     positives: number;
   }[] = [
-    { train_from: [2026, 2, 1], train_to: [2026, 4, 30], test_from: [2026, 6, 1], test_to: [2026, 6, 30], positives: 6_102 },
-    { train_from: [2026, 2, 1], train_to: [2026, 5, 31], test_from: [2026, 6, 30], test_to: [2026, 7, 30], positives: 5_488 },
-    { train_from: [2026, 2, 1], train_to: [2026, 6, 30], test_from: [2026, 7, 30], test_to: [2026, 8, 29], positives: 4_903 },
-    { train_from: [2026, 2, 1], train_to: [2026, 7, 31], test_from: [2026, 8, 29], test_to: [2026, 9, 28], positives: 4_117 },
-    { train_from: [2026, 2, 1], train_to: [2026, 8, 31], test_from: [2026, 9, 29], test_to: [2026, 10, 29], positives: 0 },
+    {
+      train_from: [2026, 2, 1],
+      train_to: [2026, 4, 30],
+      test_from: [2026, 6, 1],
+      test_to: [2026, 6, 30],
+      positives: 6_102,
+    },
+    {
+      train_from: [2026, 2, 1],
+      train_to: [2026, 5, 31],
+      test_from: [2026, 6, 30],
+      test_to: [2026, 7, 30],
+      positives: 5_488,
+    },
+    {
+      train_from: [2026, 2, 1],
+      train_to: [2026, 6, 30],
+      test_from: [2026, 7, 30],
+      test_to: [2026, 8, 29],
+      positives: 4_903,
+    },
+    {
+      train_from: [2026, 2, 1],
+      train_to: [2026, 7, 31],
+      test_from: [2026, 8, 29],
+      test_to: [2026, 9, 28],
+      positives: 4_117,
+    },
+    {
+      train_from: [2026, 2, 1],
+      train_to: [2026, 8, 31],
+      test_from: [2026, 9, 29],
+      test_to: [2026, 10, 29],
+      positives: 0,
+    },
   ];
   const utc = (parts: Triple): string => new Date(Date.UTC(parts[0], parts[1], parts[2])).toISOString();
   return base.map((fold, index) => ({
@@ -147,7 +193,11 @@ function folds(): Validation['folds'] {
 
 export const validation: Validation = {
   corpora: [
-    { key: 'ibmaml', label: 'IBM-AML HI-Small', note: 'network module: typology labels and real multi-account structure' },
+    {
+      key: 'ibmaml',
+      label: 'IBM-AML HI-Small',
+      note: 'network module: typology labels and real multi-account structure',
+    },
     { key: 'paysim', label: 'PaySim', note: 'tabular module: volume and topology, narrow fraud label' },
   ],
   folds: folds(),
@@ -211,10 +261,7 @@ export const validation: Validation = {
       is_final: true,
     },
   ],
-  pr_curve: [
-    ...curve(0.62, 'ibmaml'),
-    ...curve(0.44, 'paysim'),
-  ],
+  pr_curve: [...curve(0.62, 'ibmaml'), ...curve(0.44, 'paysim')],
   operating_point: { corpus: 'ibmaml', recall: 0.481, precision: 0.635, budget_label: '200 alerts per period' },
   reliability: [
     { bin: '0.00–0.10', predicted: 0.048, observed: 0.052, n: 1_043 },
@@ -229,15 +276,78 @@ export const validation: Validation = {
   calibration_floor: { min_positives: 500, refused: false, method: 'isotonic (Platt below the floor)' },
   confusion: { tp: 96, fp: 55, fn: 104, tn: 1_157, budget_label: '200 alerts per period', precision_undefined: false },
   ablation: [
-    { variant: 'Rules only', question: 'Does the ML earn its complexity?', pr_auc: 0.265, ci: [0.241, 0.29], net_benefit: figureMoney(168_000_000), corpus: 'ibmaml' },
-    { variant: 'Scorecard only', question: 'Is the transparent model enough?', pr_auc: 0.318, ci: [0.292, 0.345], net_benefit: figureMoney(214_000_000), corpus: 'ibmaml' },
-    { variant: 'LightGBM without graph features', question: 'How much does boosting add alone?', pr_auc: 0.352, ci: [0.321, 0.384], net_benefit: figureMoney(248_000_000), corpus: 'ibmaml' },
-    { variant: 'LightGBM with graph features', question: 'How much does the graph add? The thesis in one row.', pr_auc: 0.412, ci: [0.371, 0.455], net_benefit: figureMoney(312_000_000), corpus: 'ibmaml' },
-    { variant: 'Plus Isolation Forest fusion', question: 'Does the unsupervised channel catch unlabelled behaviour?', pr_auc: 0.419, ci: [0.377, 0.462], net_benefit: figureMoney(318_000_000), corpus: 'ibmaml' },
-    { variant: 'Full system, calibrated', question: 'Final statistical configuration', pr_auc: 0.412, ci: [0.371, 0.455], net_benefit: figureMoney(312_000_000), corpus: 'ibmaml' },
-    { variant: 'Threshold policy vs EV policy', question: 'How much does pricing the queue add, in money?', pr_auc: 0.412, ci: [0.371, 0.455], net_benefit: figureMoney(312_000_000), corpus: 'ibmaml' },
-    { variant: 'Full system on IBM-AML corpus', question: 'Does any of it transfer across corpora?', pr_auc: 0.412, ci: [0.371, 0.455], net_benefit: figureMoney(312_000_000), corpus: 'ibmaml' },
-    { variant: 'Full system on PaySim corpus', question: 'Does any of it transfer across corpora?', pr_auc: 0.241, ci: [0.212, 0.272], net_benefit: figureMoney(141_000_000), corpus: 'paysim' },
+    {
+      variant: 'Rules only',
+      question: 'Does the ML earn its complexity?',
+      pr_auc: 0.265,
+      ci: [0.241, 0.29],
+      net_benefit: figureMoney(168_000_000),
+      corpus: 'ibmaml',
+    },
+    {
+      variant: 'Scorecard only',
+      question: 'Is the transparent model enough?',
+      pr_auc: 0.318,
+      ci: [0.292, 0.345],
+      net_benefit: figureMoney(214_000_000),
+      corpus: 'ibmaml',
+    },
+    {
+      variant: 'LightGBM without graph features',
+      question: 'How much does boosting add alone?',
+      pr_auc: 0.352,
+      ci: [0.321, 0.384],
+      net_benefit: figureMoney(248_000_000),
+      corpus: 'ibmaml',
+    },
+    {
+      variant: 'LightGBM with graph features',
+      question: 'How much does the graph add? The thesis in one row.',
+      pr_auc: 0.412,
+      ci: [0.371, 0.455],
+      net_benefit: figureMoney(312_000_000),
+      corpus: 'ibmaml',
+    },
+    {
+      variant: 'Plus Isolation Forest fusion',
+      question: 'Does the unsupervised channel catch unlabelled behaviour?',
+      pr_auc: 0.419,
+      ci: [0.377, 0.462],
+      net_benefit: figureMoney(318_000_000),
+      corpus: 'ibmaml',
+    },
+    {
+      variant: 'Full system, calibrated',
+      question: 'Final statistical configuration',
+      pr_auc: 0.412,
+      ci: [0.371, 0.455],
+      net_benefit: figureMoney(312_000_000),
+      corpus: 'ibmaml',
+    },
+    {
+      variant: 'Threshold policy vs EV policy',
+      question: 'How much does pricing the queue add, in money?',
+      pr_auc: 0.412,
+      ci: [0.371, 0.455],
+      net_benefit: figureMoney(312_000_000),
+      corpus: 'ibmaml',
+    },
+    {
+      variant: 'Full system on IBM-AML corpus',
+      question: 'Does any of it transfer across corpora?',
+      pr_auc: 0.412,
+      ci: [0.371, 0.455],
+      net_benefit: figureMoney(312_000_000),
+      corpus: 'ibmaml',
+    },
+    {
+      variant: 'Full system on PaySim corpus',
+      question: 'Does any of it transfer across corpora?',
+      pr_auc: 0.241,
+      ci: [0.212, 0.272],
+      net_benefit: figureMoney(141_000_000),
+      corpus: 'paysim',
+    },
   ],
   shap_importance: [
     { feature: 'pass_through_ratio_1h', label: 'Pass-through ratio, trailing hour', mean_abs: 0.184 },
@@ -266,18 +376,42 @@ export const validation: Validation = {
     { dimension: 'community size', bucket: '≥ 25', false_positive_rate: 0.062, n: 21_884 },
   ],
   perturbations: [
-    { name: 'all amounts +10 %', magnitude: 0.1, measure: 'Spearman rank correlation of scores', result: 0.981, note: 'rank order is essentially preserved' },
-    { name: 'all amounts −10 %', magnitude: -0.1, measure: 'Spearman rank correlation of scores', result: 0.977, note: 'the ordering is not an artefact of the amount scale' },
-    { name: 'drop 10 % of edges', magnitude: 0.1, measure: 'typology recall', result: 0.552, note: 'from 0.585; the cycle channel is the sensitive one' },
+    {
+      name: 'all amounts +10 %',
+      magnitude: 0.1,
+      measure: 'Spearman rank correlation of scores',
+      result: 0.981,
+      note: 'rank order is essentially preserved',
+    },
+    {
+      name: 'all amounts −10 %',
+      magnitude: -0.1,
+      measure: 'Spearman rank correlation of scores',
+      result: 0.977,
+      note: 'the ordering is not an artefact of the amount scale',
+    },
+    {
+      name: 'drop 10 % of edges',
+      magnitude: 0.1,
+      measure: 'typology recall',
+      result: 0.552,
+      note: 'from 0.585; the cycle channel is the sensitive one',
+    },
   ],
   drawdown: [
-    { policy: 'EV policy', value: money0(0), zero_because: 'zero because the policy never lost money cumulatively across these folds, not because the figure is missing' },
+    {
+      policy: 'EV policy',
+      value: money0(0),
+      zero_because:
+        'zero because the policy never lost money cumulatively across these folds, not because the figure is missing',
+    },
     { policy: 'highest-amount-first', value: money0(41_200_000), zero_because: null },
   ],
   risk_adjusted: {
     value: 1.84,
     formula: 'mean per-period net benefit ÷ its standard deviation',
-    not_sharpe_because: 'there is no risk-free rate and no annualisation here, so calling it a Sharpe ratio would be a false claim of lineage',
+    not_sharpe_because:
+      'there is no risk-free rate and no annualisation here, so calling it a Sharpe ratio would be a false claim of lineage',
   },
   seeds: { count: 5, mean: 0.409, sd: 0.011, metric: 'PR-AUC' },
   configurations_evaluated: 40,

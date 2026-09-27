@@ -1,3 +1,4 @@
+import type { ReactElement } from 'react';
 /**
  * §14 `test_pane_error_isolated` — one failing pane must not take the page with it.
  *
@@ -8,7 +9,6 @@
  * what still works, and retrying only itself.
  */
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { ReactElement } from 'react';
 
 import { Pane } from '@/components/Pane';
 import { ApiError } from '@/lib/api/problem';
@@ -136,7 +136,14 @@ describe('pane error isolation', () => {
         id="drift"
         title="Drift"
         operation="Loading the drift panel"
-        failure={{ kind: 'network', class: 'network', message: 'socket hang up', status: null, run_id: null, retry_after_ms: null }}
+        failure={{
+          kind: 'network',
+          class: 'network',
+          message: 'socket hang up',
+          status: null,
+          run_id: null,
+          retry_after_ms: null,
+        }}
         onRetry={onRetry}
       >
         <span />

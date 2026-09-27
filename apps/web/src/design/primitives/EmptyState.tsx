@@ -311,11 +311,7 @@ export function useCopyButton(): [boolean, (text: string) => void] {
 
 export function CopyButton({ text, label }: { text: string; label: string }): ReactElement {
   const [copied, copy] = useCopyButton();
-  return (
-    <Action onClick={() => copy(text)}>
-      {copied ? 'Copied' : label}
-    </Action>
-  );
+  return <Action onClick={() => copy(text)}>{copied ? 'Copied' : label}</Action>;
 }
 
 /* ------------------------------------------------------------------ union -- */
@@ -452,8 +448,17 @@ function NoRun(props: NoRunState): ReactElement {
 /* (c) account has no counterparties in the window -------------------------- */
 
 function WindowEmpty(props: WindowEmptyState): ReactElement {
-  const { accountId, from, to, currentHops, maxHops, edgesAtCurrentHops, edgesAtWiderWindow, onWidenHops, onWidenDates } =
-    props;
+  const {
+    accountId,
+    from,
+    to,
+    currentHops,
+    maxHops,
+    edgesAtCurrentHops,
+    edgesAtWiderWindow,
+    onWidenHops,
+    onWidenDates,
+  } = props;
 
   /* One month either side is the honest first widening: enough to catch a
      counterparty that straddles the boundary, still narrow enough to be an
@@ -464,7 +469,9 @@ function WindowEmpty(props: WindowEmptyState): ReactElement {
     <EmptyStateFrame>
       <Glyph name="embargo" title="Window" />
       <div style={{ marginTop: 10 }}>
-        <Headline>{accountId} has no counterparties between {from} and {to}</Headline>
+        <Headline>
+          {accountId} has no counterparties between {from} and {to}
+        </Headline>
         <Body>
           The graph is empty because the <strong style={{ color: 'var(--color-ink)' }}>window</strong> is narrow, not
           because the account is isolated. At {currentHops} hop{currentHops === 1 ? '' : 's'} this account has{' '}
@@ -518,10 +525,10 @@ function NoDisagreement(props: NoDisagreementState): ReactElement {
       <div style={{ marginTop: 10 }}>
         <Headline>The two models agree on every account above band {props.bandAbove}</Headline>
         <Body>
-          Across <Count value={props.comparedAccounts} /> accounts, the scorecard and the GBM produced no
-          disagreements, and the largest gap was <Count value={props.maxDelta} />. That is a finding, not an absence
-          of one: two independent models converging on the same ranking is the strongest evidence the feature set
-          carries, and a page that renders nothing here is throwing that away.
+          Across <Count value={props.comparedAccounts} /> accounts, the scorecard and the GBM produced no disagreements,
+          and the largest gap was <Count value={props.maxDelta} />. That is a finding, not an absence of one: two
+          independent models converging on the same ranking is the strongest evidence the feature set carries, and a
+          page that renders nothing here is throwing that away.
         </Body>
       </div>
 
@@ -556,8 +563,8 @@ function NoDisagreement(props: NoDisagreementState): ReactElement {
       </Row>
 
       <Hint>
-        The threshold is a reporting choice, not a fitted parameter. Raising it loosens the comparison; it never
-        changes either model&apos;s scores.
+        The threshold is a reporting choice, not a fitted parameter. Raising it loosens the comparison; it never changes
+        either model&apos;s scores.
       </Hint>
     </EmptyStateFrame>
   );
@@ -575,11 +582,10 @@ function NoCycles(props: NoCyclesState): ReactElement {
       <div style={{ marginTop: 10 }}>
         <Headline>No cycle survived the time-respecting filter over this window</Headline>
         <Body>
-          The explorer drew <Count value={props.accountsDrawn} /> accounts and{' '}
-          <Count value={props.edgesDrawn} /> edges between {props.windowFrom} and {props.windowTo}, and every
-          candidate loop was rejected for being out of order in time or for losing value along the way. That is a
-          measurement of this corpus, not a query that failed: a cycle here has to return to its origin, hand
-          money forward at each hop, and do both inside the window.
+          The explorer drew <Count value={props.accountsDrawn} /> accounts and <Count value={props.edgesDrawn} /> edges
+          between {props.windowFrom} and {props.windowTo}, and every candidate loop was rejected for being out of order
+          in time or for losing value along the way. That is a measurement of this corpus, not a query that failed: a
+          cycle here has to return to its origin, hand money forward at each hop, and do both inside the window.
         </Body>
       </div>
 
@@ -597,8 +603,15 @@ function NoCycles(props: NoCyclesState): ReactElement {
         }}
       >
         <span style={{ fontSize: '0.75rem', color: 'var(--color-ink-muted)', fontFamily: 'var(--font-sans)' }}>
-          Traversed <span className="u-tabular" style={{ color: 'var(--color-ink)', fontWeight: 600 }}>{props.currentHops}</span>{' '}
-          of up to <span className="u-tabular" style={{ color: 'var(--color-ink)', fontWeight: 600 }}>{props.maxHops}</span> hops
+          Traversed{' '}
+          <span className="u-tabular" style={{ color: 'var(--color-ink)', fontWeight: 600 }}>
+            {props.currentHops}
+          </span>{' '}
+          of up to{' '}
+          <span className="u-tabular" style={{ color: 'var(--color-ink)', fontWeight: 600 }}>
+            {props.maxHops}
+          </span>{' '}
+          hops
         </span>
         <span style={{ fontSize: '0.75rem', color: 'var(--color-ink-faint)', fontFamily: 'var(--font-sans)' }}>
           Wider windows are set on the query, not here
@@ -615,8 +628,8 @@ function NoCycles(props: NoCyclesState): ReactElement {
       </Row>
 
       <Hint>
-        Dropping the overlay shows the topology that was actually found. A two-hop round trip between one account
-        and itself is excluded on purpose: it is a reinvestment, not a network.
+        Dropping the overlay shows the topology that was actually found. A two-hop round trip between one account and
+        itself is excluded on purpose: it is a reinvestment, not a network.
       </Hint>
     </EmptyStateFrame>
   );

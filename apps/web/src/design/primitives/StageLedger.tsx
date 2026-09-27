@@ -166,13 +166,7 @@ export function StageLedger({
 
       <ol style={{ listStyle: 'none', margin: 0, padding: 0 }}>
         {stages.map((stage) => (
-          <StageRow
-            key={stage.id}
-            stage={stage}
-            now={now}
-            reducedMotion={reducedMotion}
-            onRetryStage={onRetryStage}
-          />
+          <StageRow key={stage.id} stage={stage} now={now} reducedMotion={reducedMotion} onRetryStage={onRetryStage} />
         ))}
       </ol>
 

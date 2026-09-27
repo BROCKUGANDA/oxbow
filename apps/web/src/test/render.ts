@@ -1,6 +1,6 @@
 import { act } from 'react';
-import { createRoot, type Root } from 'react-dom/client';
 import type { ReactElement } from 'react';
+import { type Root, createRoot } from 'react-dom/client';
 
 /**
  * The minimal mount helper the edge tests need — react-dom/client + React.act,
@@ -78,7 +78,8 @@ export function mustFind<T extends Element>(container: HTMLElement, selector: st
 
 export function mustFindAll<T extends Element>(container: HTMLElement, selector: string): T[] {
   const found = Array.from(container.querySelectorAll<T>(selector));
-  if (found.length === 0) throw new Error(`expected at least one ${selector} in:\n${container.outerHTML.slice(0, 2000)}`);
+  if (found.length === 0)
+    throw new Error(`expected at least one ${selector} in:\n${container.outerHTML.slice(0, 2000)}`);
   return found;
 }
 

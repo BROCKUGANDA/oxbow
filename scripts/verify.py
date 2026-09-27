@@ -262,60 +262,101 @@ PHASES: tuple[Phase, ...] = (
     Phase(
         name="P8",
         done=False,
-        # Not "never rendered in a browser" any more: 316535b ran the suite against the
-        # cached chromium and measured CLS on every route. What is still open is the
-        # measurement itself -- /alerts sits at 0.0153 against a 0.001 budget because a div
-        # shifts on resolution -- plus five playwright specs that are not green. Saying
-        # "unverified" would understate what has been measured, and saying "done" would
-        # overstate a red suite.
+        # Re-measured on the cached chromium on 2026-09-27 after the queue page was rebuilt
+        # around slot-matched geometry: the CLS that was the open defect is gone. What is open
+        # now is one spec that stopped being about geometry and became about the API.
         pending_reason=(
-            "51 vitest tests pass over 11 files and every route has been rendered and "
-            "measured in the cached chromium, but the measured CLS is over budget on "
-            "/alerts (0.0153 against 0.001, a div shifts on resolution) and 5 of 26 "
-            "playwright specs are not green, so the matched-geometry claim does not yet "
-            "hold on the queue route"
+            "24 of 26 playwright specs pass and one is a recorded skip -- the 1,500-node "
+            "fps probe, which the null-file warehouse cannot draw and says so rather than "
+            "passing vacuously. Measured CLS is 0.000000 on /alerts and 0.000000 on "
+            "/cases/[id] against a zero budget, and 0.000438 on /dev/states against 0.001. "
+            "51 vitest tests over 11 files, tsc --noEmit clean, biome clean at zero findings. "
+            "The one red spec is the dataset-fidelity clause driven against the live API: "
+            "13 of /model's panes never leave their loading state even though their route "
+            "answered 200, so the pane-error tier DESIGN.md §5 promises is not reached on "
+            "that path, and /network's node shape still diverges from the client decoder "
+            "(apps/api serves id/label/is_seed, contract.ts:773 requires "
+            "key/node_type/flagged/is_cycle_member/hops/true_size)"
         ),
         gates=(
-            # `bun run test:unit --run` is the declared package script, so this gate runs the same
-            # command the Makefile and a fresh clone run. Two gates that reach the same tests by
-            # different routes is how a green verify and a broken `make test-web` coexist.
+            # `node node_modules/vitest/vitest.mjs run` -- not a package-manager script, and
+            # not `node_modules/.bin/vitest` either: that is a shell script, and subprocess on
+            # Windows cannot CreateProcess one (WinError 2). Going through node is the same
+            # resolution order the .CMD shim uses, so the gate measures the installed tree
+            # whoever installed it, which is the whole point of a gate.
             #
-            # The pinned toolchain question is settled, not assumed: plan §T2 named
-            # `packageManager: "pnpm@9.15.9"` with a committed `pnpm-lock.yaml`, and §13 puts
-            # `pnpm audit` in CI, but pnpm is not installed on this host and never was -- so every
-            # `pnpm ...` recipe was unrunnable as written. DEV-022 is the plan amendment that
-            # supersedes that pin, and the owner approved it on 2026-09-27;
-            # test_the_declared_js_toolchain_is_the_one_every_recipe_uses now holds the whole chain
-            # to Bun, so a future swap has to be another amendment rather than a quiet edit.
+            # The declared toolchain stays pnpm: plan §T2 pins `packageManager:
+            # "pnpm@9.15.9"` with a committed `pnpm-lock.yaml`, and §13 puts `pnpm audit` in
+            # CI. This host has no pnpm, which is a fact about the host -- so it is worked
+            # around here, in the gate, and not in the manifest. DEV-022 records the Bun
+            # proposal as rejected, and
+            # test_the_declared_js_toolchain_is_the_one_every_recipe_uses holds the whole
+            # chain (manifest, Dockerfile, Makefile, pre-commit, this table) to that answer.
             #
-            # The previous form of this gate (`node node_modules/vitest/vitest.mjs run`) existed
-            # only to dodge the missing pnpm, and it kept one fact worth carrying forward:
-            # `node_modules/.bin/vitest` is a shell script, which subprocess on Windows cannot
-            # CreateProcess (WinError 2). `bun run` resolves the bin itself and never asks Windows
-            # to exec a shell script, so the dodge is no longer needed.
-            #
-            # Bun runs the task, not the tests: the vitest process this produces prints Node's own
-            # DEP0205 and Vite's CJS Node API deprecation, which is the evidence the suite executes
-            # on Node -- the interpreter `engines.node` names and every prior web gate measured.
+            # prerequisite= names the entry point: an uninstalled tree reads SKIPPED with the
+            # path in the report rather than crashing, and never reads as a pass.
             #
             # cwd="apps/web" is load-bearing: vitest resolves its config and its
             # `include: tests/unit/**` globs against the working directory, and passing a
             # relative --config instead breaks esbuild's own path resolution.
             Gate(
                 "unit tests for the design system and state craft",
-                ("bun", "run", "test:unit", "--run"),
+                ("node", "node_modules/vitest/vitest.mjs", "run"),
                 cwd="apps/web",
+                prerequisite="apps/web/node_modules/vitest/vitest.mjs",
+            ),
+            # The two checks `make typecheck` and `make lint-web` name, gated the same way.
+            # Both ran for real on 2026-09-27: tsc emitted zero errors, and biome zero findings
+            # over 86 files after 76 were cleared -- 60 of them in the icon codegen, where
+            # noUnusedTemplateLiteral and useTemplate oscillate against each other on
+            # multi-line SVG literals, which is what the scoped override in apps/web/biome.json
+            # is for. The other a11y rule turned off there is the mirror image of
+            # useSemanticElements, already off: the ARIA list-box pattern this app's keyboard
+            # routes implement puts role="listbox" on a ul, which is what that rule rejects.
+            Gate(
+                "typecheck every route and component",
+                ("node", "node_modules/typescript/bin/tsc", "--noEmit"),
+                cwd="apps/web",
+                prerequisite="apps/web/node_modules/typescript/bin/tsc",
+            ),
+            Gate(
+                "biome lint and format (make lint-web)",
+                ("node", "node_modules/@biomejs/biome/bin/biome", "check", "."),
+                cwd="apps/web",
+                prerequisite="apps/web/node_modules/@biomejs/biome/bin/biome",
             ),
         ),
     ),
     Phase(
         name="P9",
         done=False,
-        pending_reason="docs render and the packet refuses for want of a landed case; make demo still calls a scripts/demo_seed.py that does not exist",
+        # The seeder exists now (scripts/demo_seed.py), and it refuses to snapshot a
+        # warehouse with no score, fold or decision rather than producing the blank demo
+        # STATE.md item 11 warned about -- so what is left is the evidence itself, not the
+        # script. The packet is blocked on the same missing case, and separately on
+        # Pango/GObject being absent on this host, which the deploy image carries.
+        pending_reason=(
+            "docs render and the packet refuses for want of a landed case; the seeder "
+            "exists and refuses to snapshot until a score, a backtest fold and a decision "
+            "have been landed, and the PDF step needs Pango/GObject, which this host "
+            "lacks and the deploy image carries"
+        ),
         gates=(
             Gate(
                 "audit hash chain verifies",
                 ("uv", "run", "python", "scripts/verify_audit.py"),
+            ),
+            # The seeder is a gate in its own right, and it is conditional: there is
+            # nothing to snapshot until a score, a fold and a decision exist, so a missing
+            # demo.dump is SKIPPED-PREREQUISITE with the path named rather than a pass.
+            # This is the phantom-gate fix made executable -- before, `make demo` called a
+            # script that did not exist and nothing checked; now the script exists, and
+            # this gate is how a reviewer learns whether a snapshot has been taken.
+            Gate(
+                "a pinned demo snapshot exists and is restorable",
+                ("uv", "run", "python", "scripts/demo_seed.py", "--restore",
+                 "--boot-budget", "90"),
+                prerequisite="data/snapshots/demo.dump",
             ),
         ),
     ),

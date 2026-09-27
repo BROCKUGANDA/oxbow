@@ -17,7 +17,9 @@ function transactions(count: number): TransactionRow[] {
     const minor = Math.round((inbound ? 4_500_000 : 4_200_000) + next() * 3_000_000);
     out.push({
       txn_id: `ibmaml:${String(100_000 + index * 7)}`,
-      ts_utc: new Date(Date.UTC(2026, 8, 11, 3 + Math.floor(index / 4), (index * 17) % 60, (index * 7) % 60)).toISOString(),
+      ts_utc: new Date(
+        Date.UTC(2026, 8, 11, 3 + Math.floor(index / 4), (index * 17) % 60, (index * 7) % 60),
+      ).toISOString(),
       type: inbound ? 'TRANSFER' : 'CASH_OUT',
       channel: 'mobile_wallet',
       amount: money(minor),
@@ -71,7 +73,8 @@ function decisions(): Decision[] {
     {
       seq: 1,
       decision: 'review',
-      reason: 'Pulled the account onto the desk: four-hop loop with retention above the floor, and the cash-out leg is inside the window.',
+      reason:
+        'Pulled the account onto the desk: four-hop loop with retention above the floor, and the cash-out leg is inside the window.',
       actor: 'analyst.okello',
       role: 'analyst',
       recorded_at: new Date(Date.UTC(2026, 8, 24, 9, 41, 12)).toISOString(),
@@ -84,7 +87,8 @@ function decisions(): Decision[] {
     {
       seq: 2,
       decision: 'escalate',
-      reason: 'Counterparty set repeats across three other flagged accounts; escalating with the subgraph attached rather than closing on the account alone.',
+      reason:
+        'Counterparty set repeats across three other flagged accounts; escalating with the subgraph attached rather than closing on the account alone.',
       actor: 'reviewer.nabirye',
       role: 'reviewer',
       recorded_at: new Date(Date.UTC(2026, 8, 24, 11, 6, 38)).toISOString(),
@@ -153,9 +157,27 @@ export const heroCase: CasePayload = {
       },
     ],
     reasons: [
-      { text: 'Pass-through ratio in top decile: minus 48 points', attribute: 'pass_through_ratio_1h', bin: '0.86 – 1.00', points: -48, contribution: -0.31 },
-      { text: 'Distinct inbound counterparties above the ninth decile: minus 31 points', attribute: 'distinct_senders_24h', bin: '≥ 11', points: -31, contribution: -0.18 },
-      { text: 'Member of a value-retaining cycle: minus 27 points', attribute: 'cycle_retention_score', bin: '0.60 – 0.85', points: -27, contribution: -0.14 },
+      {
+        text: 'Pass-through ratio in top decile: minus 48 points',
+        attribute: 'pass_through_ratio_1h',
+        bin: '0.86 – 1.00',
+        points: -48,
+        contribution: -0.31,
+      },
+      {
+        text: 'Distinct inbound counterparties above the ninth decile: minus 31 points',
+        attribute: 'distinct_senders_24h',
+        bin: '≥ 11',
+        points: -31,
+        contribution: -0.18,
+      },
+      {
+        text: 'Member of a value-retaining cycle: minus 27 points',
+        attribute: 'cycle_retention_score',
+        bin: '0.60 – 0.85',
+        points: -27,
+        contribution: -0.14,
+      },
     ],
     economics: {
       exposure: figure(412_000_000),

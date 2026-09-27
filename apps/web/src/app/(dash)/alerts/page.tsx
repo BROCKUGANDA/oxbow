@@ -8,10 +8,12 @@
    carries the count beneath it, the minutes that bought it, and the money the
    remainder is worth, all three from the response.
 
-   VIRTUALISATION. Rows are windowed by TanStack Virtual against `ROW_HEIGHT`, the
-   same constant the skeleton is built from, and the scroll container's height comes
-   from `meta.total` before a single row exists. That is how CLS stays at zero on a
-   ten-thousand-row queue rather than merely getting small.
+   VIRTUALISATION. Rows are windowed by TanStack Virtual against `ROW_HEIGHT`, the same
+   constant the skeleton and the card itself are built from, inside a body region whose
+   height is the viewport minus the shell chrome (`--shell-chrome-height`) and never the
+   response. That is how CLS stays at zero on a ten-thousand-row queue rather than merely
+   getting small: the box the rows arrive in already exists, in the pending state, in the
+   empty state and in the failed one, so nothing any response can say moves the page.
 
    URL SYNC. Filter, page, sort and focus are the query string, so
    `/alerts?band=E&typology=R4&offset=1200` reopens exactly what an analyst was
@@ -25,35 +27,57 @@
 
 'use client';
 
-import { usePathname, useRouter, useSearchParams } from 'next/navigation';
-import {
-  Suspense,
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-  type ReactElement,
-} from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
+import { usePathname, useRouter, useSearchParams } from 'next/navigation';
+import { type ReactElement, type ReactNode, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
+import { TYPOLOGY_META, glyphFor } from '@/components/typology';
+import { BandBadge } from '@/components/ui/BandBadge';
+import { MoneyFigure } from '@/components/ui/MoneyFigure';
+import { AccountChip, RunIdChip, Timestamp } from '@/components/ui/provenance';
+import { ELLIPSIS, GAP_TIGHT, HAIRLINE_BOTTOM, PANEL_SUNKEN, T_LABEL, T_MICRO } from '@/components/ui/sx';
 import { Icon } from '@/design/icons/Icon';
 import { EmptyState } from '@/design/primitives/EmptyState';
 import { ErrorPane } from '@/design/primitives/ErrorPane';
+import { Shimmer } from '@/design/primitives/Shimmer';
 import { Skeleton } from '@/design/primitives/Skeleton';
-import { MoneyFigure } from '@/components/ui/MoneyFigure';
-import { BandBadge } from '@/components/ui/BandBadge';
-import { AccountChip, RunIdChip, Timestamp } from '@/components/ui/provenance';
-import { TYPOLOGY_META, glyphFor } from '@/components/typology';
-import { PIPELINE_COMMAND, RUNTIME_ESTIMATE_FALLBACK } from '@/lib/copy';
-import { ROUTES, type AlertRow, type Band, type QueueCapacity, type QueueFacets, type Typology } from '@/lib/api/contract';
+import {
+  type AlertRow,
+  type Band,
+  type QueueCapacity,
+  type QueueFacets,
+  ROUTES,
+  type Typology,
+} from '@/lib/api/contract';
 import { useListResource, useRuntime } from '@/lib/api/hooks';
 import { failureDetail, failureRunId, failureTitle, isRunNotFound } from '@/lib/api/problem';
+import { PIPELINE_COMMAND, RUNTIME_ESTIMATE_FALLBACK } from '@/lib/copy';
 import { compactFromMinor, count } from '@/lib/format/money';
-import { ELLIPSIS, GAP_TIGHT, HAIRLINE_BOTTOM, PANEL_SUNKEN, T_LABEL, T_MICRO } from '@/components/ui/sx';
 
-/** THE row height, shared by the virtualiser and the skeleton. Geometry, not data. */
-const ROW_HEIGHT = 172;
+/** THE queue row box: the virtualiser's estimate, the skeleton's row height and the
+ *  card's own outer height are this one number, in that one place. It is derived from
+ *  the measured card rather than asserted: the resolved card at a 1440 px viewport is
+ *  10 padding + 27 header + 128 the reason/money row (the 128 is what the assumption
+ *  line and recovery band DESIGN.md §7 obliges the money column to carry) + 14 footer
+ *  + 10 padding = 189, plus the 8 px gutter between cards. The number in the fixture
+ *  was 172, and the 17 px it lost was printing the card footer over the next card's
+ *  border. Geometry, not data. */
+const ROW_GUTTER = 8;
+const CARD_HEIGHT = 189;
+const ROW_HEIGHT = CARD_HEIGHT + ROW_GUTTER;
+
+/** The capacity line's own row. It is a slot in the virtualised list rather than a
+ *  child of a card, so it gets this much real space and nothing overlaps it. */
+const CAPACITY_LINE_HEIGHT = 40;
+
+/** One entry in the virtualised list: a queue row, or the capacity line between rows. */
+type QueueSlot = { kind: 'row'; row: AlertRow } | { kind: 'capacity'; capacity: QueueCapacity };
+
+/** The filter bar's own box, fixed for the same reason: the facet chips it renders are
+ *  server-determined, so an auto-height bar grows when a response arrives and every
+ *  row below it moves. The bar and the two reserves that stand in for it (the suspense
+ *  fallback and nothing else now — the failed arm renders the real bar) all read this. */
+const FILTER_BAR_HEIGHT = 68;
 const PAGE_SIZE = 100;
 
 const BANDS: readonly Band[] = ['A', 'B', 'C', 'D', 'E'];
@@ -89,27 +113,101 @@ export default function AlertsPage(): ReactElement {
 }
 
 function QueueSkeleton(): ReactElement {
+  /* The suspense fallback and the resolved-but-pending queue must be the same boxes:
+     this boundary is crossed on every load, so a bar slot that is 24 px shorter than
+     the real filter bar moves the whole list. `QueueFrame` owns the chrome and the
+     body region, and both arms put a matched-geometry skeleton in it. */
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', height: 'calc(100vh - 112px)' }}>
-      {/* The filter bar is 44 px tall in the resolved layout and stays in the flow
-          while the queue suspends; leaving it out is a 44 px shift on resolve. */}
-      <div style={{ height: 44, padding: '0 var(--spacing-pane-gap)', display: 'flex', alignItems: 'center' }}>
-        <Skeleton label="Loading the filter bar" rows={1} rowHeight={28} showHeader={false} columns={[{ key: 'f', width: '320px' }]} />
+    <QueueFrame barSlot={<FilterBarSkeleton />}>
+      <QueueRowsSkeleton />
+    </QueueFrame>
+  );
+}
+
+/** The body region every arm shares: the filter bar on top, then one flexed region
+ *  that is the same box whether it is holding a skeleton, the virtualised rows, an
+ *  empty state or the error tier. DESIGN.md §5 makes resolution — including failure,
+ *  which is a resolved state — cost zero layout shift, and the only way that is true
+ *  rather than merely small is for the arms to share one frame. */
+function QueueFrame({ barSlot, children }: { barSlot: ReactNode; children: ReactNode }): ReactElement {
+  return (
+    <div
+      style={{
+        display: 'flex',
+        flexDirection: 'column',
+        height: 'calc(100vh - var(--shell-chrome-height))',
+      }}
+    >
+      {barSlot}
+      <div data-queue-body style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+        {children}
       </div>
-      <div style={{ padding: '0 var(--spacing-pane-gap)' }}>
-        <Skeleton
-          label="Loading the alert queue"
-          rows={6}
-          rowHeight={ROW_HEIGHT}
-          showHeader={false}
-          columns={[
-            { key: 'account', width: '160px' },
-            { key: 'band', width: '120px' },
-            { key: 'reasons', width: 'minmax(0, 1fr)' },
-            { key: 'exposure', width: '210px', align: 'end' },
-            { key: 'ev', width: '210px', align: 'end' },
-          ]}
-        />
+    </div>
+  );
+}
+
+/** The queue body's own padding box, identical in the pending, empty and failed arms so
+ *  swapping one for the other cannot move the frame. The resolved list scrolls inside
+ *  its own region instead (`data-queue-scroll`). */
+function QueueBody({ children, pad = true }: { children: ReactNode; pad?: boolean }): ReactElement {
+  return (
+    <div
+      style={{
+        flex: 1,
+        minHeight: 0,
+        overflowY: 'auto',
+        padding: pad ? 'var(--spacing-pane-gap)' : '0 var(--spacing-pane-gap)',
+      }}
+    >
+      {children}
+    </div>
+  );
+}
+
+function QueueRowsSkeleton(): ReactElement {
+  return (
+    <QueueBody pad={false}>
+      <Skeleton
+        label="Loading the alert queue"
+        rows={6}
+        rowHeight={ROW_HEIGHT}
+        showHeader={false}
+        columns={[
+          { key: 'account', width: '160px' },
+          { key: 'band', width: '120px' },
+          { key: 'reasons', width: 'minmax(0, 1fr)' },
+          { key: 'exposure', width: '210px', align: 'end' },
+          { key: 'ev', width: '210px', align: 'end' },
+        ]}
+      />
+    </QueueBody>
+  );
+}
+
+/** A shimmer in the filter bar's exact box. The bar is real chrome rather than a
+ *  reserved gap wherever the query has a shape to describe; this stands in only for
+ *  the suspense crossing, where the query string — and so the filter state — is not
+ *  yet readable. */
+function FilterBarSkeleton(): ReactElement {
+  return (
+    <div
+      aria-hidden="true"
+      data-filter-bar-skeleton
+      style={{
+        height: FILTER_BAR_HEIGHT,
+        boxSizing: 'border-box',
+        padding: '8px var(--spacing-pane-gap)',
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 6,
+        ...HAIRLINE_BOTTOM,
+      }}
+    >
+      <div style={{ height: 22, display: 'flex', alignItems: 'center' }}>
+        <Shimmer width={260} height={22} radius="var(--radius-control)" />
+      </div>
+      <div style={{ height: 24, display: 'flex', alignItems: 'center' }}>
+        <Shimmer width={520} height={22} radius="var(--radius-control)" />
       </div>
     </div>
   );
@@ -146,7 +244,10 @@ function QueueExplorer(): ReactElement {
   const rows = queue.data?.rows ?? [];
   const capacity = queue.data?.capacity ?? null;
   const assumptions = queue.meta?.assumptions ?? [];
-  const total = queue.meta?.total ?? rows.length;
+  /** The server's count, or null while no response has carried one. `0` is a number the
+   *  API never sent, and DESIGN.md §7 forbids rendering it: while the queue is in flight
+   *  — or has failed — the filter bar says `—`, the same placeholder the facet chips use. */
+  const total = queue.meta?.total ?? null;
 
   const writeFilters = useCallback(
     (next: Partial<QueueFilters>) => {
@@ -165,10 +266,51 @@ function QueueExplorer(): ReactElement {
     [params, pathname, router],
   );
 
+  /** Index of the row the cutoff is drawn after, or -1 when it is off-page. */
+  const cutoffIndex = useMemo(() => {
+    if (capacity === null || capacity.cutoff_rank === null) return -1;
+    const index = rows.findIndex((row) => row.rank === capacity.cutoff_rank);
+    if (index >= 0) return index;
+    // The cutoff sits between two pages: draw it on whichever side it is nearest so
+    // the line never silently disappears from a filtered view.
+    return capacity.cutoff_rank < (rows[0]?.rank ?? 0) ? 0 : -1;
+  }, [rows, capacity]);
+
+  /* The queue is virtualised over *slots*, not rows: the capacity line is a slot with
+     its own measured height, because as a child of a fixed-height row it overflowed
+     into the next card's header — the one line in this route that must not overlap the
+     evidence it is dividing. A slot list keeps `estimateSize` exact from the first
+     paint, which is what the zero-shift promise needs: the virtualiser never has to
+     correct a row it already placed. */
+  const slots = useMemo<QueueSlot[]>(() => {
+    if (cutoffIndex < 0) return rows.map((row): QueueSlot => ({ kind: 'row', row }));
+    const out: QueueSlot[] = [];
+    rows.forEach((row, index) => {
+      out.push({ kind: 'row', row });
+      if (index === cutoffIndex && capacity !== null) out.push({ kind: 'capacity', capacity });
+    });
+    return out;
+  }, [rows, cutoffIndex, capacity]);
+
+  /** Row index ↔ slot index, so `j`/`k` move through rows and skip the capacity line. */
+  const { rowSlot, slotRow } = useMemo(() => {
+    const rowsToSlots: number[] = [];
+    const slotsToRows: (number | null)[] = [];
+    for (const slot of slots) {
+      if (slot.kind === 'row') {
+        rowsToSlots.push(slotsToRows.length);
+        slotsToRows.push(rowsToSlots.length - 1);
+      } else {
+        slotsToRows.push(null);
+      }
+    }
+    return { rowSlot: rowsToSlots, slotRow: slotsToRows };
+  }, [slots]);
+
   const virtualiser = useVirtualizer({
-    count: rows.length,
+    count: slots.length,
     getScrollElement: () => listRef.current,
-    estimateSize: () => ROW_HEIGHT,
+    estimateSize: (index) => (slots[index]?.kind === 'capacity' ? CAPACITY_LINE_HEIGHT : ROW_HEIGHT),
     overscan: 6,
   });
 
@@ -181,7 +323,7 @@ function QueueExplorer(): ReactElement {
         event.preventDefault();
         const next = Math.min(Math.max(focused + (event.key === 'j' ? 1 : -1), 0), last);
         setFocused(next);
-        virtualiser.scrollToIndex(next);
+        virtualiser.scrollToIndex(rowSlot[next] ?? 0);
         return;
       }
       const row = rows[focused];
@@ -193,77 +335,54 @@ function QueueExplorer(): ReactElement {
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [rows, focused, router, virtualiser]);
+  }, [rows, focused, router, virtualiser, rowSlot]);
 
-  /** Index of the row the cutoff is drawn after, or -1 when it is off-page. */
-  const cutoffIndex = useMemo(() => {
-    if (capacity === null || capacity.cutoff_rank === null) return -1;
-    const index = rows.findIndex((row) => row.rank === capacity.cutoff_rank);
-    if (index >= 0) return index;
-    // The cutoff sits between two pages: draw it on whichever side it is nearest so
-    // the line never silently disappears from a filtered view.
-    return capacity.cutoff_rank < (rows[0]?.rank ?? 0) ? 0 : -1;
-  }, [rows, capacity]);
-
-  if (queue.failure !== null && queue.data === null) {
-    /* The failure branch reserves the same full-height column the skeleton held —
-       bar slot plus body — because the measured CLS on this route was the footer
-       jumping when a `calc(100vh - 112px)` pending box collapsed into an auto-height
-       error block. A failed queue is still a queue-shaped region. */
-    const failureSurface = isRunNotFound(queue.failure) ? (
-      <EmptyState
-        kind="no-run"
-        command={PIPELINE_COMMAND}
-        expectedRuntime={RUNTIME_ESTIMATE_FALLBACK}
-        corpus={runtime.data?.dataset ?? undefined}
-      />
-    ) : (
-      <ErrorPane
-        paneId="alert-queue"
-        operation="Loading the alert queue"
-        error={{
-          title: failureTitle(queue.failure),
-          detail: failureDetail(queue.failure) ?? undefined,
-          run_id: failureRunId(queue.failure) ?? undefined,
-        }}
-        onRetry={() => void queue.refetch()}
-        attempt={queue.attempts}
-        retrying={queue.isFetching}
-        siblingsIntact={false}
-      >
-        <RunIdChip runId={failureRunId(queue.failure)} />
-      </ErrorPane>
-    );
-    return (
-      <div style={{ display: 'flex', flexDirection: 'column', height: 'calc(100vh - 112px)' }}>
-        <div aria-hidden="true" style={{ height: 44, padding: '0 var(--spacing-pane-gap)' }} />
-        <div style={{ padding: 'var(--spacing-pane-gap)' }}>{failureSurface}</div>
-      </div>
-    );
-  }
+  /* Four arms, one frame. The filter bar is real chrome in all of them — including the
+     failed one, where the analyst still has a band and a typology to change before
+     retrying — and the body region under it is the same box in all of them, so neither
+     resolution nor failure can move anything. This is DESIGN.md §5's "skeleton geometry
+     matches the resolved layout exactly" measured, not asserted: the mover the Playwright
+     probe named on this route was the body div jumping 24 px when the failed arm swapped
+     the 68 px filter bar for a 44 px reserved spacer. A 503 is a resolved state. */
+  const failure = queue.failure;
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', height: 'calc(100vh - 112px)' }}>
-      <FilterBar filters={filters} facets={queue.data?.facets ?? null} total={total} onChange={writeFilters} />
-
-      {queue.data === null ? (
-        <div style={{ padding: '0 var(--spacing-pane-gap)' }}>
-          <Skeleton
-            label="Loading the alert queue"
-            rows={6}
-            rowHeight={ROW_HEIGHT}
-            showHeader={false}
-            columns={[
-              { key: 'account', width: '160px' },
-              { key: 'band', width: '120px' },
-              { key: 'reasons', width: 'minmax(0, 1fr)' },
-              { key: 'exposure', width: '210px', align: 'end' },
-              { key: 'ev', width: '210px', align: 'end' },
-            ]}
-          />
-        </div>
+    <QueueFrame
+      barSlot={
+        <FilterBar filters={filters} facets={queue.data?.facets ?? null} total={total} onChange={writeFilters} />
+      }
+    >
+      {failure !== null && queue.data === null ? (
+        <QueueBody>
+          {isRunNotFound(failure) ? (
+            <EmptyState
+              kind="no-run"
+              command={PIPELINE_COMMAND}
+              expectedRuntime={RUNTIME_ESTIMATE_FALLBACK}
+              corpus={runtime.data?.dataset ?? undefined}
+            />
+          ) : (
+            <ErrorPane
+              paneId="alert-queue"
+              operation="Loading the alert queue"
+              error={{
+                title: failureTitle(failure),
+                detail: failureDetail(failure) ?? undefined,
+                run_id: failureRunId(failure) ?? undefined,
+              }}
+              onRetry={() => void queue.refetch()}
+              attempt={queue.attempts}
+              retrying={queue.isFetching}
+              siblingsIntact={false}
+            >
+              <RunIdChip runId={failureRunId(failure)} />
+            </ErrorPane>
+          )}
+        </QueueBody>
+      ) : queue.data === null ? (
+        <QueueRowsSkeleton />
       ) : rows.length === 0 ? (
-        <div style={{ padding: 'var(--spacing-pane-gap)' }}>
+        <QueueBody>
           {queue.data.filter_recovery !== null ? (
             <EmptyState
               kind="filters-excluded"
@@ -274,7 +393,9 @@ function QueueExplorer(): ReactElement {
                 rowsIfRemoved: queue.data.filter_recovery.rows_if_removed,
                 onRemove: () => {
                   const which = queue.data?.filter_recovery?.narrowest;
-                  writeFilters(which === 'typology' ? { typology: null } : which === 'band' ? { bands: [] } : { query: '' });
+                  writeFilters(
+                    which === 'typology' ? { typology: null } : which === 'band' ? { bands: [] } : { query: '' },
+                  );
                 },
               }}
               others={filters.bands.map((band) => ({
@@ -291,7 +412,7 @@ function QueueExplorer(): ReactElement {
               corpus={runtime.data?.dataset ?? undefined}
             />
           )}
-        </div>
+        </QueueBody>
       ) : (
         <div
           ref={listRef}
@@ -299,15 +420,16 @@ function QueueExplorer(): ReactElement {
           className="u-scroll"
           style={{ flex: 1, minHeight: 0, position: 'relative' }}
           role="list"
-          aria-label={`Alert queue, ${count(total)} alerts match the active policy`}
+          aria-label={`Alert queue. ${count(rows.length)} of ${total === null ? '—' : count(total)} alerts match the active policy`}
         >
           <div style={{ height: virtualiser.getTotalSize(), position: 'relative' }}>
             {virtualiser.getVirtualItems().map((item) => {
-              const row = rows[item.index];
-              if (row === undefined) return null;
+              const slot = slots[item.index];
+              if (slot === undefined) return null;
+              const isCapacity = slot.kind === 'capacity';
               return (
                 <div
-                  key={row.account_key}
+                  key={isCapacity ? 'capacity-line' : slot.row.account_key}
                   data-index={item.index}
                   ref={virtualiser.measureElement}
                   style={{
@@ -316,24 +438,30 @@ function QueueExplorer(): ReactElement {
                     left: 0,
                     width: '100%',
                     transform: `translateY(${item.start}px)`,
-                    height: ROW_HEIGHT,
+                    height: isCapacity ? CAPACITY_LINE_HEIGHT : ROW_HEIGHT,
                   }}
                 >
-                  <QueueCard
-                    row={row}
-                    assumptions={assumptions}
-                    timeZone={timeZone}
-                    focused={item.index === focused}
-                    onFocus={() => setFocused(item.index)}
-                  />
-                  {item.index === cutoffIndex && capacity !== null ? <CapacityLine capacity={capacity} /> : null}
+                  {isCapacity ? (
+                    <CapacityLine capacity={slot.capacity} />
+                  ) : (
+                    <QueueCard
+                      row={slot.row}
+                      assumptions={assumptions}
+                      timeZone={timeZone}
+                      focused={slotRow[item.index] === focused}
+                      onFocus={() => {
+                        const rowIndex = slotRow[item.index];
+                        if (rowIndex !== null && rowIndex !== undefined) setFocused(rowIndex);
+                      }}
+                    />
+                  )}
                 </div>
               );
             })}
           </div>
         </div>
       )}
-    </div>
+    </QueueFrame>
   );
 }
 
@@ -347,7 +475,7 @@ function FilterBar({
 }: {
   filters: QueueFilters;
   facets: QueueFacets | null;
-  total: number;
+  total: number | null;
   onChange: (next: Partial<QueueFilters>) => void;
 }): ReactElement {
   const [text, setText] = useState(filters.query);
@@ -362,6 +490,10 @@ function FilterBar({
     // The facet placeholder (—) is ~53 px wide in the fallback face and 51 px in
     // IBM Plex; pinning the minimum stops the font swap from nudging the filter row.
     minWidth: 58,
+    // The rail scrolls rather than wraps, and a chip that shrank to fit would change
+    // the rail's content width and re-wrap nothing — it would just become unreadable.
+    flexShrink: 0,
+    height: 22,
     padding: '2px 6px',
     cursor: 'pointer',
     color: 'var(--color-ink)',
@@ -373,16 +505,23 @@ function FilterBar({
   return (
     <div
       data-print-hide
+      data-queue-bar
       style={{
         padding: '8px var(--spacing-pane-gap)',
         ...HAIRLINE_BOTTOM,
         display: 'flex',
         flexDirection: 'column',
         gap: 6,
+        /* Declared, not derived. The facets this bar renders are server-determined, so
+           an auto-height bar grows the moment a response arrives and every row under it
+           moves — which is the shift DESIGN.md §5 forbids. Both rows are therefore fixed
+           and the facet rail scrolls sideways instead of wrapping into a third line. */
+        height: FILTER_BAR_HEIGHT,
+        boxSizing: 'border-box',
       }}
     >
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-        <label style={{ ...T_LABEL, display: 'flex', alignItems: 'center', gap: 6 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, height: 22, flexShrink: 0 }}>
+        <label style={{ ...T_LABEL, display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
           <Icon name="search" size={14} title="Search account key" />
           <span className="u-sr-only">Search account key</span>
           <input
@@ -404,13 +543,23 @@ function FilterBar({
           />
         </label>
 
-        <span style={{ ...T_MICRO, color: 'var(--color-ink-faint)' }} data-queue-count>
-          {count(total)} alerts match · j/k move · Enter opens · e escalate · d dismiss
+        <span
+          style={{ ...T_MICRO, color: 'var(--color-ink-faint)', ...ELLIPSIS }}
+          data-queue-count
+          title={`${total === null ? 'No count reported yet' : `${count(total)} alerts match`} · j/k move · Enter opens · e escalate · d dismiss`}
+        >
+          {/* `—` until the response carries a total. A pending or failed queue printing
+              0 would be a number no API response sent (§7), and it is the same placeholder
+              the facet chips already use. */}
+          {total === null ? '—' : count(total)} alerts match · j/k move · Enter opens · e escalate · d dismiss
         </span>
       </div>
 
-      <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', alignItems: 'center' }}>
-        <span style={{ ...T_MICRO, color: 'var(--color-ink-faint)' }}>band</span>
+      <div
+        className="u-scroll-x"
+        style={{ height: 24, display: 'flex', gap: 4, alignItems: 'center', flexWrap: 'nowrap' }}
+      >
+        <span style={{ ...T_MICRO, color: 'var(--color-ink-faint)', flexShrink: 0 }}>band</span>
         {BANDS.map((band) => {
           const facet = facets?.bands.find((entry) => entry.band === band);
           const active = filters.bands.includes(band);
@@ -430,7 +579,7 @@ function FilterBar({
           );
         })}
 
-        <span style={{ ...T_MICRO, color: 'var(--color-ink-faint)', marginLeft: 8 }}>typology</span>
+        <span style={{ ...T_MICRO, color: 'var(--color-ink-faint)', marginLeft: 8, flexShrink: 0 }}>typology</span>
         {(facets?.typologies ?? []).map((entry) => {
           const active = filters.typology === entry.typology;
           const typology = entry.typology as Typology;
@@ -479,8 +628,8 @@ function QueueCard({
       onClick={onFocus}
       style={{
         ...PANEL_SUNKEN,
-        height: ROW_HEIGHT - 8,
-        margin: '0 var(--spacing-pane-gap) 8px',
+        height: CARD_HEIGHT,
+        margin: `0 var(--spacing-pane-gap) ${ROW_GUTTER}px`,
         padding: '10px 12px',
         display: 'grid',
         gridTemplateColumns: 'minmax(0, 1fr) 200px 200px',
@@ -505,19 +654,35 @@ function QueueCard({
           {(row.calibration.observed_rate * 100).toFixed(1)}% · n={count(row.calibration.n)}
         </span>
         {typology !== null ? (
-          <span style={{ ...T_MICRO, color: 'var(--color-ink-faint)', marginLeft: 'auto' }} title={TYPOLOGY_META[typology].reads}>
-            <Icon name={glyphFor(typology)} size={13} title={TYPOLOGY_META[typology].name} /> {TYPOLOGY_META[typology].name}
+          <span
+            style={{ ...T_MICRO, color: 'var(--color-ink-faint)', marginLeft: 'auto' }}
+            title={TYPOLOGY_META[typology].reads}
+          >
+            <Icon name={glyphFor(typology)} size={13} title={TYPOLOGY_META[typology].name} />{' '}
+            {TYPOLOGY_META[typology].name}
           </span>
         ) : null}
       </header>
 
       <div style={{ minWidth: 0, display: 'flex', flexDirection: 'column', gap: 4 }}>
-        <p style={{ ...T_MICRO, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--color-ink-faint)', margin: 0 }}>
+        <p
+          style={{
+            ...T_MICRO,
+            textTransform: 'uppercase',
+            letterSpacing: '0.06em',
+            color: 'var(--color-ink-faint)',
+            margin: 0,
+          }}
+        >
           Top three reasons
         </p>
         <ol style={{ margin: 0, padding: 0, listStyle: 'none', display: 'flex', flexDirection: 'column', gap: 2 }}>
           {row.reasons.map((reason) => (
-            <li key={reason.attribute} style={{ ...T_LABEL, color: 'var(--color-ink-muted)', ...ELLIPSIS }} title={reason.text}>
+            <li
+              key={reason.attribute}
+              style={{ ...T_LABEL, color: 'var(--color-ink-muted)', ...ELLIPSIS }}
+              title={reason.text}
+            >
               <span className="u-num" style={{ color: 'var(--color-ink)' }}>
                 {reason.points}
               </span>{' '}
@@ -532,9 +697,17 @@ function QueueCard({
       </div>
 
       <MoneyFigure figure={row.exposure} assumptions={assumptions} label="Exposure at risk" compact />
-      <MoneyFigure figure={row.expected_value} assumptions={assumptions} label="Expected value" compact showBand={false} />
+      <MoneyFigure
+        figure={row.expected_value}
+        assumptions={assumptions}
+        label="Expected value"
+        compact
+        showBand={false}
+      />
 
-      <footer style={{ gridColumn: '1 / -1', display: 'flex', alignItems: 'center', gap: 10, ...GAP_TIGHT, flexWrap: 'wrap' }}>
+      <footer
+        style={{ gridColumn: '1 / -1', display: 'flex', alignItems: 'center', gap: 10, ...GAP_TIGHT, flexWrap: 'wrap' }}
+      >
         <span className="u-num" style={{ ...T_MICRO, color: 'var(--color-ink-faint)' }}>
           rank {count(row.rank)} under {row.policy_label}
         </span>
@@ -542,7 +715,11 @@ function QueueCard({
           {row.above_capacity ? 'inside capacity' : 'below the cutoff'}
         </span>
         <span style={{ marginLeft: 'auto', ...T_MICRO }}>
-          {timeZone !== null ? <Timestamp iso={row.last_seen} timeZone={timeZone} sense="last seen" /> : null}
+          {/* Unconditional. `Timestamp` has an honest "zone unreported" arm for the case
+              where `GET /api/meta/run` has not answered — which in this deployment is
+              every screen — and a silently missing "last seen" reads as "no timestamp
+              exists" rather than "the zone is unknown" (§5). */}
+          <Timestamp iso={row.last_seen} timeZone={timeZone} sense="last seen" />
         </span>
       </footer>
     </article>
@@ -564,12 +741,10 @@ function CapacityLine({ capacity }: { capacity: QueueCapacity }): ReactElement {
   return (
     <div
       data-capacity-line
-      role="separator"
-      aria-label="Capacity cutoff. Everything below this line is not reviewed this period."
       style={{
         position: 'relative',
         margin: '0 var(--spacing-pane-gap)',
-        height: 40,
+        height: CAPACITY_LINE_HEIGHT,
         display: 'flex',
         alignItems: 'center',
         gap: 10,
@@ -583,8 +758,7 @@ function CapacityLine({ capacity }: { capacity: QueueCapacity }): ReactElement {
           right: 0,
           top: '50%',
           height: 2,
-          background:
-            'repeating-linear-gradient(90deg, var(--color-band-e) 0 8px, transparent 8px 14px)',
+          background: 'repeating-linear-gradient(90deg, var(--color-band-e) 0 8px, transparent 8px 14px)',
         }}
       />
       <span
@@ -599,8 +773,8 @@ function CapacityLine({ capacity }: { capacity: QueueCapacity }): ReactElement {
           whiteSpace: 'nowrap',
         }}
       >
-        capacity cutoff · {count(reviewed)} reviewed of {count(reviewed + unreviewed)} at {count(capacity.minutes_available)}{' '}
-        analyst-minutes this {capacity.period_label} · {capacity.policy_label}
+        capacity cutoff · {count(reviewed)} reviewed of {count(reviewed + unreviewed)} at{' '}
+        {count(capacity.minutes_available)} analyst-minutes this {capacity.period_label} · {capacity.policy_label}
       </span>
       {exposure !== null ? (
         <span

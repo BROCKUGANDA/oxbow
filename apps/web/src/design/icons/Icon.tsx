@@ -101,15 +101,7 @@ export interface IconProps {
   strokeWidth?: number;
 }
 
-export function Icon({
-  name,
-  size = 16,
-  title,
-  className,
-  style,
-  bandLevel,
-  strokeWidth,
-}: IconProps): ReactElement {
+export function Icon({ name, size = 16, title, className, style, bandLevel, strokeWidth }: IconProps): ReactElement {
   const decorative = title === undefined;
   const level = bandLevel ?? 1;
 

@@ -17,15 +17,15 @@
 
 import Link from 'next/link';
 import { usePathname, useSearchParams } from 'next/navigation';
-import { Suspense, useEffect, type ReactElement, type ReactNode } from 'react';
+import { type ReactElement, type ReactNode, Suspense, useEffect } from 'react';
 
 import { Icon } from '../design/icons/Icon';
-import { ProvenanceBadge } from './ui/provenance';
 import { useRuntime } from '../lib/api/hooks';
 import { transportMode } from '../lib/api/transport';
 import { DISCLAIMER, SCENARIO_NOTE } from '../lib/copy';
-import { GAP, T_LABEL, T_MICRO } from './ui/sx';
 import { useShell } from './AppProviders';
+import { ProvenanceBadge } from './ui/provenance';
+import { GAP, T_LABEL, T_MICRO } from './ui/sx';
 
 const NAV: readonly { href: string; label: string; hint: string; w: number }[] = [
   // `w` is the label's width in the loaded IBM Plex Sans at the desktop breakpoint.
@@ -46,7 +46,7 @@ export function Shell({ children }: { children: ReactNode }): ReactElement {
   const shell = useShell();
   const meta = runtime.meta;
 
-  const provenance = meta?.provenance ?? null;
+  const provenance = runtime.meta?.provenance ?? transportProvenanceAtFirstPaint();
   /* The banner is decided by the transport the build selected, which is known on the
      first render, and not by a response field that arrives ~4s later. Deriving it from
      `meta.provenance` alone made the banner appear after every pane had already painted
@@ -95,6 +95,11 @@ export function Shell({ children }: { children: ReactNode }): ReactElement {
                 fontWeight: 600,
                 letterSpacing: '0.08em',
                 color: 'var(--color-ink)',
+                /* 64 px is the wordmark's width in the fallback face at the desktop
+                   breakpoint; IBM Plex Sans Condensed sets 6 px narrower. Left-aligned in
+                   a box pinned to the wider of the two, so the swap cannot slide the nav —
+                   the same swap-stable trick the nav items and the footer use. */
+                minWidth: 64,
               }}
             >
               OXBOW
@@ -130,10 +135,19 @@ export function Shell({ children }: { children: ReactNode }): ReactElement {
           </nav>
 
           <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-            {runtime.data !== null ? (
+            {/* The dataset chip is mounted from the first paint at a fixed left edge, in a
+                box the width of the widest string it can hold. A chip that simply appears
+                when `GET /api/meta/run` answers takes up to 360 px out of the header and
+                moves every element that was already on screen — measured at 0.0052 on the
+                queue once the transport is same-origin, which is five times the CLS budget
+                on a route that has nothing to do with the header. Reserving the box rather
+                than the ink is §5's matched-geometry rule applied to the shell: the chip
+                says "no dataset reported" until the response says otherwise, and its own
+                left edge never moves. */}
+            <span style={{ width: 360, display: 'inline-flex', alignItems: 'center', flexShrink: 0 }} data-dataset-slot>
               <span
                 data-dataset-badge
-                title={`${runtime.data.dataset ?? 'no dataset reported'} · ${runtime.data.licence ?? 'no licence reported'}`}
+                title={`${runtime.data?.dataset ?? 'no dataset reported'} · ${runtime.data?.licence ?? 'no licence reported'}`}
                 style={{
                   ...T_MICRO,
                   display: 'inline-flex',
@@ -150,9 +164,9 @@ export function Shell({ children }: { children: ReactNode }): ReactElement {
                 }}
               >
                 <Icon name="chain" size={12} />
-                {runtime.data.dataset ?? 'no dataset'} · {runtime.data.licence ?? 'licence unreported'}
+                {runtime.data?.dataset ?? 'no dataset'} · {runtime.data?.licence ?? 'licence unreported'}
               </span>
-            ) : null}
+            </span>
 
             <ProvenanceBadge provenance={provenance} />
 
@@ -187,9 +201,9 @@ export function Shell({ children }: { children: ReactNode }): ReactElement {
             color: 'var(--color-state-failed)',
           }}
         >
-          These screens are rendering the developer contract fixtures because the API is not answering. Every
-          figure below is sample data shaped by the client contract, not a pipeline result, and the transport that
-          serves it is unreachable in a production build.
+          These screens are rendering the developer contract fixtures because the API is not answering. Every figure
+          below is sample data shaped by the client contract, not a pipeline result, and the transport that serves it is
+          unreachable in a production build.
         </div>
       ) : null}
 
@@ -224,7 +238,21 @@ export function Shell({ children }: { children: ReactNode }): ReactElement {
 }
 
 function isFixture(provenance: string | null): boolean {
-  return provenance !== null && provenance.startsWith('fixture');
+  return provenance?.startsWith('fixture') ?? false;
+}
+
+/**
+ * The provenance the *transport* already knows, before any response arrives.
+ *
+ * The fixture double stamps every payload it serves `fixture:developer-contract`, and
+ * the transport mode is a build-time fact rather than a network fact, so the header can
+ * state it on the first paint. Waiting for the lazily-imported fixture module to answer
+ * ~3 s later grew the provenance badge from 170 px to 401 px and slid the whole right
+ * rail with it — 0.0019 of CLS on a route that has nothing to do with the header. The
+ * real transport knows nothing yet and says so, which is what `null` renders as.
+ */
+function transportProvenanceAtFirstPaint(): string | null {
+  return transportMode() === 'fixture' ? 'fixture:developer-contract' : null;
 }
 
 /**

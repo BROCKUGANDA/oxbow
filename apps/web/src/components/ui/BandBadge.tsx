@@ -14,7 +14,7 @@
 import type { ReactElement } from 'react';
 
 import { Icon } from '../../design/icons/Icon';
-import { bandMeterSegments, type Band as BandLetter } from '../../design/tokens';
+import { type Band as BandLetter, bandMeterSegments } from '../../design/tokens';
 import type { Band } from '../../lib/api/contract';
 
 export type BandBadgeProps = {

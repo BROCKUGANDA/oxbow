@@ -22,8 +22,8 @@
    difference between a measurement and a demo"). This file uses it for exactly that.
    ============================================================================= */
 
-import { ContractViolation } from '../codec';
-import { ApiError, classifyStatus, ProblemDetailDecoder, type ApiFailure } from './problem';
+import type { ContractViolation } from '../codec';
+import { ApiError, type ApiFailure, ProblemDetailDecoder, classifyStatus } from './problem';
 
 export type TransportMode = 'api' | 'fixture' | 'problem';
 
@@ -61,7 +61,28 @@ function resolveMode(): TransportMode {
   return 'api';
 }
 
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL ?? 'http://127.0.0.1:8000';
+/**
+ * WHERE a request goes, per side of the boundary.
+ *
+ * On the server an absolute origin is the only option, so `NEXT_PUBLIC_API_BASE_URL`
+ * decides it (the container default is the P7 host).
+ *
+ * In the browser it is the opposite: the request must be same-origin, because that is
+ * the whole point of the `/api` rewrite in `next.config.ts` — "the browser never learns
+ * a second origin, which is what lets the OIDC cookie session work without CORS
+ * exceptions". Sending an absolute origin from the page makes every call cross-origin,
+ * and a cross-origin `POST /api/auth/demo-token` cannot ride a simple request: Chrome
+ * blocks it on the preflight, no token is ever minted, and every subsequent GET answers
+ * 401, which the envelope decoder reports as a contract failure. So the queue, the case
+ * and the explorer all paint an error tier for what is really a wiring mistake, and the
+ * error tier is the one state the CLS gate then measures. The rewrite is the seam; a
+ * browser request goes to it with a relative path.
+ */
+const SERVER_API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL ?? 'http://127.0.0.1:8000';
+
+function apiBase(): string {
+  return typeof window === 'undefined' ? SERVER_API_BASE : '';
+}
 
 /* --------------------------------- bearer token (real, minted by P7) ------ */
 
@@ -81,7 +102,7 @@ let mintedToken: Promise<string | null> | null = null;
 
 async function mintDemoToken(): Promise<string | null> {
   try {
-    const response = await fetch(`${API_BASE}${DEMO_TOKEN_PATH}`, {
+    const response = await fetch(`${apiBase()}${DEMO_TOKEN_PATH}`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
@@ -116,7 +137,7 @@ async function apiTransport(request: TransportRequest): Promise<TransportRespons
   }
   let response: Response;
   try {
-    response = await fetch(`${API_BASE}${request.path}`, {
+    response = await fetch(`${apiBase()}${request.path}`, {
       method: request.method,
       signal: request.signal,
       headers,
@@ -197,7 +218,7 @@ export function assertOk(response: TransportResponse, path: string): unknown {
 
   const isProblem = response.contentType.includes('problem+json');
   const decoded = isProblem ? ProblemDetailDecoder.decode(response.body, '') : null;
-  if (decoded !== null && decoded !== undefined && decoded.ok) {
+  if (decoded?.ok) {
     throw new ApiError({
       kind: 'problem',
       class: classifyStatus(decoded.value.status),
@@ -272,7 +293,8 @@ export async function getTransport(): Promise<Transport> {
     cached = { mode, send: apiTransport };
     return cached;
   }
-  const module = mode === 'problem' ? await import('./devproblem.transport') : await import('../../fixtures/transport.fixture');
+  const module =
+    mode === 'problem' ? await import('./devproblem.transport') : await import('../../fixtures/transport.fixture');
   cached = { mode, send: module.send };
   return cached;
 }
