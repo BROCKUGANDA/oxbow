@@ -24,6 +24,7 @@ from ulid import ULID
 
 from oxbow.adapters.warehouse.models import AuditEvent
 from oxbow.audit.chain import ChainRow, ChainVerification, PendingChainRow, verify_chain
+from oxbow.audit.serialise import AUDIT_CHAIN_LOCK_KEY, chain_append_lock
 from oxbow.ports.audit import AuditAppendError
 
 
@@ -45,7 +46,16 @@ class PostgresAuditSink:
         return _to_chain_row(row) if row is not None else None
 
     def append(self, row: PendingChainRow) -> ChainRow:
-        """Insert one link, or refuse loudly when the tip has moved."""
+        """Insert one link, or refuse loudly when the tip has moved.
+
+        The caller reads the tip and builds its link from it, so an unlocked read means two
+        concurrent appends compute the same sequence and one is refused. Take the chain lock
+        first; the seq check and the unique constraint stay, because they are what makes a
+        genuine ordering bug visible rather than silently re-ordered. Callers that write both
+        chains lock in the same order this project does — decision chain, then audit — which
+        is what keeps the pair deadlock-free.
+        """
+        chain_append_lock(self._session, key=AUDIT_CHAIN_LOCK_KEY)
         statement = select(AuditEvent.chain_seq).order_by(AuditEvent.chain_seq.desc()).limit(1)
         current_seq = self._session.execute(statement).scalar_one_or_none()
         expected_seq = 1 if current_seq is None else int(current_seq) + 1

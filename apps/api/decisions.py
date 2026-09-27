@@ -61,6 +61,7 @@ from oxbow.adapters.warehouse.models import (
     Decision as DecisionRow,
 )
 from oxbow.audit.chain import GENESIS_HASH, ChainRow, PendingChainRow, append_row
+from oxbow.audit.serialise import DECISION_CHAIN_LOCK_KEY, chain_append_lock
 from oxbow.ports.audit import AuditAppendError, AuditSink
 from oxbow.ports.case_sink import (
     CASE_SCHEMA_VERSION,
@@ -259,6 +260,11 @@ def record_decision(
     decision_seq = snapshot.current_decision_seq + 1
     idempotency_key = build_idempotency_key(snapshot.run_id, snapshot.case_id, decision_seq)
 
+    # Take the chain append lock before reading the tip. Without it, two writers on
+    # unrelated cases both compute the same link and one is refused with a 409 that
+    # blames a collision the server caused itself. See oxbow.audit.serialise for why
+    # this is an advisory lock and not SELECT ... FOR UPDATE.
+    chain_append_lock(session, key=DECISION_CHAIN_LOCK_KEY)
     chain_seq, prev_hash = _decision_chain_head(session)
     payload = _decision_payload(
         snapshot=snapshot,
