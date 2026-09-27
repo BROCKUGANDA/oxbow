@@ -185,7 +185,13 @@ PHASES: tuple[Phase, ...] = (
     Phase(
         name="P4",
         done=False,
-        pending_reason="models/ and scoring/ exist with tests, but nothing has trained end to end because the score stage stops at the bridge seam",
+        pending_reason=(
+            "the score stage trains all five folds end to end on the landed 40k slice and its "
+            "artifacts are on disk; the phase is not claimed until `oxbow eval` has regenerated "
+            "the cards from a real run, because every fold's calibration is refused below "
+            "calibration.min_positives_for_calibration (DEV-024: 108 positives in the slice, a "
+            "floor of 50 per fold's validation set)"
+        ),
         gates=(
             Gate(
                 "scorecard scaling, guards, calibration and fusion",
@@ -217,7 +223,13 @@ PHASES: tuple[Phase, ...] = (
     Phase(
         name="P6",
         done=False,
-        pending_reason="backtest/ modules and metrics tests exist; no fold has produced a real number, so the model and economics cards carry placeholders",
+        pending_reason=(
+            "the walk-forward over the landed 40k corpus has now been run four times and three "
+            "of them died in it: DEV-026 (a fold booking one account's minutes once per scored "
+            "row) was found by its own capacity postcondition, and the run that clears it is in "
+            "flight. Until ablation_results.json names the real corpus, MODEL_CARD.md and "
+            "ECONOMICS_CARD.md quote provenance=fake_harness."
+        ),
         gates=(
             Gate(
                 "all five folds, the ablation table and the leakage control",
@@ -362,8 +374,7 @@ PHASES: tuple[Phase, ...] = (
             # this gate is how a reviewer learns whether a snapshot has been taken.
             Gate(
                 "a pinned demo snapshot exists and is restorable",
-                ("uv", "run", "python", "scripts/demo_seed.py", "--restore",
-                 "--boot-budget", "90"),
+                ("uv", "run", "python", "scripts/demo_seed.py", "--restore", "--boot-budget", "90"),
                 prerequisite="data/snapshots/demo.dump",
             ),
         ),

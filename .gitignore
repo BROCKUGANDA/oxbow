@@ -90,3 +90,7 @@ desktop.ini
 
 # Playwright run artifacts (traces, failure screenshots) -- local evidence, not source.
 apps/web/.test-output/
+
+# Qoder Canvas sidecars written beside a document when a skill opens it for preview
+# (DESIGN.md.<surface>.canvas.data.json). Editor state, not repository content.
+*.canvas.data.json
