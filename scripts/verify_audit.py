@@ -129,6 +129,20 @@ def _table_columns(engine: Any, table: str) -> Sequence[str] | None:
     return sorted(names)
 
 
+def _display_path(path: Path) -> str:
+    """A short name for a chain file, without assuming it lives inside the repository.
+
+    `--audit-dir` is an advertised option, and pointing it anywhere outside the repo root made
+    the label raise `ValueError: ... is not in the subpath of ...` — a verifier that crashes on
+    a legitimate argument is worse than one that reports a break. Inside the tree the relative
+    name is printed because that is what a reader recognises; outside it, the full path.
+    """
+    try:
+        return str(path.relative_to(REPO_ROOT))
+    except ValueError:
+        return str(path)
+
+
 def verify_file_chain(directory: Path) -> tuple[str, str]:
     """Walk ``<directory>/audit.jsonl``; SKIPPED when the file is not there."""
     path = directory / AUDIT_FILENAME
@@ -143,7 +157,7 @@ def verify_file_chain(directory: Path) -> tuple[str, str]:
         )
     verification = verify_chain(list(_file_rows(FileAuditSink(directory))))
     return (STATUS_OK if verification.ok else STATUS_FAIL), render_verification(
-        verification, label=f"file:{path.relative_to(REPO_ROOT)}"
+        verification, label=f"file:{_display_path(path)}"
     )
 
 
@@ -203,12 +217,20 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
 
     width = max(len(status) for status, _ in results)
-    failures = 0
+    failures = sum(status == STATUS_FAIL for status, _ in results)
+    walked = sum(status in (STATUS_OK, STATUS_FAIL) for status, _ in results)
+    skipped = len(results) - walked
     for status, detail in results:
         print(f"{status:<{width}} {detail}")
-        failures += status == STATUS_FAIL
     print()
-    print(f"chains walked: {len(results)}  failed: {failures}")
+    # `walked` counts the chains that were actually read. Counting `len(results)` here reported
+    # "chains walked: 2  failed: 0" on a host where both chains had been SKIPPED — a verifier
+    # whose summary reads green when it looked at nothing is the failure mode this whole script
+    # exists to catch, so the skipped count is in the headline line and a run that verified
+    # nothing says so in its own words.
+    print(f"chains walked: {walked}  failed: {failures}  skipped: {skipped}")
+    if walked == 0:
+        print("NOTHING VERIFIED  no hash chain on this host was read; see the SKIPPED lines above")
     return 1 if failures else 0
 
 
