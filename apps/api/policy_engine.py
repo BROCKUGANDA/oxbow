@@ -252,7 +252,12 @@ def run_simulation(
     entered = sorted(selected_keys - previous) if previous else sorted(selected_keys)
     left = sorted(previous - selected_keys) if previous else []
 
-    decimals = assumptions.minor_units_per_major
+    # The read model already converted config's minor_units_per_major (a BASE, 100)
+    # into the EXPONENT both this server and apps/web/src/lib/format/money.ts raise
+    # ten to. Passing the base here scaled every priced figure by 10^100 -- the same
+    # defect fixed at the composition root and in the graph route. Inherited from one
+    # place rather than recomputed, so the two cannot drift apart again.
+    decimals = read_model.money_decimals
     cutoff_rank = len(allocation.selected) if allocation.selected else None
     frontier = frontier_points(effective, assumptions, request.capacity_minutes)
     gap = (
@@ -426,18 +431,18 @@ def frontier_points(
                 "net_benefit": money(
                     allocation.total_ev.minor,
                     assumptions.currency,
-                    decimals=assumptions.minor_units_per_major,
+                    decimals=decimals,
                 ),
                 "loss_avoided": money(
                     allocation.expected_loss_avoided.minor,
                     assumptions.currency,
-                    decimals=assumptions.minor_units_per_major,
+                    decimals=decimals,
                 ),
                 "max_drawdown": money(
-                    0, assumptions.currency, decimals=assumptions.minor_units_per_major
+                    0, assumptions.currency, decimals=decimals
                 ),
-                "var95": money(0, assumptions.currency, decimals=assumptions.minor_units_per_major),
-                "es975": money(0, assumptions.currency, decimals=assumptions.minor_units_per_major),
+                "var95": money(0, assumptions.currency, decimals=decimals),
+                "es975": money(0, assumptions.currency, decimals=decimals),
                 "current_point": point.capacity_minutes == operating_capacity,
             }
         )

@@ -86,7 +86,11 @@ def validation(
     read_model = container.read_model
     run = read_model.resolve_run(run_id, state="complete" if run_id is None else None)
     rid = str(run["run_id"])
-    decimals = container.economics.minor_units_per_major
+    # The exponent, not the base: config declares minor_units_per_major (100) and
+    # both this server and apps/web/src/lib/format/money.ts raise ten to whatever
+    # arrives in a `decimals` field. Inherited from the read model, which converts
+    # once and refuses a base that is not an exact power of ten.
+    decimals = container.read_model.money_decimals
 
     folds, fold_total = read_model.source.select(
         "backtest_fold", where={"run_id": rid}, order="fold_index", allow_missing=True

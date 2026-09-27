@@ -150,7 +150,11 @@ def case_decisions(
         )
         if not case_rows:
             raise NotFound(f"no case {case_id!r}")
-    decimals = container.economics.minor_units_per_major
+    # The exponent, not the base: config declares minor_units_per_major (100) and
+    # both this server and apps/web/src/lib/format/money.ts raise ten to whatever
+    # arrives in a `decimals` field. Inherited from the read model, which converts
+    # once and refuses a base that is not an exact power of ten.
+    decimals = container.read_model.money_decimals
 
     body = [
         {

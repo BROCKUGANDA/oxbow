@@ -93,7 +93,11 @@ def active_policy(
     cutoff = max(
         (int(row["rank"]) for row in allocation_rows if bool(row["selected"])), default=None
     )
-    decimals = container.economics.minor_units_per_major
+    # The exponent, not the base: config declares minor_units_per_major (100) and
+    # both this server and apps/web/src/lib/format/money.ts raise ten to whatever
+    # arrives in a `decimals` field. Inherited from the read model, which converts
+    # once and refuses a base that is not an exact power of ten.
+    decimals = container.read_model.money_decimals
     body = ActivePolicyResponse(
         run_id=rid,
         policy=PolicyView.model_validate(_policy_for_response(active, decimals)),

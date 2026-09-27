@@ -89,7 +89,11 @@ def case_detail(
     run = read_model.run_row(run_id)
     score = read_model.score_row(run_id, account_key)
     source = read_model.source
-    decimals = container.economics.minor_units_per_major
+    # The exponent, not the base: config declares minor_units_per_major (100) and
+    # both this server and apps/web/src/lib/format/money.ts raise ten to whatever
+    # arrives in a `decimals` field. Inherited from the read model, which converts
+    # once and refuses a base that is not an exact power of ten.
+    decimals = container.read_model.money_decimals
 
     economic_rows, _ = source.select(
         "economics", where={"run_id": run_id, "account_key": account_key}, limit=1
@@ -223,7 +227,11 @@ def case_transactions(
         txn_ids=wanted,
         account_side=account_side or "any",
     )
-    decimals = container.economics.minor_units_per_major
+    # The exponent, not the base: config declares minor_units_per_major (100) and
+    # both this server and apps/web/src/lib/format/money.ts raise ten to whatever
+    # arrives in a `decimals` field. Inherited from the read model, which converts
+    # once and refuses a base that is not an exact power of ten.
+    decimals = container.read_model.money_decimals
     body = [_transaction_row(row, decimals=decimals) for row in rows]
     return envelope(
         body,
@@ -303,7 +311,7 @@ def _decisions(container: Container, case_id: str) -> list[dict[str, Any]]:
                 "exposure": money(
                     int(row["exposure_minor"]),
                     str(row["currency"]),
-                    decimals=container.economics.minor_units_per_major,
+                    decimals=container.read_model.money_decimals,
                 ),
                 "four_eyes_required": bool(row["four_eyes_required"]),
                 "four_eyes_state": row["four_eyes_state"],
