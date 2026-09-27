@@ -935,3 +935,41 @@ distinguish proxy buffering from source burstiness. What would force it: a run i
 live stage events, sampled with per-frame arrival times through `:8080` and to the API directly.
 Caddy does auto-detect `text/event-stream` independent of this directive, which is why the explicit
 setting and its test exist -- but that is config, not measurement.
+
+## DEV-024 — the 40k slice cannot calibrate, and that is arithmetic rather than a defect. **Open; needs the owner.**
+
+**Status as of this commit: unverified finding, deliberately not decided.** The score stage now
+trains all five folds, and every one of them reports `calibrated=False`. The reason is countable:
+the run measured **108 positives across 79,998 account-instant rows** (base rate 0.001350) in the
+40,000-event slice, and the floors in `config/model.yaml` are
+`min_positives_for_calibration: 50` (:141) and `isotonic_min_positives: 500` (:133), applied to
+the *validation* split of each expanding window. Below the floor the calibration branch refuses
+and the row says *probabilities are uncalibrated* and carries the positive count and the floor —
+which is the documented behaviour (`oxbow/models/calibration.py:9-15`), not a bug.
+
+The consequence is a submission fact, not a modelling nicety: `MODEL_CARD.md` cannot show a fitted
+reliability curve, a Brier score against calibrated probabilities, or a calibration-in-the-large
+number from this slice, and `ECONOMICS_CARD.md` prices the queue on `p_scorecard`-ranked alerts
+whose probabilities are explicitly labelled uncalibrated. Both cards will say so. The plan §16
+definition of done asks for measured numbers with their provenance, and an uncalibrated fold
+carries provenance `measured` — so shipping it is not the fabrication the plan's rejection
+triggers name. Shipping it *described as calibrated* would be.
+
+At the measured base rate the arithmetic is: Platt needs roughly **110k events**, isotonic roughly
+**1.1M**. The 40k slice took about two hours on this host with nothing else running; a 110k run is
+plausibly three to four hours of wall time and more memory than the machine has been holding, and
+the 1.1M run is not a same-day option.
+
+The two honest positions, for the owner to choose between:
+
+1. **Ship the 40k slice with calibration declared refused.** Every number is real, the cards name
+   the refusal and the count behind it, and `LIMITATIONS.md` gains the thin-positive-count row it
+   half-already has. Costs nothing but a sentence on the model card.
+2. **Spend a ~110k run before 2026-10-01** to clear the Platt floor, so the card shows a fitted
+   curve. Costs most of one working day, with the risk that the run does not finish and the
+   numbers that *would* have shipped are the ones in flight when the deadline arrives.
+
+Not offered as an option: lowering `min_positives_for_calibration` to make a fold report
+calibrated. That is the same sin as widening a leakage guard to get past it — the guard exists
+because isotonic on a thin positive count steps on noise and reports a confident 0.0 or 1.0, and
+the money layer multiplies whatever it is given.
