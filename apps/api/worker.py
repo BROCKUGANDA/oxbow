@@ -649,6 +649,12 @@ def default_runners(context: StageContext) -> dict[str, Callable[[StageHandle], 
         "backtest": lambda handle: cli.run_backtest_stage(
             context, handle, corpus=None, demo_fakes=False, baselines_only=False, out=None
         ),
+        # The stage the ledger's own vocabulary has always named and nothing implemented: it
+        # lands the run's account/score/rule_hit rows into the Postgres warehouse the API reads.
+        # Not a CLI verb — 01 §D fixes the four verbs and the P0 gate asserts that tuple.
+        "warehouse": lambda handle: cli.land_warehouse_rows(
+            context, handle, run_id=context.run_id
+        ),
     }
 
 
@@ -663,13 +669,17 @@ def runner_for(stage: str, context: StageContext) -> Callable[[StageHandle], int
     """
     from oxbow import cli
 
-    if stage in cli.STAGES:
-        return default_runners(context)[stage]
+    # Keyed off the dispatch itself rather than `cli.STAGES`: the ledger's vocabulary includes
+    # `warehouse`, which is a stage and deliberately not one of the CLI's four verbs, so
+    # testing membership of the verb list made a runnable stage look unwired.
+    runners = default_runners(context)
+    if stage in runners:
+        return runners[stage]
 
     reason = (
-        f"no runner is wired for stage {stage!r} in oxbow.cli: its declared stages are "
-        f"{list(cli.STAGES)}, and nothing in this repository loads landed artifacts into the "
-        f"warehouse tables under a run id, so {stage} has no work to perform"
+        f"no runner is wired for stage {stage!r} in oxbow.cli: the CLI's verbs are "
+        f"{list(cli.STAGES)} and the worker dispatches {sorted(runners)}, so {stage} has no "
+        "work to perform"
     )
 
     def refuse(handle: StageHandle) -> int:

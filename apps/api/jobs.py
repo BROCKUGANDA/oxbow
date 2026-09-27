@@ -44,6 +44,11 @@ logger = get_logger("oxbow.jobs")
 
 router = APIRouter(tags=["jobs"])
 
+# The stages a queued pipeline job runs. `warehouse` is one of them and is not one of the
+# CLI's four verbs: 01 §D fixes `oxbow ingest graph score backtest` and the P0 gate asserts
+# that tuple, while the stage-event ledger carries a CHECK over
+# `ingest, graph, score, backtest, warehouse` — so landing a run is a stage by the ledger's
+# own vocabulary, dispatched by the worker and never a fifth command.
 PIPELINE_STAGES: Final = ("ingest", "graph", "score", "warehouse")
 BACKTEST_STAGES: Final = ("backtest",)
 QUEUE_NAME: Final = "oxbow"

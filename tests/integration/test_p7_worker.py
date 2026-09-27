@@ -694,34 +694,72 @@ def test_a_real_stage_name_reaches_the_pipelines_own_body(
     assert _ledger(container, submission.run_id)[-1] == ("graph", "complete", 7)
 
 
-def test_a_declared_stage_with_no_runner_is_unavailable_not_complete(
+def test_a_stage_outside_the_ledgers_vocabulary_is_refused_before_anything_runs(
     warehouse: dict[str, Any], queue: _FakeQueue
 ) -> None:
-    """``warehouse`` is in ``PIPELINE_STAGES`` and implemented nowhere; the ledger says so.
+    """A stage the ledger cannot describe is rejected on the way in, not run and then dropped.
 
-    The honest row is ``unavailable`` naming the missing seam. ``complete`` with zero rows
-    would be the lie ``stage_events.py`` exists to prevent, and ``failed`` would call an
-    unwritten module a measurement that came out red.
+    `warehouse` used to be the interesting case here: declared in ``PIPELINE_STAGES``, absent
+    from every dispatch table, so a submission that passed validation ended its run with an
+    ``unavailable`` row. That hole is closed — `warehouse` is now implemented and dispatched —
+    so the refusal-under-test is exercised with a stage that is in no vocabulary at all, which
+    is the honest way to keep the contract without pinning it to a defect that has been fixed.
     """
+    from api.worker import UnknownStageError
+
     container = warehouse["container"]
-    submission = _submit(container, queue, stages=("warehouse",), kind="pipeline")
+    submission = _submit(container, queue, stages=("ingest",), kind="pipeline")
 
-    summary = api_worker.run_stages(
-        run_id=submission.run_id,
-        stages=["warehouse"],
-        kind="pipeline",
-        container=container,
-        runners={},  # nothing injected: this is the real dispatch
+    with pytest.raises(UnknownStageError, match="outside the ledger's vocabulary"):
+        api_worker.run_stages(
+            run_id=submission.run_id,
+            stages=["no_such_stage"],
+            kind="pipeline",
+            container=container,
+            runners={},
+        )
+
+
+def test_the_warehouse_stage_dispatches_to_the_landing_function() -> None:
+    """`warehouse` is a stage the worker runs, not a name in a list with nothing behind it.
+
+    It is deliberately not one of the CLI's four verbs — 01 §D fixes those and the P0 gate
+    asserts the tuple — so the wiring lives in the worker's dispatch. Asserted against the
+    source because building a live StageContext to call `runner_for` would test the fixture
+    rather than the wiring.
+    """
+    from pathlib import Path
+
+    from oxbow import cli
+
+    assert callable(getattr(cli, "land_warehouse_rows", None)), (
+        "the CLI no longer exposes the landing function the warehouse stage runs"
     )
+    source = Path("apps/api/worker.py").read_text(encoding="utf-8")
+    assert '"warehouse": lambda handle: cli.land_warehouse_rows(' in source, (
+        "the warehouse stage has no runner in the worker's dispatch again"
+    )
+    assert 'PIPELINE_STAGES: Final = ("ingest", "graph", "score", "warehouse")' in Path(
+        "apps/api/jobs.py"
+    ).read_text(encoding="utf-8"), "the queue stopped naming the stage it can run"
 
-    ledger = _ledger(container, submission.run_id)
-    assert [status for _, status, _ in ledger] == ["running", "unavailable"], ledger
-    detail = str(_ledger_details(container, submission.run_id)[-1]["detail"])
-    assert "no runner is wired for stage 'warehouse'" in detail
-    assert "oxbow.cli" in detail, "the row names the module the seam is missing from"
-    assert summary["unavailable"] == ["warehouse"]
-    assert summary["failed"] == []
-    assert summary["run_state"] == RunState.COMPLETE.value
+
+def test_every_stage_the_api_will_enqueue_has_a_runner() -> None:
+    """The other half of the same contract, and the one that was missing.
+
+    Validation accepted a stage name no runner existed for, so a submission the API said yes
+    to ended its run with an `unavailable` row. Every declared stage is inside the ledger's
+    vocabulary and has a dispatch entry now; a stage that is declared and cannot run is a bug
+    in the list, not a state of the world.
+    """
+    from oxbow import cli
+
+    declared = set(api_jobs.PIPELINE_STAGES) | set(api_jobs.BACKTEST_STAGES)
+    verbs = set(cli.STAGES)
+    # `warehouse` is the one legitimate exception: a stage, not a verb.
+    assert declared - verbs == {"warehouse"}, (
+        f"queued stages with no CLI verb and no explanation: {sorted(declared - verbs)}"
+    )
 
 
 def test_unknown_kind_and_unknown_stage_are_refused_before_anything_runs(
@@ -1075,9 +1113,19 @@ def _abandoned_run(
 
 
 def test_the_worker_runs_a_job_on_the_null_file_container_with_nothing_up(
-    null_container: Any,
+    null_container: Any, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Files in, files out: the ledger and the run row land where that read model looks."""
+    """Files in, files out: the ledger and the run row land where that read model looks.
+
+    `warehouse` runs here rather than reporting itself unavailable, and completes by doing the
+    only thing a null-file deployment allows: recording that Postgres is not configured, so the
+    null warehouse under `out/warehouse` is the whole record. It asserted `unavailable` while
+    the stage had no runner at all — that premise is gone, and the honest row now says the
+    stage ran and found nothing to land into.
+    """
+    # Deterministic against the ambient environment: a DATABASE_URL in the caller's shell would
+    # otherwise send this stage at a real server.
+    monkeypatch.delenv("DATABASE_URL", raising=False)
     container = null_container
     run_id = new_run_id()
 
@@ -1092,7 +1140,7 @@ def test_the_worker_runs_a_job_on_the_null_file_container_with_nothing_up(
     assert summary["ledger"] == "opened", "no submit_job ran, so this delivery opens the run"
     assert [status for _, status, _ in _null_ledger(container, run_id)] == [
         "running",
-        "unavailable",
+        "complete",
     ]
     # The run row is visible to the deployment's own read model; the stage rows are checked
     # where the null sink writes them (see ``_null_ledger`` for why those two differ).

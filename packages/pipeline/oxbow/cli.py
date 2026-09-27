@@ -1563,6 +1563,185 @@ def run_score_stage(
     )
 
 
+def _read_canonical_for_ids(ctx: StageContext, wanted: pl.DataFrame) -> pl.DataFrame:
+    """The canonical events whose ``txn_id`` is in ``wanted``, read batch by batch.
+
+    Only the seven columns an account is described by are read, and the semi-join happens per
+    batch rather than after a full load: the corpus is 6.36M events and the slice is 40k, so
+    holding the whole frame to discard 99.4% of it is the shape of the memory failure that has
+    already cost this project two runs on this host.
+
+    The batch list comes from each source's ``run_manifest.json``, the same authority
+    ``_canonical_events`` reads, and each batch is digest-checked before it is used — a
+    directory listing would pick up leftovers from earlier runs and double-count the corpus,
+    and a rewritten batch would land accounts nobody verified.
+    """
+    from oxbow.adapters.file.canonical_sink import sha256_of_file
+    from oxbow.adapters.warehouse.landing import LandingError
+
+    columns = [
+        "txn_id",
+        "event_ts_utc",
+        "account_from",
+        "account_to",
+        "amount_minor",
+        "currency",
+        "source_dataset",
+    ]
+    found: list[pl.DataFrame] = []
+    interim = ctx.root / DATA_DIRNAME / INTERIM_DIRNAME
+    for manifest_path in sorted(interim.glob("*/run_manifest.json")):
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        for batch in manifest.get("batches") or []:
+            path = ctx.root / str(batch["path"])
+            if not path.is_file():
+                raise LandingError(
+                    f"{batch['path']} is declared by {manifest_path.parent.name}'s manifest but "
+                    "is absent; refusing to describe accounts from a truncated corpus"
+                )
+            digest = sha256_of_file(path)
+            if digest != str(batch["sha256"]):
+                raise LandingError(
+                    f"{path.name} has sha256 {digest}, the manifest records {batch['sha256']}"
+                )
+            frame = pl.read_parquet(path, columns=columns)
+            matched = frame.join(wanted, on="txn_id", how="semi")
+            if matched.height:
+                found.append(matched)
+    if not found:
+        raise LandingError(
+            "none of the slice's txn_ids resolved against the landed canonical batches"
+        )
+    return pl.concat(found)
+
+
+def land_warehouse_rows(ctx: StageContext, handle: StageHandle, *, run_id: str) -> int:
+    """Land the run's scores, accounts and rule hits where the API can read them.
+
+    Called from the score stage, not from a verb of its own: 01 §D fixes the CLI as
+    `oxbow ingest graph score backtest` — "no more, no fewer", asserted by the P0 gate — so a
+    fifth stage command would be a plan violation, while the landing it performs is exactly the
+    work ``jobs.PIPELINE_STAGES`` had been promising a queued pipeline job would do.
+
+    The slice, not the corpus. ``account`` describes the accounts that were scored, so the
+    events it aggregates are exactly those whose ``txn_id`` the run's feature frame carries —
+    re-deriving the sample independently would be a second sampler disagreeing with the first,
+    and the run identity that selected the slice is salted and cannot be replayed here.
+
+    A run whose folds refused calibration lands its accounts and nothing else: ``score`` needs a
+    measured ``observed_rate`` and a non-zero ``calibration_n``, and the loader refuses to write
+    a zero into either. That refusal is reported with a count, not swallowed, because "0 rows
+    landed" and "0 rows could be landed for this named reason" are different findings and the
+    second is the one an operator can act on.
+    """
+    import os
+
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+
+    from oxbow.adapters.warehouse.landing import (
+        LandingError,
+        account_rows,
+        assert_run_identifiable,
+        rule_hit_rows,
+        score_rows,
+    )
+    from oxbow.adapters.warehouse.postgres import PostgresWarehouseSink
+    from oxbow.ports.warehouse import RunState
+
+    url = os.environ.get("DATABASE_URL", "").strip()
+    if not url:
+        # Not a failure. The null-file warehouse under out/warehouse is what `make demo` and
+        # the offline boot read, and a host with no Postgres up is the ordinary case for a
+        # pipeline run. The line exists so nobody reads the null-file rows as "already in the
+        # database": on this host the API's live read model has nothing to serve.
+        ctx.echo(
+            "[warehouse] DATABASE_URL is unset, so only the null-file warehouse holds this run.",
+        )
+        return EXIT_OK
+
+    assert_run_identifiable(run_id)
+    score_dir = ctx.root / "out" / "score" / run_id
+    feature_dir = ctx.root / "out" / "features" / run_id
+    scored_path = score_dir / "scored_rows.parquet"
+    frame_path = feature_dir / "features.parquet"
+    if not scored_path.is_file() or not frame_path.is_file():
+        ctx.echo(
+            f"[warehouse] REFUSED: {scored_path} and {frame_path} are the two artifacts this "
+            "landing reads, and one of them is not there.",
+            err=True,
+        )
+        return EXIT_REFUSED
+
+    scored = pl.read_parquet(scored_path)
+    # The frame is one row per event in the slice: that set of txn_ids IS the sample.
+    slice_ids = pl.read_parquet(frame_path, columns=["txn_id"]).get_column("txn_id").to_frame()
+
+    try:
+        events = _read_canonical_for_ids(ctx, slice_ids)
+        accounts = account_rows(events)
+        scores, refused = score_rows(scored)
+        hits = rule_hit_rows(scored)
+    except LandingError as exc:
+        ctx.echo(f"[warehouse] REFUSED: {exc}", err=True)
+        handle.mark_failed(str(exc)[:300])
+        return EXIT_FAILED
+
+    engine = create_engine(url, pool_pre_ping=True)
+    Session = sessionmaker(bind=engine)  # noqa: N806 - SQLAlchemy's own naming
+    with Session() as session:
+        sink = PostgresWarehouseSink(session)
+        try:
+            try:
+                sink.run_state(run_id)
+            except Exception:  # noqa: BLE001 - "no such run" is the normal case here
+                session.rollback()
+                # The same identity the null-file ledger was opened with, so a row in either
+                # warehouse names the seed, the config hash and the model version that produced
+                # it. A landed run whose provenance cannot be recovered is unauditable.
+                sink.open_run(
+                    run_id,
+                    seed=ctx.cfg.seed,
+                    timezone=ctx.cfg.deployment_timezone,
+                    provenance="pipeline",
+                    config_hash=_config_hash(ctx.config_dir),
+                    model_version=f"{MODEL_VERSION_PREFIX}/{__version__}",
+                    dataset_ref=(ctx.root / DATA_DIRNAME / INTERIM_DIRNAME).as_posix(),
+                )
+            written = {
+                "account": sink.write("account", run_id, accounts),
+                "score": sink.write("score", run_id, scores),
+                "rule_hit": sink.write("rule_hit", run_id, hits),
+            }
+            sink.complete_run(run_id, RunState.COMPLETE)
+            session.commit()
+        except Exception as exc:  # noqa: BLE001 - a rejected row must not half-land
+            session.rollback()
+            ctx.echo(
+                f"[warehouse] FAILED: {type(exc).__name__}: {str(exc)[:300]} — nothing was "
+                "committed, so the run keeps whatever it landed before this attempt",
+                err=True,
+            )
+            handle.mark_failed(f"warehouse write rejected: {type(exc).__name__}")
+            return EXIT_FAILED
+    engine.dispose()
+
+    for table, rows in written.items():
+        ctx.echo(f"[warehouse] {table}: {rows:,} row(s) landed under run {run_id}")
+    ctx.echo(
+        f"[warehouse] score: {len(scores):,} landed, {len(refused):,} refused"
+        + (f" — first reason: {refused[0][:140]}" if refused else "")
+    )
+    if not written["score"]:
+        ctx.echo(
+            "[warehouse] RESULT: PARTIAL. The queue cannot render scores that were refused; "
+            "see the refusal above (DEV-024 is the calibration arithmetic behind it).",
+        )
+        return EXIT_OK
+    ctx.echo("[warehouse] RESULT: OK — account, score and rule_hit are readable by the API.")
+    return EXIT_OK
+
+
 def run_backtest_stage(
     ctx: StageContext,
     handle: StageHandle,
