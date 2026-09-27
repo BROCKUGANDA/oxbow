@@ -209,6 +209,34 @@ def sum_money(items: list[Money] | tuple[Money, ...], *, empty_currency: str) ->
     return total
 
 
+def decimals_for_base(per_major: int) -> int:
+    """The decimal exponent a base of ``per_major`` minor units implies.
+
+    A base and an exponent are different numbers and reading one as the other is the
+    whole 10^100 bug class: ``Money.decimals`` is the exponent, while
+    ``config/economics.yaml`` declares the base, because the base is what an operator
+    reasons about. Anything that renders money needs the exponent, so every call site
+    converts here rather than inventing its own.
+
+    Refuses a base that is not an exact power of ten. Rounding an exponent into
+    existence would silently render 1,234,567 minor units as ``12,345.67`` under one
+    base and ``123.4567`` under a near-miss, and a figure that depends on which is not
+    a figure.
+    """
+    if per_major < 1:
+        raise QuantError(f"minor_units_per_major must be >= 1, got {per_major}")
+    exponent, place = 0, 1
+    while place < per_major:
+        place *= 10
+        exponent += 1
+    if place != per_major:
+        raise QuantError(
+            f"minor_units_per_major={per_major} is not an exact power of ten, so it has "
+            "no decimal exponent and money would render at a guessed scale"
+        )
+    return exponent
+
+
 def to_major_text(minor: int, currency: str, per_major: int) -> str:
     """Render minor units as a grouped major-unit string.
 
@@ -236,6 +264,7 @@ __all__ = [
     "CurrencyMismatchError",
     "Money",
     "QuantError",
+    "decimals_for_base",
     "ratio_to_micro",
     "scale_div",
     "sum_money",

@@ -104,3 +104,44 @@ def test_a_base_that_is_not_a_power_of_ten_is_refused_not_rounded() -> None:
             _money_decimals()
     finally:
         real._minor_units_per_major = original  # type: ignore[method-assign]
+
+
+def test_the_gap_view_that_holds_no_read_model_still_renders_at_the_exponent() -> None:
+    """The seventh site, and the reason a router-level sweep was not enough.
+
+    Six of the seven places that wired config's BASE into `Money.decimals` sat in routers that
+    hold a read model, so a scan of `container.economics.minor_units_per_major` found them.
+    `optimality_gap_view` does not: it is built from the assumptions alone, so it had no
+    exponent to borrow and used the base — a policy page whose greedy-vs-exact gap in UGX was
+    divided by 10^100. Asserting on the rendered figure of the real view is what closes that
+    class, because the view is the composed object the page prints.
+    """
+    from api.policy_engine import optimality_gap_view
+
+    from oxbow.quant.ev import CalibratedScore, price_account
+    from oxbow.quant.money import Money, decimals_for_base
+    from tests.unit.p5_fixtures import hand_economics
+
+    cfg = hand_economics()
+    assert decimals_for_base(cfg.minor_units_per_major) == 2
+
+    def priced(key: str, p: float, minor: int) -> object:
+        return price_account(CalibratedScore(key, p, "D", p, 400), Money(minor, cfg.currency), cfg)
+
+    rows = [priced("ACC-A", 0.80, 1_000_000), priced("ACC-C", 0.90, 500_000)]
+    view = optimality_gap_view(rows, cfg, capacity_minutes=25)
+    assert view is not None, "the exact solve did not run, so the scale was never rendered"
+    assert view["available"] is True
+
+    for field in ("approximate", "exact", "gap"):
+        figure = view[field]
+        assert figure["decimals"] == 2, (
+            f"{field} carries decimals={figure['decimals']!r}; the exponent for base "
+            f"{cfg.minor_units_per_major} is 2, and a figure at the base's scale is 10^98 off"
+        )
+        # The client renders `minor / 10 ** decimals`; the true major amount comes from the
+        # base. Asserting the two agree is what fails when `decimals` holds the base itself.
+        rendered = figure["minor"] / 10**figure["decimals"]
+        assert rendered == figure["minor"] / cfg.minor_units_per_major, (
+            f"{field}: rendered {rendered} but the base says {figure['minor'] / cfg.minor_units_per_major}"
+        )

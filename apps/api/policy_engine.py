@@ -51,7 +51,7 @@ from oxbow.quant.allocate import (
 from oxbow.quant.economics import Economics as Assumptions
 from oxbow.quant.ev import AccountEV, CalibratedScore, price_account, price_at_rate
 from oxbow.quant.frontier import Frontier, sweep_frontier
-from oxbow.quant.money import Money, QuantError
+from oxbow.quant.money import Money, QuantError, decimals_for_base
 
 # The frontier grid is the configured sweep (plan §12: the operating point is forced
 # onto the grid so the marker sits on the curve that produced it). Nothing here
@@ -470,7 +470,10 @@ def optimality_gap_view(
             "exact_total_minor": None,
         }
     gap: OptimalityGap = comparison.gap
-    decimals = assumptions.minor_units_per_major
+    # The last site the read model could not reach: this view is built from the
+    # assumptions, not a row, so it converts the declared base to an exponent itself
+    # rather than handing the base to a field the renderer raises to a power of ten.
+    decimals = decimals_for_base(assumptions.minor_units_per_major)
     return {
         "available": True,
         "approximate": money(gap.approximate.minor, gap.approximate.currency, decimals=decimals),

@@ -74,6 +74,7 @@ from oxbow.ports.report import ReportSink
 from oxbow.ports.warehouse import WarehouseSink
 from oxbow.ports.watchlist import WatchlistAdapter
 from oxbow.quant.economics import Economics, load_economics
+from oxbow.quant.money import QuantError, decimals_for_base
 
 BackendName = Literal["postgres", "null-file"]
 WarehouseChoice = Literal["auto", "postgres", "null"]
@@ -682,20 +683,13 @@ def _money_decimals() -> int:
     queue, the case rail and the dashboard all read as zero.
 
     config declares a base because that is the quantity an operator reasons about, so the
-    conversion lives here, once, and refuses a base that is not an exact power of ten
-    instead of rounding an exponent into existence.
+    conversion lives in `oxbow.quant.money.decimals_for_base`, once, and this is the
+    composition root that turns its refusal into the vocabulary a container build speaks.
     """
-    base = _minor_units_per_major()
-    exponent, place = 0, 1
-    while place < base:
-        place *= 10
-        exponent += 1
-    if place != base:
-        raise ConfigError(
-            f"minor_units_per_major={base} is not an exact power of ten, so it has no "
-            "decimal exponent and money would render at a guessed scale"
-        )
-    return exponent
+    try:
+        return decimals_for_base(_minor_units_per_major())
+    except QuantError as exc:
+        raise ConfigError(str(exc)) from exc
 
 
 def _minor_units_per_major() -> int:
