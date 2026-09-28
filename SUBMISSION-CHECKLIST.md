@@ -8,7 +8,7 @@ Rules: deadline **1 October**, six required components, judging is on the Devpos
 
 | | |
 |---|---|
-| **`gh auth login -h github.com`** | The keyring token for `BROCKUGANDA` is **invalid** — verified: `gh auth status` returns `Failed to log in … The token in keyring is invalid`. Nothing can be published until this is redone interactively. |
+| ~~`gh auth login -h github.com`~~ **not blocking — re-measured 2026-09-28** | The row here said the keyring token for `BROCKUGANDA` was invalid and "nothing can be published until this is redone." It is valid: `gh auth status` reports `Logged in to github.com account BROCKUGANDA (keyring)`, and `gh api user` round-trips (`BROCKUGANDA`, `repo` + `workflow` scopes). `github.com/BROCKUGANDA/oxbow` already exists, is **PRIVATE**, non-empty, default branch `main`. So the two acts left are yours and neither is a login: **push** (`git rev-list --count origin/main..HEAD` = 57 commits behind the local tree) and **flip visibility**. The flip is deliberate and separately gated: `tests/unit/test_publication_preflight.py` must be green first, and the history should be scanned before anything is public. |
 | **Team real full names** (component 05) | Left blank in SUBMISSION.md on purpose. |
 | **Confirm student eligibility** | Rules say *students only*, ages 13+, *companies and professional organisations excluded*. Late entries are rejected outright, so settle this before the deadline, not on it. |
 | **YouTube unlisted link** (component 03) | Needs your account; the video file is produced locally. |
@@ -22,11 +22,15 @@ home paths, no private key material, no secret-shaped literals in shipped code, 
 `RUN_SALT` value in no tracked file, and one code licence named everywhere.
 
 ```bash
-# after gh auth login
-# from the repository root
+# from the repository root — the remote repo ALREADY EXISTS (private, main), so this is a
+# push and a visibility flip, not a create. `gh repo create oxbow` would fail on the name.
 git ls-files | wc -l                       # sanity: what leaves this machine
-uv run python -m pytest tests/unit/test_publication_preflight.py -q   # must be green
-gh repo create oxbow --public --source . --push
+uv run python -m pytest tests/unit/test_publication_preflight.py -q   # must be green first
+git log --format='%s' origin/main..HEAD | head -60   # scan the 57 commits for anything that
+                                       # must not go public: secrets, salt-shaped literals,
+                                       # and absolute developer home paths in messages or diffs
+git push origin main                       # stays a human act
+gh repo edit BROCKUGANDA/oxbow --visibility public   # only after the scan above
 ```
 
 Nothing is pushed by this repository's own tooling; the push stays a human act.
