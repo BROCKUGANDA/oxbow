@@ -95,10 +95,14 @@ It runs, from one command, and what it produces is queryable.
   VaR95 / ES97.5 on unreviewed exposure, a capacity sweep and a policy frontier.
 - **Serving.** FastAPI over Postgres behind eight **ports with working null adapters** — the
   same read model serves a real warehouse and a disk-only one, so the tool can be
-  demonstrated with no external system at all. **43,046 scored accounts land from that run's
-  43,720 out-of-sample rows, and the fold's calibration-refusal reason lands beside each one** —
-  the landed count was zero until this week, and an empty queue is the failure mode this product
-  exists to avoid. Every outbound payload carries its own
+  demonstrated with no external system at all. **The calibration fix works — `score_rows()` shapes
+  43,046 of that run's 43,720 out-of-sample rows, every one labelled `uncalibrated` with its fold's
+  refusal reason — and we are publishing the harder fact beside it: the warehouse stage that writes
+  those rows crashed before its first `INSERT` for every run, on a rebound local that turned a
+  slice frame into a column list, so the queue was empty for two independent reasons and only one
+  of them was about calibration.** That was found by running the stage, not by reading the loader,
+  and it is fixed in `63cedca`. An empty queue is the failure mode this product exists to avoid, so
+  an empty queue caused by our own crash is not a footnote. Every outbound payload carries its own
   assumptions, model version and disclaimer, so a consumer cannot receive an OXBOW number
   without receiving what it depends on. Errors are RFC 9457 `problem+json` with a `run_id`.
 - **Interface.** Seven product screens plus a state gallery, on a design system with 12
