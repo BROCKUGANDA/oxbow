@@ -191,11 +191,22 @@ Ordered by damage if any of it survives into a claimed-complete phase.
     is down to 46 errors (15 unused test-fixture arguments, 7 docstring style, 6
     `isinstance` tuple form), and `mypy` carries 304 errors in 64 files led by
     `scoring/model.py` (87). Whole-suite measurement is now 789 passed / 8 failed / 1
-    skipped, with the eight all PostgreSQL-dependent. The engine has since come back
-    and `postgres`/`redis` report healthy, but that is the prerequisite, not the result:
-    whether those eight pass is only known when `uv run pytest -q tests/integration`
-    says so, and it has not been re-run at the time of writing. `make lint` remains red
-    -- on `mypy` and those 46, no longer on formatting.
+    skipped, with the eight all PostgreSQL-dependent.
+    **Re-measured 2026-09-28, later the same week, and two of those sentences were
+    already stale.** mypy is **347 errors in 69 files** — it had grown to 395 before this
+    pass, and `scoring/model.py`'s 87 are now **zero**: the cluster was one missing
+    declaration (a `points_json` entry literal inferred as `dict[str, object]`, now a
+    `ScorecardContribution` TypedDict) plus four artefact readers coercing `object` with bare
+    `int()`/`float()`/`str()`, now `_as_int`/`_as_float`/`_as_str`/`_as_bool`/`_as_str_tuple`,
+    which fail naming the field instead of raising a bare TypeError from inside a rebuild.
+    That work found `band_table_from_dict` was simply broken — it never passed `merged_from` or
+    `merge_reason`, both required, so the "score without retraining" path raised on its first
+    call and had no test at all (`tests/unit/test_p4_artefact_round_trip.py` now covers it and
+    is mutation-proved: removing the fix gives `TypeError: BandRow.__init__() missing 1
+    required positional argument`). And the Postgres claim is now the opposite of what was
+    written: **Docker's engine is down**, 5433 refuses, and the suites that say "against a real
+    Postgres" are reaching a native server on 5432 through the fallback DSN. `make lint` remains
+    red — on `mypy` and those 46, no longer on formatting.
 14. **CLOSED — the audit digest is no longer delimiter-ambiguous.** It used to join
     `HASH_VERSION | seq | occurred_at | actor_id | subject | action | canonical_json
     (payload) | prev_hash` with `"|"`, and since `subject`, `action` and payload string

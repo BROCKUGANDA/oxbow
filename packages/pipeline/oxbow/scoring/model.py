@@ -28,7 +28,7 @@ import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import Final
+from typing import Final, TypedDict
 
 import numpy as np
 import polars as pl
@@ -500,6 +500,24 @@ def _row_label_maps(
     ]
 
 
+class ScorecardContribution(TypedDict):
+    """One attribute's entry in a row's ``points_json`` — the shape the case page reads back.
+
+    Declared as a type because the same six keys are the artefact contract three times over:
+    ``landing.SCORECARD_ENTRY_FIELDS`` refuses an entry missing one, ``band_definition`` sums the
+    ``points`` to check the account's score adds up, and the reason-code renderer sorts by them.
+    Written as a bare dict literal mypy infers ``dict[str, object]``, and every later
+    ``item["points"]`` then fails — 30-odd errors that were really this one missing declaration.
+    """
+
+    attribute: str
+    feature: str
+    bin_label: str
+    points: int
+    woe: float
+    bin_kind: str
+
+
 def score_frame(frame: TrainingFrame, model: ScorecardModel, cfg: ScorecardConfig) -> pl.DataFrame:
     """Score every row of a frame with the frozen scorecard.
 
@@ -521,7 +539,7 @@ def score_frame(frame: TrainingFrame, model: ScorecardModel, cfg: ScorecardConfi
     zero_flags: list[list[str]] = []
     unseen_flags: list[list[str]] = []
     for position, labels in enumerate(row_labels):
-        contributions = [
+        contributions: list[ScorecardContribution] = [
             {
                 "attribute": model.attribute_label(feature),
                 "feature": feature,
@@ -614,40 +632,128 @@ def _scalar(item: Mapping[str, object], key: str) -> object:
     return item[key]
 
 
+def _as_int(value: object, *, where: str) -> int:
+    """An integer read out of artefact JSON, named for the field that failed.
+
+    ``int(_scalar(payload, "iv"))`` compiles but says nothing when the artefact holds a string:
+    the TypeError arrives from inside a rebuild with no field and no artefact in it. An object with
+    ``__index__`` is accepted because these readers also see numpy scalars straight off a fresh
+    fit, and a float is refused because a count that came back as ``12.5`` is a corrupt artefact,
+    not a rounding preference. ``bool`` is refused for the same reason DEV-005 refuses it in money.
+    """
+    if isinstance(value, bool) or not hasattr(value, "__index__"):
+        raise ScorecardFitError(
+            f"{where}: expected an integer, got {value!r} ({type(value).__name__})"
+        )
+    return int(value)
+
+
+def _as_float(value: object, *, where: str) -> float:
+    """A rate or weight read out of artefact JSON, with the field named on failure."""
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        raise ScorecardFitError(
+            f"{where}: expected a number, got {value!r} ({type(value).__name__})"
+        )
+    return float(value)
+
+
+def _as_str(value: object, *, where: str) -> str:
+    """A label read out of artefact JSON. ``str(12)`` would silently invent one."""
+    if not isinstance(value, str):
+        raise ScorecardFitError(
+            f"{where}: expected a string, got {value!r} ({type(value).__name__})"
+        )
+    return value
+
+
+def _as_bool(value: object, *, where: str) -> bool:
+    """A flag read out of artefact JSON; ``bool("false")`` is True, which is the whole trap."""
+    if not isinstance(value, bool):
+        raise ScorecardFitError(
+            f"{where}: expected a boolean, got {value!r} ({type(value).__name__})"
+        )
+    return value
+
+
+def _as_float_tuple(value: object, *, where: str) -> tuple[float, ...]:
+    """A list of rates read out of artefact JSON — the curve a reliability plot consumes.
+
+    ``None`` comes back as NaN, and that is the writer's own contract rather than a concession:
+    ``BandRow.to_dict`` maps a non-finite rate to JSON null because NaN is not valid JSON, so a
+    reader that refused null would refuse an artefact its own writer produced. The old code did
+    worse — ``float(None)`` raised a bare TypeError, so any artefact carrying a missing rate could
+    not be rebuilt at all.
+    """
+    if isinstance(value, str) or not isinstance(value, Sequence):
+        raise ScorecardFitError(
+            f"{where}: expected a list of numbers, got {value!r} ({type(value).__name__})"
+        )
+    return tuple(
+        float("nan") if item is None else _as_float(item, where=f"{where}[]") for item in value
+    )
+
+
+def _as_str_tuple(value: object, *, where: str) -> tuple[str, ...]:
+    """A list of labels read out of artefact JSON, with the field named when it is not one."""
+    if isinstance(value, str) or not isinstance(value, Sequence):
+        raise ScorecardFitError(
+            f"{where}: expected a list of strings, got {value!r} ({type(value).__name__})"
+        )
+    return tuple(_as_str(item, where=f"{where}[]") for item in value)
+
+
 def band_table_from_dict(payload: Mapping[str, object]) -> BandTable:
     """Rebuild a band table from artefact JSON, for scoring without retraining."""
     rows = tuple(
         BandRow(
-            band_id=str(_scalar(band, "id")),
-            label=str(_scalar(band, "label")),
-            action=str(_scalar(band, "action")),
-            glyph=str(_scalar(band, "glyph")),
-            min_points=None if band["min_points"] is None else int(band["min_points"]),
-            max_points=None if band["max_points"] is None else int(band["max_points"]),
-            population=int(band["population"]),
-            population_share=float(band["population_share"]),
-            observed_bad_rate=float(band["observed_bad_rate"]),
-            observed_bad_count=int(band["observed_bad_count"]),
+            band_id=_as_str(_scalar(band, "id"), where="id"),
+            label=_as_str(_scalar(band, "label"), where="label"),
+            action=_as_str(_scalar(band, "action"), where="action"),
+            glyph=_as_str(_scalar(band, "glyph"), where="glyph"),
+            min_points=None
+            if band["min_points"] is None
+            else _as_int(band["min_points"], where="min_points"),
+            max_points=None
+            if band["max_points"] is None
+            else _as_int(band["max_points"], where="max_points"),
+            population=_as_int(band["population"], where="population"),
+            population_share=_as_float(band["population_share"], where="population_share"),
+            observed_bad_rate=_as_float(band["observed_bad_rate"], where="observed_bad_rate"),
+            observed_bad_count=_as_int(band["observed_bad_count"], where="observed_bad_count"),
             rate_target_multiple=(
                 None
                 if band["rate_target_multiple"] is None
-                else float(band["rate_target_multiple"])
+                else _as_float(band["rate_target_multiple"], where="rate_target_multiple")
             ),
-            rate_target=None if band["rate_target"] is None else float(band["rate_target"]),
+            rate_target=None
+            if band["rate_target"] is None
+            else _as_float(band["rate_target"], where="rate_target"),
             band_absent_reason=(
-                None if band["band_absent_reason"] is None else str(band["band_absent_reason"])
+                None
+                if band["band_absent_reason"] is None
+                else _as_str(band["band_absent_reason"], where="band_absent_reason")
+            ),
+            # Both were declared on BandRow and written by BandRow.to_dict, and this reader simply
+            # never passed them: the "score without retraining" round trip raised TypeError before
+            # it could lose anything, and nothing called it, so nothing noticed. A band table
+            # rebuilt without its merge provenance cannot answer why a band covers what it does.
+            merged_from=_as_str_tuple(_scalar(band, "merged_from"), where="merged_from"),
+            merge_reason=(
+                None
+                if band["merge_reason"] is None
+                else _as_str(band["merge_reason"], where="merge_reason")
             ),
         )
         for band in _mapping_list(payload["bands"])
     )
     return BandTable(
         rows=rows,
-        base_rate=float(_scalar(payload, "base_rate")),
-        n_rows=int(_scalar(payload, "n_rows")),
-        smoothed_rate_at_cut=tuple(
-            float(value) for value in _scalar(payload, "smoothed_rate_at_cut")
+        base_rate=_as_float(_scalar(payload, "base_rate"), where="base_rate"),
+        n_rows=_as_int(_scalar(payload, "n_rows"), where="n_rows"),
+        smoothed_rate_at_cut=_as_float_tuple(
+            _scalar(payload, "smoothed_rate_at_cut"), where="smoothed_rate_at_cut"
         ),
-        method=str(_scalar(payload, "method")),
+        method=_as_str(_scalar(payload, "method"), where="method"),
     )
 
 
@@ -655,40 +761,50 @@ def binning_from_dict(payload: Mapping[str, object]) -> FeatureBinning:
     """Rebuild one feature's bin table from artefact JSON."""
     rows = tuple(
         BinRow(
-            label=str(row["label"]),
-            kind=str(row["kind"]),
-            population=int(row["population"]),
-            n_good=int(row["n_good"]),
-            n_bad=int(row["n_bad"]),
-            population_share=float(row["population_share"]),
-            bad_rate=float(row["bad_rate"]),
-            woe=float(row["woe"]),
-            iv_contribution=float(row["iv_contribution"]),
-            lower=None if row["lower"] is None else float(row["lower"]),
-            upper=None if row["upper"] is None else float(row["upper"]),
-            categories=tuple(str(item) for item in row["categories"]),
-            merge_applied=tuple(str(item) for item in row["merge_applied"]),
-            smoothing_applied=bool(row["smoothing_applied"]),
-            smoothing_reason=str(row["smoothing_reason"]),
+            label=_as_str(row["label"], where="label"),
+            kind=_as_str(row["kind"], where="kind"),
+            population=_as_int(row["population"], where="population"),
+            n_good=_as_int(row["n_good"], where="n_good"),
+            n_bad=_as_int(row["n_bad"], where="n_bad"),
+            population_share=_as_float(row["population_share"], where="population_share"),
+            bad_rate=_as_float(row["bad_rate"], where="bad_rate"),
+            woe=_as_float(row["woe"], where="woe"),
+            iv_contribution=_as_float(row["iv_contribution"], where="iv_contribution"),
+            lower=None if row["lower"] is None else _as_float(row["lower"], where="lower"),
+            upper=None if row["upper"] is None else _as_float(row["upper"], where="upper"),
+            categories=_as_str_tuple(row["categories"], where="categories"),
+            merge_applied=_as_str_tuple(row["merge_applied"], where="merge_applied"),
+            smoothing_applied=_as_bool(row["smoothing_applied"], where="smoothing_applied"),
+            smoothing_reason=_as_str(row["smoothing_reason"], where="smoothing_reason"),
         )
         for row in _mapping_list(payload["bins"])
     )
     return FeatureBinning(
-        feature=str(_scalar(payload, "feature")),
-        dtype=str(_scalar(payload, "dtype")),
+        feature=_as_str(_scalar(payload, "feature"), where="feature"),
+        dtype=_as_str(_scalar(payload, "dtype"), where="dtype"),
         rows=rows,
-        iv=float(_scalar(payload, "iv")),
-        boundary_source=str(_scalar(payload, "boundary_source")),
-        monotonic_direction=str(_scalar(payload, "monotonic_direction")),
-        missing_share=float(_scalar(payload, "missing_share")),
-        structural_zero_share=float(_scalar(payload, "structural_zero_share")),
-        unseen_tail_source=(
-            None if payload["unseen_tail_source"] is None else str(payload["unseen_tail_source"])
+        iv=_as_float(_scalar(payload, "iv"), where="iv"),
+        boundary_source=_as_str(_scalar(payload, "boundary_source"), where="boundary_source"),
+        monotonic_direction=_as_str(
+            _scalar(payload, "monotonic_direction"), where="monotonic_direction"
         ),
-        merges_recorded=int(_scalar(payload, "merges_recorded")),
-        bins_with_zero_bads=int(_scalar(payload, "bins_with_zero_bads")),
-        bins_with_zero_goods=int(_scalar(payload, "bins_with_zero_goods")),
-        notes=tuple(str(item) for item in _scalar(payload, "notes")),
+        missing_share=_as_float(_scalar(payload, "missing_share"), where="missing_share"),
+        structural_zero_share=_as_float(
+            _scalar(payload, "structural_zero_share"), where="structural_zero_share"
+        ),
+        unseen_tail_source=(
+            None
+            if payload["unseen_tail_source"] is None
+            else _as_str(payload["unseen_tail_source"], where="unseen_tail_source")
+        ),
+        merges_recorded=_as_int(_scalar(payload, "merges_recorded"), where="merges_recorded"),
+        bins_with_zero_bads=_as_int(
+            _scalar(payload, "bins_with_zero_bads"), where="bins_with_zero_bads"
+        ),
+        bins_with_zero_goods=_as_int(
+            _scalar(payload, "bins_with_zero_goods"), where="bins_with_zero_goods"
+        ),
+        notes=_as_str_tuple(_scalar(payload, "notes"), where="notes"),
     )
 
 
@@ -696,13 +812,17 @@ def selection_from_dict(payload: Mapping[str, object]) -> SelectionOutcome:
     """Rebuild the admission decisions so the refusals survive a round trip."""
     decisions = tuple(
         AdmissionDecision(
-            feature=str(item["feature"]),
-            iv=float(item["iv"]),
-            decision=str(item["decision"]),
-            rule=str(item["rule"]),
-            justification=None if item["justification"] is None else str(item["justification"]),
-            abs_correlation_with_label=float(item["abs_correlation_with_label"]),
-            bins=int(item["bins"]),
+            feature=_as_str(item["feature"], where="feature"),
+            iv=_as_float(item["iv"], where="iv"),
+            decision=_as_str(item["decision"], where="decision"),
+            rule=_as_str(item["rule"], where="rule"),
+            justification=None
+            if item["justification"] is None
+            else _as_str(item["justification"], where="justification"),
+            abs_correlation_with_label=_as_float(
+                item["abs_correlation_with_label"], where="abs_correlation_with_label"
+            ),
+            bins=_as_int(item["bins"], where="bins"),
         )
         for item in _mapping_list(payload["decisions"])
     )
@@ -715,12 +835,12 @@ def selection_from_dict(payload: Mapping[str, object]) -> SelectionOutcome:
 
 def scaling_from_dict(payload: Mapping[str, object]) -> ScalingConstants:
     return ScalingConstants(
-        pdo=float(_scalar(payload, "pdo")),
-        base_score=float(_scalar(payload, "base_score")),
-        base_odds=float(_scalar(payload, "base_odds")),
-        factor=float(_scalar(payload, "factor")),
-        offset=float(_scalar(payload, "offset")),
-        base_points=int(_scalar(payload, "base_points")),
+        pdo=_as_float(_scalar(payload, "pdo"), where="pdo"),
+        base_score=_as_float(_scalar(payload, "base_score"), where="base_score"),
+        base_odds=_as_float(_scalar(payload, "base_odds"), where="base_odds"),
+        factor=_as_float(_scalar(payload, "factor"), where="factor"),
+        offset=_as_float(_scalar(payload, "offset"), where="offset"),
+        base_points=_as_int(_scalar(payload, "base_points"), where="base_points"),
     )
 
 

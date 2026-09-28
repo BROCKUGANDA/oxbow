@@ -148,7 +148,7 @@ is the same sin as widening a leakage guard to get past it.
   on. Nobody is in `readmodel.py` now.
 - `scripts/demo_seed.py --create` refuses with exact counts (0 scored rows, 0
   folds, 0 decisions in Postgres). Correct behaviour; it needs the above to land.
-- Lint debt: ruff ~46 findings, mypy ~304 across 64 files. `make lint` is not green.
+- Lint debt (measured 2026-09-28): ruff 0 findings and `ruff format --check` clean repo-wide; mypy **347 errors in 69 files** (it had grown to 395 before this pass; `scoring/model.py`s 87 are now zero). `make lint` is not green, and `tests/contracts_adapters` currently fails its own `nothing-skipped` gate because Docker is down, not because a port broke.
 
 ### Submission state, so it is not rediscovered under time pressure
 
@@ -291,7 +291,7 @@ restoring the exit-139 segfault (DEV-021).
    rotating the Autonoma credentials pasted into chat on 2026-09-27.
 6. `make lint` is not green: `ruff check .` and `ruff format --check .` now report zero
    findings (67 findings and 42 unformatted files, cleared by hand — see the lint commit), but
-   `mypy packages/pipeline apps/api scripts` still carries roughly 304 errors across 64 files.
+   `mypy packages/pipeline apps/api scripts` carries 347 errors in 69 files (measured 2026-09-28). The largest remaining clusters are mechanical and shared: `scripts/measure_ibm_cycles.py` 34, `oxbow/cli.py` 29, `models/calibration.py` 22, `features/compute.py` 21 — mostly polars `.item()` unions and `dict[str, object]` payloads, the same two root causes that cleared `scoring/model.py`s 87. Clearing all 347 is a day of typing work, and §18 makes a gate that cannot pass without being narrowed a halt-and-ask, so the choice is the owners: spend the day, or ship item six of eleven as a measured 347 with the clusters named.
    It has not been re-measured this session because it needs more free RAM than the box had
    while the walk-forward and the conformance suites were running, and restarting a 70-minute
    run to count type errors is the wrong order of operations.

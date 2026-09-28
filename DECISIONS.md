@@ -1241,4 +1241,20 @@ So the currently published `out/backtest/ablation_results.json` still carries th
 caveat, and `MODEL_CARD.md` still prints it — true to the artifact that made it, which is the
 behind-the-curve state DEV-024 accepted. The ablation re-run is the next thing on a quiet box.
 
+**Proven on real data the same night, at probe scale.** A 8,109-row slice of the landed 40k corpus
+(all 108 positives, the same 2014–2015 window) through `oxbow backtest --corpus` produced honest,
+*different* numbers per model row: PR-AUC 0.0319 scorecard-only → 0.6174 GBM-without-graph →
+**0.6495 GBM-with-graph**, with the leakage control at 1.0 and the Isolation-Forest fusion at
+0.5241. The graph's contribution is now a measurement rather than a claim, which is the thing this
+record said could not be made without eight stacks. `fold_windows` landed (5 entries), all eight
+`ablation_profiles` are recorded, and `backtest_fold_rows` produced **5 rows with 0 refusals** —
+the first fold rows this build has ever emitted, with five *distinct* per-fold AUROCs
+(0.80645, 0.81373, 0.86230, 0.86328, 0.91277) proving the reduction is per fold and not the run
+figure copied down, and `entity_disjoint: false` on the fold where an account genuinely recurs.
+The probe artifacts were deleted afterwards: they are 8k rows, and publishing them as results
+would be exactly the substitution this record exists to refuse. The published table remains the
+40k one until the real re-run lands, and the card still prints the pre-change caveat — which is
+the honest direction of the gap, not the same mistake at a smaller scale.
+
+
 
