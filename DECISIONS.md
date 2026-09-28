@@ -1425,3 +1425,39 @@ price `E_i` from the subject's own `amount_out_24h_minor`, capped at `amount_in_
 where `graph_out_degree_30d` proves the downstream set empty**, and refuse any row where an account
 has out-degree and a null downstream — a case with zero instances today, which is precisely why the
 guard belongs in the code and not in a comment.
+
+## DEV-032 — the queue priced everyone at zero exposure while the same run had already measured it. **Root cause found by comparison; the fix is a source change, not a cap change.**
+
+`5ac8a63` made `economics` landable and the measurement came back correct and useless: **43,046 rows
+land, 0 refusals, every one at `exposure_minor = 0`, therefore every EV negative.** The §3.2 cap
+`min(outflow, inflow)` is degenerate on PaySim because no account both receives and sends inside the
+same 24-hour window (21,742 send-only, 21,304 receive-only, 0 with both). DEV-031's
+out-degree branch is therefore doing its job on a value that was never going to be informative.
+
+Comparing the run's own artifacts settles where the real number is:
+
+```
+out/score/01M3H8WG…/backtest_corpus.parquet   exposure_minor: 0 nulls, 40,001 non-zero, sum 920,049,878,010 minor
+out/score/01M3H8WG…/scored_rows.parquet       exposure columns: none
+```
+
+So the pipeline **did** compute exposure — `features/exposure.py`, landed in the backtest corpus the
+same stage wrote, and read per-account by `backtest/economics.py:160` as `account.exposure_minor`,
+which is why the published walk-forward shows a threshold policy losing UGX 61.99 M and the EV
+policy gaining UGX 2.59 M. What `economics_rows` does is reconstruct exposure from the scored
+frame's activity features, because the scored frame has no exposure column at all. Two tables in
+one run, one priced from a measurement and one from a proxy, disagreeing by construction — and the
+proxy is the one feeding the queue the analyst sees.
+
+**The fix is a source change:** `economics_rows` should join the run's own `exposure_minor` from
+`backtest_corpus.parquet` on `account_key`, and the outflow/inflow reconstruction becomes the
+refusal-named fallback for accounts the corpus does not cover — not the default. **Rejected:
+relaxing the §3.2 cap**, which is not where the error is, and **rejected: leaving the queue at zero
+and letting the all-negative EV stand as the finding**, because an all-negative queue produced by a
+proxy while the measured column sits in the next file is not a result, it is a plumbing bug dressed
+as a conclusion.
+
+Consequence for the documents: `SUBMISSION.md` §1A's threshold-versus-EV table is sourced from the
+corpus exposure path and stays true, but until this lands the shipped product's queue contradicts
+it. A judge who reads the table then opens the queue would find the numbers disagreeing, which is
+the one thing this build's whole evidence contract exists to prevent.

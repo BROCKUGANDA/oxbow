@@ -58,6 +58,12 @@ says so:
 | score threshold — what most desks actually do | 2,625 | 59,993 of 60,000 | 31 / 2,594 | **−UGX 61,991,618** |
 | expected value, greedy = exact CP-SAT | 1 | 120 | 1 / 0 | **+UGX 2,586,702** |
 
+**Read this table with its caveat.** It is computed from the run's measured
+per-account exposure (, , 40,001 accounts non-zero).
+The warehouse table that feeds the live queue currently reconstructs exposure from activity
+features instead and gets zero for every account, so the shipped queue contradicts the figure
+above until DEV-032 is applied. The measurement is right; the plumbing is not.
+
 At one capacity and one assumption file, pricing the queue rather than thresholding it is
 worth **UGX 64.58 million** across five folds — and the mechanism is the surprising part: the
 optimal policy spends **1 of the 200 available analyst-hours**, because at a 0.135 % base rate
