@@ -193,7 +193,7 @@ Ordered by damage if any of it survives into a claimed-complete phase.
     `scoring/model.py` (87). Whole-suite measurement is now 789 passed / 8 failed / 1
     skipped, with the eight all PostgreSQL-dependent.
     **Re-measured 2026-09-28, later the same week, and two of those sentences were
-    already stale.** mypy is **313 errors in 68 files** (395 before the pass) — it had grown to 395 before this
+    already stale.** mypy is **276 errors in 66 files** (395 before the pass) — it had grown to 395 before this
     pass, and `scoring/model.py`'s 87 are now **zero**: the cluster was one missing
     declaration (a `points_json` entry literal inferred as `dict[str, object]`, now a
     `ScorecardContribution` TypedDict) plus four artefact readers coercing `object` with bare

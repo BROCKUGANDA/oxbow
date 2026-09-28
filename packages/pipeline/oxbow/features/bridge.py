@@ -95,6 +95,7 @@ import polars as pl
 
 from oxbow.backtest.splits import Fold, SplitPlan
 from oxbow.config import PipelineConfig
+from oxbow.dtypes import as_moment
 from oxbow.features.build import (
     LABEL_FRAUD,
     LABEL_TYPOLOGY,
@@ -134,6 +135,18 @@ class LabelUnavailableError(GrainBridgeError):
 
 class SpecHashDisagreementError(GrainBridgeError):
     """Two feature tables built for one run disagree about the spec they were built from."""
+
+
+def _moment(value: object, *, column: str, bound: str) -> str:
+    """One edge of the bridged timeline as an instant, or a refusal naming the column."""
+    moment = as_moment(value)
+    if moment is None:
+        raise GrainBridgeError(
+            f"{column} {bound}: the bridged frame yielded {value!r} "
+            f"({type(value).__name__}) where its temporal contract promised a timestamp; the "
+            "bridge report would otherwise publish a timeline string that is not an instant"
+        )
+    return moment.isoformat()
 
 
 @dataclass(frozen=True, slots=True)
@@ -399,6 +412,12 @@ def build_account_frame(
     frame = _cast_contract(frame, registry)
     _assert_frame(frame, registry, anchor_columns)
     stamps = frame[AS_OF_TS]
+    # The union polars answers a reduction with is the same one every other consumer of a
+    # temporal contract faces: `_cast_contract` has already made this column a Datetime, so a
+    # non-timestamp here means the cast and the read disagree about the frame, and the bridge
+    # report's timeline would then carry `b'2014-01-02'` — a string that reads like an instant.
+    timeline_start = _moment(stamps.min(), column=AS_OF_TS, bound="minimum")
+    timeline_end = _moment(stamps.max(), column=AS_OF_TS, bound="maximum")
     report = BridgeReport(
         spec_hash=registry.spec_hash,
         rows=frame.height,
@@ -407,8 +426,8 @@ def build_account_frame(
         base_rate=float(frame[LABEL_FRAUD].sum()) / frame.height,
         folds=len({row.index for row in fold_rows if row.rows}),
         max_lookback_days=registry.max_lookback_days,
-        timeline_start=stamps.min().isoformat() if frame.height else "",
-        timeline_end=stamps.max().isoformat() if frame.height else "",
+        timeline_start=timeline_start,
+        timeline_end=timeline_end,
         per_fold=tuple(fold_rows),
         anchor_relative_columns=anchor_columns,
         anchor_ambiguous_instants=ambiguous,
