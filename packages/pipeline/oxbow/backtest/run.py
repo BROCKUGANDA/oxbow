@@ -777,6 +777,24 @@ def run_real(
         "allocator and the ONE splits module; provenance=real_corpus."
     )
     payload["fold_plan_window"] = plan_report
+    # The fold windows the ONE splits module computed and the harness applied, written out so a
+    # consumer can state which dates a fold covered. They were never absent by design: `splits`
+    # owns the arithmetic and nothing else may recompute it, so serialising the answer is the only
+    # way a downstream table can hold the boundary without becoming a second source of it.
+    payload["fold_windows"] = [
+        {
+            "fold_index": fold.index,
+            "train_start": fold.train_start_ts.isoformat(),
+            "train_end": fold.train_end_ts.isoformat(),
+            "validation_start": fold.validation_start_ts.isoformat(),
+            "embargo_end": fold.embargo_band[1].isoformat(),
+            "test_start": fold.test_start_ts.isoformat(),
+            "test_end": fold.test_end_ts.isoformat(),
+            "purge_days": fold.purge_days,
+            "label_window_days": fold.label_window_days,
+        }
+        for fold in plan.folds
+    ]
     payload["corpus_fold_column_check"] = fold_column_report
     payload["honest_model_fits"] = shared_scores.fits
     payload["honest_ablation_rows"] = sum(1 for _ in ABLATION_ROWS)

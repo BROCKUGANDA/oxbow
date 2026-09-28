@@ -1140,23 +1140,53 @@ BACKTEST_FOLD_SOURCES: Final[dict[str, str]] = {
 #: has no precision and no recall at all, and `precision_undefined` is how the table says so.
 BACKTEST_FOLD_NULLABLE: Final = frozenset({"precision_at_budget", "recall_at_budget"})
 #: Figures the table declares NOT NULL and the fold record does not carry, with what would carry it.
-BACKTEST_FOLD_UNMEASURED: Final[dict[str, str]] = {
-    "train_start": "the fold's window bounds live in oxbow.backtest.splits.SplitPlan and are never serialised",
-    "train_end": "the fold's window bounds live in oxbow.backtest.splits.SplitPlan and are never serialised",
-    "embargo_end": "the fold's window bounds live in oxbow.backtest.splits.SplitPlan and are never serialised",
-    "test_start": "the fold's window bounds live in oxbow.backtest.splits.SplitPlan and are never serialised",
-    "test_end": "the fold's window bounds live in oxbow.backtest.splits.SplitPlan and are never serialised",
-    "auroc": "the harness publishes AUROC per policy aggregate (`auroc_comparability_only`), never per fold",
-    "brier": "the harness publishes Brier per policy aggregate, never per fold",
-    "max_drawdown_minor": "the harness publishes drawdown per policy aggregate, never per fold",
-    "entity_disjoint": "no artifact records whether train and test entities are disjoint for this fold",
-}
+#: One ``backtest_fold`` row per (run, fold) means one owner per fold. The plan publishes the final
+#: statistical configuration under the constrained-optimal queue as the headline, so that arm's fold
+#: record owns the row: the other arms differ by MODEL (and their discrimination belongs in
+#: ``ablation_row``, which is keyed by variant), while the policy ladders within one arm book
+#: different money for the same fold and cannot be averaged into a single figure. A fold with no
+#: record from this owner is refused by name rather than silently reattributed.
+BACKTEST_FOLD_OWNER: Final = ("full_calibrated", "ev_cpsat")
 BACKTEST_FOLD_INTEGERS: Final = frozenset(
     {"fold_index", "embargo_days", "n_train", "n_test", "alerts", "mc_runs", "mc_seed"}
 )
 BACKTEST_FOLD_MONEY: Final = frozenset(
     {"captured_value_minor", "cost_minor", "net_benefit_minor", "var95_minor", "es975_minor"}
 )
+
+
+#: The five window bounds `backtest_fold` declares NOT NULL, and the keys the run's own fold-plan
+#: section uses for them. They come from ``oxbow.backtest.splits.SplitPlan`` via the artifact's
+#: ``fold_windows``, because the splits module owns fold arithmetic and nothing downstream may
+#: recompute a boundary it was not given (DEV-013).
+BACKTEST_FOLD_WINDOW_KEYS: Final = (
+    "train_start",
+    "train_end",
+    "embargo_end",
+    "test_start",
+    "test_end",
+)
+
+
+def _fold_window_lookup(ablation: Mapping[str, Any]) -> dict[int, dict[str, Any]]:
+    """The run's per-fold date windows, keyed by the fold index the harness reports.
+
+    A document with no ``fold_windows`` section is an artifact from before the boundaries were
+    serialised; that is reported per fold by the mapper rather than guessed from the corpus span,
+    which would be a window the run never used.
+    """
+    sections = ablation.get("fold_windows")
+    if not isinstance(sections, list):
+        return {}
+    found: dict[int, dict[str, Any]] = {}
+    for section in sections:
+        if not isinstance(section, Mapping):
+            continue
+        index = _integer(section.get("fold_index"))
+        if index is None or index in found:
+            continue
+        found[index] = {key: section.get(key) for key in BACKTEST_FOLD_WINDOW_KEYS}
+    return found
 
 
 def _fold_records(ablation: Mapping[str, Any]) -> list[tuple[str, dict[str, Any]]]:
@@ -1166,6 +1196,7 @@ def _fold_records(ablation: Mapping[str, Any]) -> list[tuple[str, dict[str, Any]
     The tag is what makes the collapse report name the sources that disagree.
     """
     tagged: list[tuple[str, dict[str, Any]]] = []
+    windows = _fold_window_lookup(ablation)
     for variant in ablation.get("variants") or []:
         if not isinstance(variant, Mapping):
             continue
@@ -1183,6 +1214,9 @@ def _fold_records(ablation: Mapping[str, Any]) -> list[tuple[str, dict[str, Any]
                     continue
                 record = {
                     "fold_index": fold.get("fold_index"),
+                    # The stable row id, not the display label: the fold row's owner is named by id
+                    # so a reworded label cannot silently move the ownership to another arm.
+                    "row_id": arm,
                     "embargo_days": fold.get("embargo_days"),
                     "n_fit_rows": fold.get("n_fit_rows"),
                     "n_scored_rows": fold.get("n_scored_rows"),
@@ -1206,19 +1240,15 @@ def _fold_records(ablation: Mapping[str, Any]) -> list[tuple[str, dict[str, Any]
                             "currency": economics.get("currency"),
                         }
                     )
-                for column in (
-                    "train_start",
-                    "train_end",
-                    "embargo_end",
-                    "test_start",
-                    "test_end",
-                    "auroc",
-                    "brier",
-                    "max_drawdown_minor",
-                    "entity_disjoint",
-                ):
+                for column in ("auroc", "brier", "max_drawdown_minor", "entity_disjoint"):
                     if column in fold:
                         record[column] = fold[column]
+                # The window bounds are not per-arm figures: every arm of a fold shares its dates,
+                # so the run states them once at the document level and they join in here by fold
+                # index. A fold with no section keeps its columns absent and is refused by name.
+                window = windows.get(_integer(fold.get("fold_index")))
+                if window is not None:
+                    record.update(window)
                 tagged.append((f"{label}/{policy_name}", record))
     return tagged
 
@@ -1226,20 +1256,21 @@ def _fold_records(ablation: Mapping[str, Any]) -> list[tuple[str, dict[str, Any]
 def backtest_fold_rows(
     ablation: Mapping[str, Any],
 ) -> tuple[list[dict[str, Any]], list[str]]:
-    """One ``backtest_fold`` row per fold index, from fold records that agree.
+    """One ``backtest_fold`` row per fold index, owned by the run's headline configuration.
 
-    Two refusals are structural today, and both are reported rather than papered over:
+    The artifact reports a fold once per arm per policy ladder, and those records do not agree:
+    the EV ladders book different money for the same fold, and — since DEV-027's fix — the arms
+    differ by MODEL, so their discrimination columns measure different things. ``(run_id,
+    fold_index)`` therefore needs a declared owner rather than a collapse across records that were
+    never the same measurement. :data:`BACKTEST_FOLD_OWNER` names one: the final calibrated system
+    under the constrained-optimal queue. Every other arm belongs to ``ablation_row``, which is
+    keyed by variant and can hold all of them.
 
-    * the artifact reports a fold once per arm per policy ladder (20 records for 5 folds here), and
-      they do **not** agree — the EV ladders book different money for the same fold — so
-      ``(run_id, fold_index)`` has no single owner;
-    * nine NOT NULL columns (window bounds, per-fold AUROC/Brier/drawdown, entity disjointness) are
-      recorded by nothing the run writes; see :data:`BACKTEST_FOLD_UNMEASURED` for the module that
-      holds each one.
-
-    So every fold refuses, naming both. What would land it is a fold-plan artifact —
-    ``write_run_artifacts``' ``fold_table`` payload, or the ``SplitPlan`` written as JSON — carried
-    into the same directory as ``ablation_results.json`` and keyed by fold index.
+    The window bounds join in from the document's own ``fold_windows``, written by ``oxbow
+    backtest`` from the ``SplitPlan`` the folds were cut with; the per-fold AUROC, Brier, drawdown
+    and entity-disjointness come from the fold record itself. An artifact from before any of that
+    has the columns absent and refuses by name — a fold row with an invented boundary or an
+    assumed ``entity_disjoint`` is exactly the second source of fold arithmetic DEV-013 forbids.
     """
     records = _fold_records(ablation)
     if not records:
@@ -1248,6 +1279,7 @@ def backtest_fold_rows(
             "described; the artifact that would be needed is out/backtest/<run>/ablation_results.json"
         )
 
+    owner_arm, owner_policy = BACKTEST_FOLD_OWNER
     by_index: dict[int, list[tuple[str, dict[str, Any]]]] = {}
     for source, record in records:
         index = _integer(record.get("fold_index"))
@@ -1258,22 +1290,19 @@ def backtest_fold_rows(
     rows: list[dict[str, Any]] = []
     refused: list[str] = []
     for index in sorted(by_index):
-        group = by_index[index]
-        missing = sorted(
-            {
-                column
-                for _, record in group
-                for column in BACKTEST_FOLD_UNMEASURED
-                if record.get(column) is None
-            }
-        )
-        if missing:
-            reasons = "; ".join(
-                f"{column} ({BACKTEST_FOLD_UNMEASURED[column]})" for column in missing
-            )
+        all_for_index = by_index[index]
+        group = [
+            (source, record)
+            for source, record in all_for_index
+            if record.get("row_id") == owner_arm and source.endswith(f"/{owner_policy}")
+        ]
+        if not group:
+            seen = ", ".join(sorted(source for source, _ in all_for_index))[:400]
             refused.append(
-                f"fold {index}: {len(group)} source record(s) (arms x policy ladders) and no "
-                f"measurement for {len(missing)} NOT NULL column(s) — {reasons}"
+                f"fold {index}: {len(all_for_index)} fold record(s) and none of them is the "
+                f"declared owner {owner_arm!r} under the {owner_policy!r} ladder "
+                f"(seen: {seen}); one row per (run, fold) needs one owner, and averaging ladders "
+                "that book different money would state a figure no arm produced"
             )
             continue
         # Every required figure is present in the sources; now they have to agree, fold by fold.
@@ -2525,8 +2554,8 @@ def graph_edge_rows(
 __all__ = [
     "ABLATION_SOURCES",
     "ACCOUNT_COLUMNS",
+    "BACKTEST_FOLD_OWNER",
     "BACKTEST_FOLD_SOURCES",
-    "BACKTEST_FOLD_UNMEASURED",
     "BAND_COLUMNS",
     "BAND_SOURCES",
     "CANONICAL_COMMUNITY_ORDER",

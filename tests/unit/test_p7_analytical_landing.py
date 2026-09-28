@@ -20,6 +20,7 @@ with no measurement, and a bucket the artifact itself marks unmeasurable.
 from __future__ import annotations
 
 import copy
+from datetime import date
 from typing import Any, Final
 
 import pytest
@@ -297,15 +298,210 @@ def _fold_document(*, extra: dict[str, Any] | None = None) -> dict[str, Any]:
     }
 
 
-def test_a_fold_the_producer_never_describes_refuses_naming_every_missing_column() -> None:
-    """`backtest_fold` has nine NOT NULL columns no artifact holds; silence here would be a lie."""
+def test_a_fold_the_producer_never_describes_refuses_naming_the_missing_figures() -> None:
+    """`backtest_fold` declares its columns NOT NULL; a zero-filled fold would be a claim."""
     rows, refused = backtest_fold_rows(_fold_document())
 
     assert rows == [], "nine required figures have no producer; a zero-filled fold is a claim"
     assert len(refused) == 1 and "fold 0" in refused[0]
-    assert "NOT NULL" in refused[0]
-    for column in ("auroc", "brier", "max_drawdown_minor"):
-        assert column in refused[0], f"{column} should be named in the refusal: {refused}"
+    assert "declared owner" in refused[0], refused
+
+
+def _owner_fold_document(
+    *,
+    drop: tuple[str, ...] = (),
+    without_windows: bool = False,
+    alerts: int = 10,
+) -> dict[str, Any]:
+    """A complete `full_calibrated` x `ev_cpsat` fold record plus the run's window section.
+
+    Every figure is hand-set so the landed row is checkable on paper: 100 fit rows and 40 scored
+    rows, 10 accounts reviewed, 5000 captured minus 2500 cost = 2500 net, precision 5/10 = 0.5,
+    recall 5/10 positives = 0.5.
+    """
+    fold: dict[str, Any] = {
+        "fold_index": 2,
+        "embargo_days": 30,
+        "n_fit_rows": 100,
+        "n_scored_rows": 40,
+        "n_test_positive": 10,
+        "pr_auc": 0.25,
+        "auroc": 0.6,
+        "brier": 0.00125,
+        "max_drawdown_minor": 750,
+        "entity_disjoint": False,
+        "precision": 0.5,
+        "recall": 0.5,
+        "corpus": "fixture-corpus",
+        "economics": {
+            "accounts_reviewed": alerts,
+            "captured_value_minor": 5000,
+            "cost_minor": 2500,
+            "net_benefit_minor": 2500,
+            "var95_minor": 3000,
+            "es975_minor": 3500,
+            "mc_draws": 200,
+            "mc_seed": 1337,
+            "currency": "UGX",
+        },
+    }
+    for column in drop:
+        del fold[column]
+    document: dict[str, Any] = {
+        "variants": [
+            {
+                "row_id": "full_calibrated",
+                "label": "Full system, calibrated",
+                "corpus": "fixture-corpus",
+                "policies": {"ev_cpsat": {"folds": [fold]}},
+            },
+            {
+                "row_id": "scorecard_only",
+                "label": "Scorecard only (WOE logistic)",
+                "corpus": "fixture-corpus",
+                # Its OWN record: two arms sharing one dict would let a test mutate the owner it is
+                # trying to leave alone, which is exactly the confusion this table exists to remove.
+                "policies": {"ev_cpsat": {"folds": [copy.deepcopy(fold)]}},
+            },
+        ]
+    }
+    if not without_windows:
+        document["fold_windows"] = [
+            {
+                "fold_index": 2,
+                "train_start": "2014-01-02T01:30:57.117619+00:00",
+                "train_end": "2015-06-30T23:59:59+00:00",
+                "validation_start": "2015-01-04T00:00:00+00:00",
+                "embargo_end": "2015-07-30T23:59:59+00:00",
+                "test_start": "2015-07-31T00:00:00+00:00",
+                "test_end": "2015-12-20T16:45:37.523020+00:00",
+            }
+        ]
+    return document
+
+
+def test_a_whole_fold_record_lands_one_row_with_the_window_it_was_cut_on() -> None:
+    """The fold table's owner, its dates, and the figures the harness reduced over one fold."""
+    rows, refused = backtest_fold_rows(_owner_fold_document())
+
+    assert refused == [], refused
+    assert rows == [
+        {
+            "fold_index": 2,
+            "corpus": "fixture-corpus",
+            "train_start": date(2014, 1, 2),
+            "train_end": date(2015, 6, 30),
+            "embargo_days": 30,
+            "embargo_end": date(2015, 7, 30),
+            "test_start": date(2015, 7, 31),
+            "test_end": date(2015, 12, 20),
+            "n_train": 100,
+            "n_test": 40,
+            "pr_auc": 0.25,
+            "auroc": 0.6,
+            "brier": 0.00125,
+            "precision_at_budget": 0.5,
+            "recall_at_budget": 0.5,
+            "precision_undefined": False,
+            "alerts": 10,
+            "captured_value_minor": 5000,
+            "cost_minor": 2500,
+            "net_benefit_minor": 2500,
+            "max_drawdown_minor": 750,
+            "var95_minor": 3000,
+            "es975_minor": 3500,
+            "mc_runs": 200,
+            "mc_seed": 1337,
+            "currency": "UGX",
+            "entity_disjoint": False,
+        }
+    ], rows
+
+
+def test_fold_zero_lands_like_any_other_fold() -> None:
+    """The first fold is the one an index lookup is most likely to lose.
+
+    Found while wiring these columns into the real schema: the window join keyed its lookup with
+    ``_integer(...) or -1``, which turns a legitimate fold 0 into a miss and quietly refuses the
+    fold the run cares most about. A fixture that only ever used index 2 could not see it.
+    """
+    document = _owner_fold_document()
+    for variant in document["variants"]:
+        for record in variant["policies"]["ev_cpsat"]["folds"]:
+            record["fold_index"] = 0
+        document["fold_windows"][0]["fold_index"] = 0
+
+    rows, refused = backtest_fold_rows(document)
+    assert refused == [], refused
+    assert [row["fold_index"] for row in rows] == [0], rows
+    assert rows[0]["train_start"] == date(2014, 1, 2), rows[0]
+
+
+def test_a_fold_is_owned_by_one_arm_and_policy_rather_than_collapsed_across_both() -> None:
+    """Nine arms x three ladders cannot average into one row per fold.
+
+    The EV ladders book different money for the same fold and, since DEV-027, the arms differ by
+    model — so averaging them would state a figure no arm produced. The row is owned by the final
+    calibrated system under the constrained-optimal queue; everything else belongs to
+    ``ablation_row``, which is keyed by variant.
+    """
+    document = _owner_fold_document()
+    # A second arm reporting a DIFFERENT pr_auc for the same fold: a mapper that collapsed sources
+    # would have to refuse on disagreement, and one that averaged them would invent a number.
+    document["variants"][1]["policies"]["ev_cpsat"]["folds"][0]["pr_auc"] = 0.11
+
+    rows, refused = backtest_fold_rows(document)
+    assert refused == [], refused
+    assert len(rows) == 1 and rows[0]["pr_auc"] == 0.25, rows
+    assert rows[0]["fold_index"] == 2, "one row per fold, not one per arm per ladder"
+
+
+def test_a_fold_with_no_owner_record_refuses_naming_what_was_seen() -> None:
+    """Not every run fits the owner: a fold the headline configuration never scored is refused."""
+    document = _owner_fold_document()
+    document["variants"] = [
+        variant for variant in document["variants"] if variant["row_id"] != "full_calibrated"
+    ]
+
+    rows, refused = backtest_fold_rows(document)
+    assert rows == []
+    assert len(refused) == 1 and "declared owner" in refused[0], refused
+    assert "full_calibrated" in refused[0] and "ev_cpsat" in refused[0], refused
+
+
+def test_a_fold_without_the_serialised_window_is_refused_rather_than_redated() -> None:
+    """The boundaries come from the splits module or not at all (DEV-013)."""
+    rows, refused = backtest_fold_rows(_owner_fold_document(without_windows=True))
+
+    assert rows == []
+    joined = " ".join(refused)
+    for column in ("train_start", "train_end", "embargo_end", "test_start", "test_end"):
+        assert column in joined, f"{column} should be named: {refused}"
+
+
+@pytest.mark.parametrize(
+    "column",
+    ["auroc", "brier", "max_drawdown_minor", "entity_disjoint"],
+)
+def test_a_fold_figure_the_harness_never_reduced_refuses_by_name(column: str) -> None:
+    """Each of the four figures `backtest_fold` needs per fold, and nothing else can supply it.
+
+    An absent per-fold AUROC cannot be filled with the policy aggregate's: five folds sharing one
+    run-level number is DEV-027's shape at a different grain.
+    """
+    rows, refused = backtest_fold_rows(_owner_fold_document(drop=(column,)))
+
+    assert rows == []
+    assert any(column in line for line in refused), refused
+
+
+def test_a_fold_with_no_alerts_reports_undefined_precision_rather_than_zero() -> None:
+    rows, refused = backtest_fold_rows(_owner_fold_document(alerts=0))
+
+    assert len(rows) == 1, refused
+    assert rows[0]["alerts"] == 0
+    assert rows[0]["precision_undefined"] is True, "no denominator, so no rate"
+    assert rows[0]["precision_at_budget"] is None and rows[0]["recall_at_budget"] is None
 
 
 def test_a_document_without_fold_records_is_refused_as_a_missing_artifact() -> None:

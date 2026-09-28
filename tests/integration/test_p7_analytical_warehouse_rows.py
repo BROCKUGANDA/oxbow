@@ -8,11 +8,11 @@ does not have, or overflowing a `CHAR(12)`, fails at the database, mid-transacti
 first real landing. The `rule_hit` duplicate-key crash this session found is the same class of
 gap one level earlier: the shape was right and the key was wrong.
 
-So this file writes the four artifact-shaped tables into a scratch Postgres on the compose port
-and reads them back. `backtest_fold` is deliberately absent: it refuses on every artifact this
-build has, so there is nothing to write — and `test_a_fold_the_producer_never_describes_refuses_naming_every_missing_column`
-is where that is pinned. Refusing is a result; writing a padded row to make a table non-empty is
-not.
+So this file writes the artifact-shaped tables — including `backtest_fold`, whose nine NOT NULL
+columns refused on every artifact until this session gave each one a producer — into a scratch
+Postgres on the compose port and reads them back. A fold row that the unit tests shape correctly
+can still die here: `Date` columns from an ISO string, a `CHAR(3)` currency, and `uq_backtest_fold`
+over five folds from nine arms x three ladders are all claims the mapper alone cannot make.
 
 The fixtures are the unit file's, imported rather than restated: two tables holding two copies
 of the same artifact shape is how a schema test and a mapper test drift apart while both stay
@@ -21,9 +21,11 @@ green.
 
 from __future__ import annotations
 
+import copy
 import os
 import sys
 from collections.abc import Iterator
+from datetime import date, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -39,6 +41,7 @@ import osqp  # noqa: E402, F401 -- for the native load it performs, before pyarr
 
 from oxbow.adapters.warehouse.landing import (  # noqa: E402
     ablation_rows,
+    backtest_fold_rows,
     fairness_rows,
     perturbation_rows,
     validation_metric_rows,
@@ -52,10 +55,17 @@ from oxbow.ports.warehouse import RunState  # noqa: E402
 from tests.unit.test_p7_analytical_landing import (  # noqa: E402
     _CARD,
     _ablation_document,
+    _owner_fold_document,
     _perturbation_card,
 )
 
-TABLES = ("ablation_row", "validation_metric", "fairness_row", "perturbation_row")
+TABLES = (
+    "ablation_row",
+    "validation_metric",
+    "fairness_row",
+    "perturbation_row",
+    "backtest_fold",
+)
 
 
 def _admin_urls() -> list[str]:
@@ -112,9 +122,18 @@ def engine() -> Iterator[Any]:
             conn.execute(f"DROP DATABASE IF EXISTS {scratch_db} WITH (FORCE)")
 
 
+def _day(year: int, month_offset: int, *, months: int = 0, days: int = 0) -> date:
+    """A real calendar date, because `2015-02-30` is a fold boundary nobody walked forward on.
+
+    The mapper refuses a string that is not a day, so a fixture assembled by digit arithmetic
+    would be testing its own handwriting rather than the column.
+    """
+    return date(year, 1 + month_offset + months, 1) + timedelta(days=days + 1)
+
+
 @pytest.fixture()
 def tables() -> dict[str, list[dict[str, Any]]]:
-    """The four artifact tables, built from the unit file's fixtures with nothing dropped."""
+    """The five artifact tables, built from the unit file's fixtures with nothing dropped."""
     ablation = _ablation_document()
     rows: dict[str, list[dict[str, Any]]] = {}
     refusals: dict[str, list[str]] = {}
@@ -143,6 +162,32 @@ def tables() -> dict[str, list[dict[str, Any]]]:
     # unmappable one is removed rather than silently dropped by the mapper.
     perturbations["perturbations"].pop("unmapped_kind")
     rows["perturbation_row"], refusals["perturbation_row"] = perturbation_rows(perturbations)
+
+    # Three folds, not one: `uq_backtest_fold` is (run_id, fold_index), and a single row cannot
+    # show that the owner selection produces one row per fold rather than one per arm per ladder.
+    document = _owner_fold_document()
+    owner_fold = document["variants"][0]["policies"]["ev_cpsat"]["folds"][0]
+    extra_folds = [copy.deepcopy(owner_fold) for _ in (0, 1)]
+    for offset, fold_record in enumerate(extra_folds):
+        fold_record["fold_index"] = offset
+        fold_record["entity_disjoint"] = offset == 1
+    document["variants"][0]["policies"]["ev_cpsat"]["folds"] = [owner_fold, *extra_folds]
+    for arm in document["variants"][1:]:
+        arm["policies"]["ev_cpsat"]["folds"] = [owner_fold, *extra_folds]
+    document["fold_windows"].extend(
+        {
+            "fold_index": offset,
+            "train_start": _day(2014, offset).isoformat() + "T01:30:57+00:00",
+            "train_end": _day(2015, offset).isoformat() + "T23:59:59+00:00",
+            "embargo_end": _day(2015, offset, months=1).isoformat() + "T23:59:59+00:00",
+            "test_start": _day(2015, offset, months=1, days=1).isoformat() + "T00:00:00+00:00",
+            "test_end": _day(2015, offset, months=1, days=27).isoformat() + "T00:00:00+00:00",
+        }
+        for offset in (0, 1)
+    )
+    rows["backtest_fold"], refusals["backtest_fold"] = backtest_fold_rows(document)
+    assert len(rows["backtest_fold"]) == 3, refusals["backtest_fold"]
+
     # An empty table here means the mapper refused, and the test would pass vacuously.
     for name in TABLES:
         assert rows[

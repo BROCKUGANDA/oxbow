@@ -31,7 +31,7 @@ dicts it emits carry explicit ``_minor`` integer fields.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from typing import Any, Final
@@ -107,6 +107,17 @@ class FoldResult:
     precision: float | None
     recall: float | None
     pr_auc: float | None
+    #: The same two figures the policy aggregate reports, reduced over THIS fold's decisions only.
+    #: They exist because `backtest_fold` is one row per fold and declares both NOT NULL: publishing
+    #: the run-level value on every fold row would make five folds look like one measurement five
+    #: times, which is DEV-027's shape again at a different grain.
+    auroc: float | None
+    brier: float | None
+    #: Whether the fold's training accounts and its test accounts are disjoint. A walk-forward over
+    #: accounts that keep transacting is normally NOT disjoint — the purge and the embargo withhold
+    #: *time*, not *entities* — and the table exists to say which folds were which rather than to
+    #: leave the column empty.
+    entity_disjoint: bool
     alerts_per_10k: float
     typology_recall: dict[str, float]
     allocator_label: str
@@ -471,6 +482,19 @@ def _optional_str(value: Any) -> str | None:
     return None if value is None else str(value)
 
 
+def _entities_disjoint(corpus: pl.DataFrame, fold: HarnessFold) -> bool:
+    """True when no account that trained this fold also appears in its test window.
+
+    This is a measurement over the fold's own masks, not a claim about the splitter: the purge and
+    the embargo withhold *time*, and an account that keeps transacting across that boundary is in
+    both slices. Recording the answer per fold is what lets a reader see that the entity-disjoint
+    split is a separate robustness check rather than a property of every walk-forward fold.
+    """
+    train = set(corpus.filter(pl.Series(fold.train_mask)).get_column(COL_ACCOUNT_KEY).to_list())
+    test = set(corpus.filter(pl.Series(fold.test_mask)).get_column(COL_ACCOUNT_KEY).to_list())
+    return not (train & test)
+
+
 def _optional_int(value: Any) -> int | None:
     if value is None:
         return None
@@ -485,6 +509,7 @@ def _fold_result(
     n_scored_rows: int,
     config: BacktestConfig,
     seed: int,
+    entity_disjoint: bool,
 ) -> FoldResult:
     """Reduce one fold + one policy to the reported metrics, honouring undefined cases."""
     labels = [a.label for a in accounts]
@@ -519,6 +544,13 @@ def _fold_result(
         pr_auc = metrics.pr_auc(probabilities, labels, keys)
     except ValueError:
         pr_auc = None
+    # The same two reductions the policy aggregate makes, over this fold's decisions only, so a
+    # fold row reports its own discrimination instead of the run's repeated five times.
+    try:
+        auroc = metrics.auroc(probabilities, labels) if sum(labels) else None
+    except ValueError:
+        auroc = None
+    brier = metrics.brier_score(probabilities, labels) if labels else None
 
     alerts_per_10k = (
         fold_alerts_per_10k(economics.accounts_reviewed, len(accounts)) if accounts else 0.0
@@ -539,6 +571,9 @@ def _fold_result(
         precision=precision,
         recall=recall,
         pr_auc=pr_auc,
+        auroc=auroc,
+        brier=brier,
+        entity_disjoint=entity_disjoint,
         alerts_per_10k=alerts_per_10k,
         typology_recall=typology_recall,
         allocator_label=outcome.allocator_label,
@@ -688,6 +723,10 @@ def run_variant(
         fold_severity[fold.index] = severity
         model_version = model_version or version
 
+    # Once per fold, not once per arm: the answer is a property of the split, and a nine-row table
+    # that measured it per arm could disagree with itself about which accounts were held out.
+    fold_disjoint = {fold.index: _entities_disjoint(corpus, fold) for fold in folds}
+
     # Threshold baseline tail per fold, computed first so other policies can report
     # their VaR/ES *reduction versus the threshold baseline* (plan §12 tail comparison).
     threshold_fold_results = _run_policies(
@@ -699,6 +738,7 @@ def run_variant(
         config,
         base_seed,
         allocator,
+        fold_disjoint,
     )
     threshold_es = {
         r.fold_index: r.economics.tail.es_minor for r in threshold_fold_results[POLICY_THRESHOLD]
@@ -717,6 +757,7 @@ def run_variant(
             config,
             base_seed,
             allocator,
+            fold_disjoint,
         )
         greedy_ev_total = sum(
             r.economics.expected_value_minor for r in greedy_fold[POLICY_EV_GREEDY]
@@ -733,6 +774,7 @@ def run_variant(
             config,
             base_seed,
             allocator,
+            fold_disjoint,
         )
         fold_results = results[policy]
         pooled = _pooled_rows(fold_accounts, folds)
@@ -789,11 +831,17 @@ def _run_policies(
     config: BacktestConfig,
     seed: int,
     allocator: Allocator | None,
+    fold_disjoint: Mapping[int, bool],
 ) -> dict[str, list[FoldResult]]:
     out: dict[str, list[FoldResult]] = {policy: [] for policy in policies}
     for policy in policies:
         for fold in folds:
             accounts = fold_accounts[fold.index]
+            if fold.index not in fold_disjoint:
+                raise FoldError(
+                    f"fold {fold.index} has no recorded entity-disjoint answer; publishing a fold "
+                    "row with an assumed `false` would state a fact the run never checked"
+                )
             outcome = run_policy(
                 policy,
                 accounts,
@@ -813,6 +861,7 @@ def _run_policies(
                     n_scored_rows=fold_scored_rows[fold.index],
                     config=config,
                     seed=seed,
+                    entity_disjoint=fold_disjoint[fold.index],
                 )
             )
     return out
@@ -1045,6 +1094,16 @@ def _policy_to_dict(aggregate: PolicyAggregate) -> dict[str, Any]:
                 "precision": fr.precision,
                 "recall": fr.recall,
                 "pr_auc": fr.pr_auc,
+                "auroc": fr.auroc,
+                "brier": fr.brier,
+                "entity_disjoint": fr.entity_disjoint,
+                # Read off the SAME cumulative curve the run-level drawdown is, sampled at this
+                # fold: a fold row that re-derived its own drawdown would be able to disagree with
+                # the aggregate it sits under, and the reader would have no way to tell which of
+                # the two the run computed.
+                "max_drawdown_minor": metrics.max_drawdown_minor(
+                    aggregate.cumulative_benefit_minor[: position + 1]
+                ),
                 "alerts_per_10k_accounts": fr.alerts_per_10k,
                 "typology_recall": fr.typology_recall,
                 "economics": {
@@ -1066,7 +1125,7 @@ def _policy_to_dict(aggregate: PolicyAggregate) -> dict[str, Any]:
                     "currency": fr.economics.currency,
                 },
             }
-            for fr in aggregate.folds
+            for position, fr in enumerate(aggregate.folds)
         ],
     }
 
