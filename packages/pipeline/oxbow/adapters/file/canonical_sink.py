@@ -49,6 +49,7 @@ from oxbow.contracts.canonical_v1 import (
     PERSISTED_CANONICAL_COLUMNS,
     assert_canonical_frame,
 )
+from oxbow.dtypes import PolarsDtype
 from oxbow.ingest.paysim import QuarantineRecord
 
 INTERIM_DIRNAME: Final = "interim"
@@ -67,7 +68,7 @@ PARQUET_SUFFIX: Final = ".parquet"
 # is a different checksum, and verify-determinism compares checksums.
 PARQUET_CODECS: Final[Mapping[str, str]] = {"zstd": "zstd", "snappy": "snappy", "gzip": "gzip"}
 
-QUARANTINE_COLUMNS: Final[dict[str, pl.DataType]] = {
+QUARANTINE_COLUMNS: Final[dict[str, PolarsDtype]] = {
     "batch_id": pl.String(),
     "source_dataset": pl.String(),
     "row_index": pl.Int64(),

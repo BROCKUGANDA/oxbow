@@ -111,6 +111,7 @@ from oxbow.contracts.raw_ibm_aml import (
     TXN_TYPE_BY_PAYMENT_FORMAT,
     raw_ibm_aml_schema,
 )
+from oxbow.dtypes import PolarsDtype
 from oxbow.identity import is_ulid
 from oxbow.ingest.canonical import (
     CANONICAL_COLUMNS,
@@ -240,7 +241,7 @@ class TypologyAlignmentError(RuntimeError):
 # missing column instead.
 
 CANONICAL_P1B_COLUMNS: Final[tuple[str, ...]] = CANONICAL_COLUMNS
-CANONICAL_EVENT_DTYPES: Final[dict[str, pl.DataType]] = CANONICAL_DTYPES
+CANONICAL_EVENT_DTYPES: Final[dict[str, PolarsDtype]] = CANONICAL_DTYPES
 
 
 def _assert_projection_supports_this_corpus() -> None:

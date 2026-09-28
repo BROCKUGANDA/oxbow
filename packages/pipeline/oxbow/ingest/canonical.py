@@ -57,6 +57,7 @@ from oxbow.contracts.canonical_v1 import (
     PERSISTED_CANONICAL_COLUMNS,
     UTC_MICROS,
 )
+from oxbow.dtypes import PolarsDtype
 from oxbow.identity import is_ulid, new_ulid
 
 # Amounts in PaySim are EUR to the cent. Not inferred: the dataset card states it and
@@ -518,7 +519,7 @@ def utc_timestamp_series(values_us: Sequence[int], name: str) -> pl.Series:
     return pl.Series(name, list(values_us), dtype=pl.Int64).cast(UTC_MICROS)
 
 
-def canonical_dtypes_subset(columns: Sequence[str]) -> dict[str, pl.DataType]:
+def canonical_dtypes_subset(columns: Sequence[str]) -> dict[str, PolarsDtype]:
     """The declared dtype for each of ``columns``, from the one source of truth."""
     return {name: CANONICAL_DTYPES[name] for name in columns}
 

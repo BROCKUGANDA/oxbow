@@ -84,6 +84,7 @@ import polars as pl
 
 from oxbow.backtest.splits import Fold
 from oxbow.config import PipelineConfig
+from oxbow.dtypes import PolarsDtype
 from oxbow.features.build import assert_input_contract, assert_single_currency_per_account
 from oxbow.features.fold_scope import (
     ACCOUNT,
@@ -511,7 +512,7 @@ def provider_report(
 
 # --- derivation helpers ---------------------------------------------------
 
-_HIT_SCHEMA: Final[Mapping[str, pl.DataType]] = {
+_HIT_SCHEMA: Final[Mapping[str, PolarsDtype]] = {
     ACCOUNT: pl.String,
     RULE_COLUMN: pl.String,
     SEVERITY_COLUMN: pl.Float64,

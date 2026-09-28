@@ -38,6 +38,7 @@ from typing import Final
 import polars as pl
 
 from oxbow.config import CONFIG_DIRNAME, ConfigError, load_yaml
+from oxbow.dtypes import PolarsDtype
 
 FEATURES_FILENAME: Final = "features.yaml"
 
@@ -173,7 +174,7 @@ ROW_VALUES: Final[frozenset[str]] = frozenset(
     }
 )
 
-DTYPE_TO_POLARS: Final[Mapping[str, pl.DataType]] = {
+DTYPE_TO_POLARS: Final[Mapping[str, PolarsDtype]] = {
     "int64": pl.Int64,
     "int32": pl.Int32,
     "float64": pl.Float64,
@@ -440,7 +441,7 @@ class FeatureRegistry:
         """id -> sentence, for the SHAP panel and the scorecard's attribute labels."""
         return {entry.id: entry.sentence for entry in self.matrix_entries}
 
-    def matrix_dtypes(self) -> dict[str, pl.DataType]:
+    def matrix_dtypes(self) -> dict[str, PolarsDtype]:
         """id -> dtype, for the boundary assertion on the published frame."""
         return {entry.id: entry.polars_dtype for entry in self.matrix_entries}
 

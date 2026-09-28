@@ -54,6 +54,7 @@ import polars as pl
 # "output type of check_fn not recognized" and a ``pl.Series`` raises earlier on a
 # missing ``collect_schema``). ``raw_ibm_aml`` imports them the same way.
 from oxbow.contracts.raw_paysim import _bool_col, _frame
+from oxbow.dtypes import PolarsDtype
 
 # --- the one column list --------------------------------------------------
 # Exact and ordered. The Parquet writer selects in this order, the port declares
@@ -96,7 +97,7 @@ UTC_MICROS: Final[pl.Datetime] = pl.Datetime("us", "UTC")
 
 # Dtypes declared once so the writer, the assertions and the tests all check the
 # same table instead of each re-guessing it.
-CANONICAL_DTYPES: Final[dict[str, pl.DataType]] = {
+CANONICAL_DTYPES: Final[dict[str, PolarsDtype]] = {
     "txn_id": pl.String(),
     "event_ts_utc": UTC_MICROS,
     "event_date_local": pl.Date(),

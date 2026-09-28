@@ -148,7 +148,7 @@ is the same sin as widening a leakage guard to get past it.
   on. Nobody is in `readmodel.py` now.
 - `scripts/demo_seed.py --create` refuses with exact counts (0 scored rows, 0
   folds, 0 decisions in Postgres). Correct behaviour; it needs the above to land.
-- Lint debt (measured 2026-09-28): ruff 0 findings and `ruff format --check` clean repo-wide; mypy **347 errors in 69 files** (it had grown to 395 before this pass; `scoring/model.py`s 87 are now zero). `make lint` is not green, and `tests/contracts_adapters` currently fails its own `nothing-skipped` gate because Docker is down, not because a port broke.
+- Lint debt (measured 2026-09-28): ruff 0 findings and `ruff format --check` clean repo-wide; mypy **313 errors in 68 files** (it had grown to 395 before this pass; `scoring/model.py`s 87 are now zero). `make lint` is not green, and `tests/contracts_adapters` currently fails its own `nothing-skipped` gate because Docker is down, not because a port broke.
 
 ### Submission state, so it is not rediscovered under time pressure
 
@@ -291,7 +291,7 @@ restoring the exit-139 segfault (DEV-021).
    rotating the Autonoma credentials pasted into chat on 2026-09-27.
 6. `make lint` is not green: `ruff check .` and `ruff format --check .` now report zero
    findings (67 findings and 42 unformatted files, cleared by hand — see the lint commit), but
-   `mypy packages/pipeline apps/api scripts` carries 347 errors in 69 files (measured 2026-09-28). The largest remaining clusters are mechanical and shared: `scripts/measure_ibm_cycles.py` 34, `oxbow/cli.py` 29, `models/calibration.py` 22, `features/compute.py` 21 — mostly polars `.item()` unions and `dict[str, object]` payloads, the same two root causes that cleared `scoring/model.py`s 87. Clearing all 347 is a day of typing work, and §18 makes a gate that cannot pass without being narrowed a halt-and-ask, so the choice is the owners: spend the day, or ship item six of eleven as a measured 347 with the clusters named.
+   `mypy packages/pipeline apps/api scripts` carries 313 errors in 68 files (measured 2026-09-28, down from 395). The largest remaining clusters are mechanical and shared: `scripts/measure_ibm_cycles.py` 23, `backtest/run.py` 19, `features/bridge.py` 18, `cli.py` 17, `features/compute.py` 16 — mostly polars `.item()` unions (a scalar read off a frame is `int | float | Decimal | date | ... | None` and every arithmetic use of it fails) and `dict[str, object]` payload reads, the same two shapes that cleared `scoring/model.py`s 87 and 34 more via `oxbow.dtypes.PolarsDtype`. Clearing all 347 is a day of typing work, and §18 makes a gate that cannot pass without being narrowed a halt-and-ask, so the choice is the owners: spend the day, or ship item six of eleven as a measured 347 with the clusters named.
    It has not been re-measured this session because it needs more free RAM than the box had
    while the walk-forward and the conformance suites were running, and restarting a 70-minute
    run to count type errors is the wrong order of operations.

@@ -41,6 +41,7 @@ from typing import Final
 import polars as pl
 
 from oxbow.contracts.canonical_v1 import CANONICAL_COLUMNS
+from oxbow.dtypes import PolarsDtype
 from oxbow.graph.errors import EventContractError, MixedCurrencyError
 
 # Canonical event v1, bound to the single published list rather than re-typed here:
@@ -159,7 +160,7 @@ def _carried_columns(events: pl.DataFrame, order_columns: Sequence[str]) -> list
 
 def _check_dtypes(events: pl.DataFrame) -> None:
     """Assert each required column's dtype, with the money and time rules named."""
-    expected: Mapping[str, pl.DataType] = {
+    expected: Mapping[str, PolarsDtype] = {
         "txn_id": pl.String(),
         "txn_type": pl.String(),
         "currency": pl.String(),

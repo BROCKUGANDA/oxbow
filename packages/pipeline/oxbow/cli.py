@@ -81,6 +81,7 @@ from oxbow.config import (
     load_pipeline_config,
     resolve_run_salt,
 )
+from oxbow.dtypes import PolarsDtype
 from oxbow.identity import new_ulid, require_ulid, sha256_of_bytes
 from oxbow.ports.warehouse import RunState, WarehouseSink
 from oxbow.stage_events import StageEventEmitter, StageHandle
@@ -154,7 +155,7 @@ CASE_SINK_DIRNAME: Final = "case_sink"
 # measured, on the first corpus that produced a grouped rule at all. The ledger is what
 # the report, the near-miss table and the API's rule cards are built from, so its column
 # types cannot depend on which rule happened to fire first.
-_RULE_HIT_SCHEMA: Final[dict[str, pl.DataType]] = {
+_RULE_HIT_SCHEMA: Final[dict[str, PolarsDtype]] = {
     "rule_id": pl.Utf8,
     "rule_name": pl.Utf8,
     "account_key": pl.Utf8,

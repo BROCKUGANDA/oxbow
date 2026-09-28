@@ -35,6 +35,7 @@ from typing import Final
 import polars as pl
 
 from oxbow.contracts.canonical_v1 import CANONICAL_COLUMNS
+from oxbow.dtypes import PolarsDtype
 
 EPOCH: Final = dt.datetime(2024, 3, 1, tzinfo=dt.UTC)
 # Africa/Kampala: UTC+3 year-round, so the local hour is a pure offset and a test can
@@ -45,7 +46,7 @@ MINUTE: Final = dt.timedelta(minutes=1)
 # Amounts are minor units (DEV-005): one dollar is 100, and nothing here is a float.
 CENTS: Final = 100
 
-CANONICAL_SCHEMA: Final[dict[str, pl.DataType]] = {
+CANONICAL_SCHEMA: Final[dict[str, PolarsDtype]] = {
     "txn_id": pl.String,
     "event_ts_utc": pl.Datetime("us", "UTC"),
     "event_date_local": pl.Date,
