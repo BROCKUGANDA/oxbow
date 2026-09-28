@@ -28,9 +28,18 @@ does not exist yet.
 ## Environment (measured, this session)
 
 ```
-uv python 3.12.13 · docker UP (postgres healthy on host 5433, redis 6379, mlflow 5000,
-keycloak 8081, echo 8099, minio 9000) · disk 81 GB free of 953 GB · RAM 15.7 GB total,
-2.1–3.4 GB free while the pipeline and one agent shared the box · PaySim on disk
+uv python 3.12.13 · docker DOWN as of 2026-09-28 (the engine is not running: 127.0.0.1:5433
+refuses, `docker version` reaches the client only and errors on `//./pipe/dockerDesktopLinuxEngine`;
+Docker Desktop is installed per-user at `AppData\Local\Programs\DockerDesktop`, not
+`Program Files`) · a *native* Windows Postgres answers on 5432, which is where
+`_candidate_admin_urls()`'s third fallback sends the integration suites that say "against a real
+Postgres" — the schema proofs there are genuine, the compose warehouse is not being touched ·
+disk 81 GB free of 953 GB · RAM 15.7 GB total,
+2.1–3.4 GB free while the pipeline and one agent shared the box · **Docker Desktop and a live
+score run do not coexist**: starting the engine while `oxbow score` was mid-flight took free RAM
+from 2.76 GB to 0.58 GB in under three minutes, and quitting it (`DockerCli.exe -Shutdown`)
+restored 4.06 GB. So the demo chain's Postgres steps run after the slice lands, not beside it ·
+PaySim on disk
 493,534,783 B · IBM HI-Small_Trans.csv 475,664,283 B over 17.68 days
 ```
 
