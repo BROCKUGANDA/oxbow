@@ -1355,3 +1355,52 @@ rather than state it. The rules stay declared, the exclusion stays recorded per 
 `SUBMISSION.md` §1C now prints the hit counts beside the claim, because a judge who finds this
 before we say it reads it as concealment, and a judge who reads it stated reads it as rigor.
 **Open:** the honest fix is scoring the IBM-AML corpus, not a copy change.
+
+## DEV-031 — exposure was the last unmeasured term, and naming it as unknown is the only honest way to price a queue on a star-shaped corpus. **Open; the correction is recorded, the fix is a decision.**
+
+DEV-028 put 43,046 scores in the warehouse and DEV-029 built the `economics` table those scores
+need before the queue can draw its capacity line. Running the new builder against the landed frame
+returned **zero economic rows**, and the reason is not a code defect. Measured on
+`out/score/01M3H8WG436R394NZT2GS1KG69/scored_rows.parquet`, 43,720 `role=test` rows:
+
+| column | non-null | role in §3.2 |
+| --- | --- | --- |
+| `amount_out_24h_minor` | **43,720** (sum 527,314,820,399 minor) | the value flowing out of the account itself |
+| `amount_in_24h_minor` | **43,720** (sum 527,684,205,190 minor) | the cap on that value |
+| `downstream_outflow_24h_minor` | **209**, and all 209 are 0 | the 1-hop downstream term |
+
+§3.2 defines exposure at risk as funds that flow out of the account **and its 1-hop downstream**
+within the recovery window, capped at inflow. The first and third terms are asymmetric in a way the
+spec did not anticipate: the subject's own outflow is measured for every account, while the
+downstream term is absent for 43,511 of them — DEV-011's finding restated as a schema fact, since an
+account with median degree 1 has no 1-hop downstream to propagate into. The builder refuses a null
+`E_i` rather than coalescing it, which is correct in isolation (03 §A rule 2: an unknown must not
+become a zero) and produces an empty queue in aggregate.
+
+**Two readings, and they are not equivalent.** Either the null means "there is no downstream", in
+which case the downstream term is genuinely 0 and the subject's own measured outflow is the whole
+of `E_i`, and refusing is mistaking an empty set for a missing measurement. Or the null means "the
+fold's graph never covered this account", in which case `E_i` is unknowable and the queue cannot be
+priced honestly at all. The frame does not record which, because `oxbow score` builds its graph in
+memory for the rules layer and never persists it (DEV-030's same root cause), so the coverage of the
+downstream computation is not in any artifact on disk.
+
+**Rejected, decisively:** defaulting the downstream term to 0 silently and pricing anyway. That is
+the most convincing possible failure, because the resulting EV, rank, capacity line and every money
+figure on the screen would look exactly like a measured queue, and the only evidence against them
+would be a null nobody wrote down. If this resolves toward the first reading, it must say so on
+every row it prices.
+
+**What is owed:** a `provenance`/coverage marker for `downstream_outflow_24h_minor` on the scored
+frame (or the fold's graph persisted, which is the same fact obtained properly rather than
+inferred), then one of: price `E_i` from the subject's outflow and stamp the row `exposure_is_partial
+= true` with the missing term named beside it the way `pricing_basis` names the uncalibrated
+probability, or leave `economics` empty for this run and rebuild the demo on the IBM-AML corpus,
+which has the graph this needs. Until then `/api/alerts` answers
+`DependencyUnavailable: run … has no priced accounts`, and that refusal is the honest state of the
+product, not a bug to hide.
+
+**Correction to the record, on the same day:** the commit `f0b288d` message claims "43,046 rows
+land" for `economics_rows()`. That number is the **score** table's, measured correctly; the
+economics figure in that sentence was carried in from an agent's report and is wrong — the real
+number is 0, for the reason above. `SUBMISSION.md` does not repeat the error.
