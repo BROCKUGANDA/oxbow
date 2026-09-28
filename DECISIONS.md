@@ -794,7 +794,6 @@ Measured on 2026-09-27: `bun 1.4.2` is installed. It is the only JS package mana
 ### What was rejected, and why
 
 - **Keep pnpm declared, document Bun as an alternative.** Leaves the fiction in place: a clone
-  following the README hits `command not found` at the first web gate. This is the exact failure
   class the plan's halt-and-ask rule exists for.
 - **Bun as the production runtime too** (both Docker stages on `oven/bun`, `bun run start`).
   Rejected: the process answering a request would then be Bun's Node-compatibility layer, and
