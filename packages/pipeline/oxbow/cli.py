@@ -1582,7 +1582,7 @@ def _read_canonical_for_ids(ctx: StageContext, wanted: pl.DataFrame) -> pl.DataF
     # `evidence_event` carry into the case workspace: type, local date and hour, the four balances
     # and the two labels. Read per batch and column-limited, so widening the list costs the read
     # time, never a copy of the corpus.
-    wanted = [
+    wanted_columns = [
         "txn_id",
         "event_ts_utc",
         "event_date_local",
@@ -1617,7 +1617,7 @@ def _read_canonical_for_ids(ctx: StageContext, wanted: pl.DataFrame) -> pl.DataF
                     f"{path.name} has sha256 {digest}, the manifest records {batch['sha256']}"
                 )
             available = set(pl.read_parquet_schema(path))
-            columns = [name for name in wanted if name in available]
+            columns = [name for name in wanted_columns if name in available]
             frame = pl.read_parquet(path, columns=columns)
             matched = frame.join(wanted, on="txn_id", how="semi")
             if matched.height:

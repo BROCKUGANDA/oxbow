@@ -79,7 +79,7 @@ def _rows_from_table(engine: Any, table: str) -> list[ChainRow]:
     if columns is None:
         raise LookupError(f"table {table!r} does not exist in this database")
     subject_expression = (
-        f"concat('{DECISION_SUBJECT_PREFIX}', case_id) AS subject"
+        f"concat('{DECISION_SUBJECT_PREFIX}', case_id)"
         if table == "decision"
         else "subject"
     )
