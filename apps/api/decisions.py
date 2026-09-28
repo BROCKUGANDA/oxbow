@@ -560,10 +560,17 @@ def build_case_bundle(
         str(item.get("code")) if isinstance(item, Mapping) else str(item)
         for item in (score.get("reason_codes") or [])
     ]
+    # Values pass through uncoerced except `kind`, which the wire contract types as a
+    # string. `str(None)` is the four-character word "None", and a consumer cannot tell
+    # that from a band named None — so the nullable half of the pairing stays nullable
+    # here and `CalibrationReading.__post_init__` refuses a reading whose kind and
+    # measurements disagree.
     calibration = CalibrationReading(
-        band=str(score["calibration_band"]),
-        observed_rate=float(score["observed_rate"]),
-        n=int(score["calibration_n"]),
+        kind=str(score["calibration_kind"]),
+        band=score["calibration_band"],
+        observed_rate=score["observed_rate"],
+        n=score["calibration_n"],
+        note=score["calibration_note"],
     )
     score_block = ScoreBlock(
         fused_score=float(score["fused_score"]),
@@ -655,11 +662,7 @@ def bundle_from_payload(payload: Mapping[str, Any]) -> CaseBundle:
             band=str(score["band"]),
             scorecard_points=int(score["scorecard_points"]),
             reason_codes=tuple(str(code) for code in score.get("reason_codes") or ()),
-            calibration=CalibrationReading(
-                band=str(calibration["band"]),
-                observed_rate=float(calibration["observed_rate"]),
-                n=int(calibration["n"]),
-            ),
+            calibration=CalibrationReading.from_payload(calibration),
             model_version=str(score["model_version"]),
             rule_ids=tuple(str(rid) for rid in score.get("rule_ids") or ()),
         ),

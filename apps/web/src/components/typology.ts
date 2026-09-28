@@ -85,6 +85,19 @@ export const TYPOLOGY_META: Record<Typology, TypologyMeta> = {
   },
 };
 
+/** Looks a served typology string up in the twelve-rule table.
+ *
+ *  The API declares `predicted_typology` and `rule_hit.typology` as plain `str`
+ *  (`apps/api/schemas/catalog.py:187`, `apps/api/schemas/case.py:139`), not as the R1–R12
+ *  literal, so a served value may be a rule id this table has no glyph for. Returning
+ *  `undefined` for those is the honest reading: the caller prints the id the response
+ *  actually sent and adds the words only when the id is one of the twelve. Indexing
+ *  `TYPOLOGY_META` with a cast would invent a name for a value nobody issued. */
+export function typologyMetaOf(raw: string | null): TypologyMeta | undefined {
+  if (raw === null) return undefined;
+  return (TYPOLOGY_META as Partial<Record<string, TypologyMeta>>)[raw];
+}
+
 export function glyphFor(typology: Typology | null): GlyphName {
   return typology === null ? 'chain' : TYPOLOGY_META[typology].glyph;
 }

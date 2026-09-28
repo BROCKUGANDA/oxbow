@@ -101,13 +101,23 @@ class CalibratedScore:
     ``band_observed_rate`` and ``band_n`` travel because the confidence label a
     money figure inherits is "observed rate in this band: 71%, n=432" — plan §10
     forbids an invented adjective, and the EV below is downstream of the same bin.
+
+    Both are optional because a fold whose calibration was refused has no rate and no
+    population to report, and it still has an account to rank: 03 §H labels that state
+    instead of dropping it, and ``score.calibration_kind`` carries the label into this
+    layer. The two travel together — a rate without its ``n`` is an adjective and an
+    ``n`` without its rate is a census of nothing — so ``None`` here means "both absent",
+    which is the same pairing ``ck_score_calibration_pairing`` enforces in the table.
+    ``p_calibrated`` stays required: the money layer cannot price an account with no
+    probability at all, and substituting one it did not measure is the fabrication this
+    file's own guards exist to stop.
     """
 
     account_key: str
     p_calibrated: float
     alert_class: str
-    band_observed_rate: float
-    band_n: int
+    band_observed_rate: float | None
+    band_n: int | None
 
     def __post_init__(self) -> None:
         if not self.account_key:
@@ -116,18 +126,35 @@ class CalibratedScore:
             ("p_calibrated", self.p_calibrated),
             ("band_observed_rate", self.band_observed_rate),
         ):
+            if value is None:
+                continue
             if not 0.0 <= value <= 1.0:
                 raise PricingError(
                     f"{name} is {value} for {self.account_key}, outside [0, 1]. A "
                     "probability outside its own range is a calibration bug, and here "
                     "it is a currency-figure bug too."
                 )
-        if self.band_n < 0:
+        if self.band_observed_rate is None and self.band_n is not None:
+            raise PricingError(
+                f"{self.account_key} reports band_n={self.band_n} with no observed rate. "
+                "A population with no rate measured over it is the half of a pairing, and "
+                "the pairing is the invariant."
+            )
+        if self.band_n is not None and self.band_n < 0:
             raise PricingError(f"band_n cannot be negative for {self.account_key}")
 
     @property
     def confidence_label(self) -> str:
         """The calibration statement that travels with a money figure."""
+        if self.band_observed_rate is None or self.band_n is None:
+            # The pipeline's own words, not a synonym invented here: this is the state
+            # `CalibrationResult.confidence_label` names `uncalibrated`, and a money
+            # figure built on an uncalibrated probability has to say so on its face.
+            return (
+                f"p={self.p_calibrated:.2f} from alert class {self.alert_class} "
+                "(probabilities are uncalibrated: no observed rate was measured for the "
+                "fold that scored this account)"
+            )
         return (
             f"p={self.p_calibrated:.2f} from alert class {self.alert_class} (observed "
             f"rate in this band: {self.band_observed_rate:.0%}, n={self.band_n})"

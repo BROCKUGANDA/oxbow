@@ -171,6 +171,7 @@ export default function DashboardPage(): ReactElement {
             id="curve"
             title="Cumulative benefit by policy"
             operation="Loading the cumulative benefit curve"
+            resolved={false}
             skeleton={PANE_CURVE}
             reserveHeight={CURVE_BODY}
           >
@@ -180,6 +181,7 @@ export default function DashboardPage(): ReactElement {
             id="bands"
             title="Band distribution"
             operation="Loading the band distribution"
+            resolved={false}
             skeleton={PANE_BANDS}
             reserveHeight={CURVE_BODY}
           >
@@ -191,6 +193,7 @@ export default function DashboardPage(): ReactElement {
           id="patterns"
           title="Latest patterns"
           operation="Loading the pattern feed"
+          resolved={false}
           skeleton={PANE_PATTERNS}
           reserveHeight={PATTERNS_BODY}
         >
@@ -296,6 +299,7 @@ export default function DashboardPage(): ReactElement {
           title="Cumulative benefit by policy"
           operation="Loading the cumulative benefit curve"
           meta={dashboard.meta}
+          resolved={dashboard.data !== null}
           skeleton={PANE_CURVE}
           reserveHeight={CURVE_BODY}
         >
@@ -313,6 +317,7 @@ export default function DashboardPage(): ReactElement {
           title="Band distribution"
           operation="Loading the band distribution"
           meta={dashboard.meta}
+          resolved={dashboard.data !== null}
           skeleton={PANE_BANDS}
           reserveHeight={CURVE_BODY}
         >
@@ -361,6 +366,7 @@ export default function DashboardPage(): ReactElement {
         title="Latest patterns"
         operation="Loading the pattern feed"
         meta={dashboard.meta}
+        resolved={dashboard.data !== null}
         skeleton={PANE_PATTERNS}
         reserveHeight={PATTERNS_BODY}
       >

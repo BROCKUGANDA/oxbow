@@ -17,6 +17,7 @@ rule cannot be re-broken by a route added later.
 from __future__ import annotations
 
 from datetime import datetime
+from enum import StrEnum
 from typing import Any, Final, Generic, TypeVar
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -26,6 +27,24 @@ DataT = TypeVar("DataT")
 # The keys a 2xx envelope is allowed to carry at its top level. Enforced by the test,
 # declared here so the test names the rule rather than inventing it.
 ENVELOPE_KEYS: Final = frozenset({"data", "meta"})
+
+
+class CalibrationKind(StrEnum):
+    """Whether a stored probability has a measured rate and population behind it.
+
+    The two names are not this API's vocabulary. They are the ``kind`` field
+    :meth:`oxbow.models.calibration.CalibrationResult.confidence_label` already emits,
+    so the queue, the case rail, the packet and the outbound case payload all state
+    confidence in the producer's words rather than in four near-synonyms that can drift
+    from it. ``uncalibrated`` is not "low confidence" and not "zero": it means no rate
+    was measured, because the fold held fewer validation positives than
+    ``config/model.yaml``'s ``calibration.min_positives_for_calibration`` — the state
+    plan 03 §H says the product must *state* (DEV-024), and the pairing
+    ``ck_score_calibration_pairing`` makes unrepresentable.
+    """
+
+    calibrated_band = "calibrated_band"
+    uncalibrated = "uncalibrated"
 
 
 class AssumptionLine(BaseModel):
@@ -156,6 +175,7 @@ def envelope(data: Any, **meta_fields: Any) -> dict[str, Any]:
 __all__ = [
     "ENVELOPE_KEYS",
     "AssumptionLine",
+    "CalibrationKind",
     "Envelope",
     "Meta",
     "Money",

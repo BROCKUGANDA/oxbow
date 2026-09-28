@@ -11,12 +11,28 @@
    grouping is unreadable for anyone with any colour vision deficiency, and the
    greyscale packet still has to say which cluster an account belongs to.
 
-   The cap is enforced by the server (plan §7) and mirrored here: beyond 1,500 nodes
-   a community collapses into a meta-node whose label is its TRUE size, so a shrunk
-   graph never reads as a small one.
+   WHAT THIS PAGE READS. `SubgraphDecoder` decodes `NetworkSubgraph` exactly as
+   `apps/api/schemas/catalog.py:283-302` declares it — `id`/`label`/`band`/`exposure`/
+   `degree`/`community_id`/`is_seed`/`is_rail`/`flags` per node, `source`/`target`/
+   `total`/`txn_count`/`first_ts`/`last_ts`/`flags` per edge, `collapsed_communities`,
+   `node_cap`, `truncated`, `window_start`/`window_end` — and then derives the three UI
+   concepts the route does not emit (`lib/network/derive.ts`). Everything below reads a
+   served field or one of those derivations; nothing here has a branch for a field the
+   API has never sent, which is what used to make this page a contract refusal.
+
+   The cap is enforced by the server (plan §7) and read off `node_cap`: beyond it a
+   community collapses into a meta-node whose label is its stored `member_count`, so a
+   shrunk graph never reads as a small one.
 
    The time scrubber replays edge formation by toggling edge classes per frame — no
-   re-layout, no refetch, and the layout the analyst is looking at stays stable.
+   re-layout, no refetch, and the layout the analyst is looking at stays stable. The
+   frames are the served `first_ts` values bucketed on the UTC day, and a frame's cutoff
+   is a served instant rather than a synthesised midnight.
+
+   An overlay whose flag no member of this payload carries is rendered DISABLED, with
+   the reason in its tooltip and in the rail beside its zero. A toggle that selects
+   nothing reads as a capability the run does not have, and the repo's own state craft
+   treats that as worse than not shipping the chip.
    ============================================================================= */
 
 'use client';
@@ -26,7 +42,6 @@ import { useSearchParams } from 'next/navigation';
 import { type ReactElement, Suspense, useCallback, useMemo, useState } from 'react';
 
 import { Pane } from '@/components/Pane';
-import { TYPOLOGY_META, glyphFor } from '@/components/typology';
 import { BandBadge } from '@/components/ui/BandBadge';
 import { AccountChip, Assumptions } from '@/components/ui/provenance';
 import { PANEL_SUNKEN, T_LABEL, T_MICRO, T_MONO } from '@/components/ui/sx';
@@ -39,6 +54,14 @@ import { isRunNotFound } from '@/lib/api/problem';
 import { PIPELINE_COMMAND, RUNTIME_ESTIMATE_FALLBACK } from '@/lib/copy';
 import { compactFromMinor, count } from '@/lib/format/money';
 import { formatDate } from '@/lib/format/time';
+import {
+  FLAG_CYCLE,
+  FLAG_DENSE_COMMUNITY,
+  FLAG_FAN_IN,
+  FLAG_FAN_OUT,
+  FLAG_FLAGGED,
+  FLAG_HIGH_VELOCITY,
+} from '@/lib/network/derive';
 
 /** The explorer canvas. `ssr: false` — see the note above. */
 const GraphCanvas = dynamic(() => import('./canvas').then((module) => module.GraphCanvas), {
@@ -56,28 +79,86 @@ const GraphCanvas = dynamic(() => import('./canvas').then((module) => module.Gra
   ),
 });
 
+/** The five overlays the canvas can highlight. Each is keyed on the flag names the
+ *  payload would have to carry for it to select anything — `NetworkFlag`
+ *  (catalog.py:281) plus `flagged`, which `_node_flags` (graph.py:336-352) adds for a
+ *  D or E band. */
 type Overlay = 'cycles' | 'velocity' | 'fans' | 'communities' | 'flagged';
 
-/** THE canvas height, shared by the resolved layout and by both skeletons. One constant
+type OverlaySpec = {
+  id: Overlay;
+  label: string;
+  glyph: 'cycle' | 'velocity-spike' | 'fan-in' | 'chain' | 'hash-link';
+  /** The node flags this overlay selects on. */
+  flags: readonly string[];
+  /** Which served field the count comes from, for the rail's own sentence. */
+  count: (subgraph: Subgraph) => number;
+};
+
+const OVERLAYS: readonly OverlaySpec[] = [
+  {
+    id: 'cycles',
+    label: 'cycles',
+    glyph: 'cycle',
+    flags: [FLAG_CYCLE],
+    count: (subgraph) => subgraph.overlays.cycles,
+  },
+  {
+    id: 'velocity',
+    label: 'high-velocity hops',
+    glyph: 'velocity-spike',
+    flags: [FLAG_HIGH_VELOCITY],
+    count: (subgraph) => subgraph.overlays.high_velocity_hops,
+  },
+  {
+    id: 'fans',
+    label: 'fan stars',
+    glyph: 'fan-in',
+    flags: [FLAG_FAN_IN, FLAG_FAN_OUT],
+    count: (subgraph) => subgraph.overlays.fan_stars,
+  },
+  {
+    id: 'communities',
+    label: 'dense communities',
+    glyph: 'chain',
+    flags: [FLAG_DENSE_COMMUNITY],
+    count: (subgraph) => subgraph.overlays.dense_communities,
+  },
+  {
+    id: 'flagged',
+    label: 'flagged nodes',
+    glyph: 'hash-link',
+    flags: [FLAG_FLAGGED],
+    count: (subgraph) => subgraph.overlays.flagged,
+  },
+];
+
+/** Why a chip is dead, in the payload's own terms. Not "unavailable": the sentence
+ *  names the flag that no member of this response carries, which is the fact an analyst
+ *  can check against the response. */
+function deadOverlayReason(overlay: OverlaySpec): string {
+  const flags = overlay.flags.map((flag) => `“${flag}”`).join(' or ');
+  return `No node in this subgraph carries ${flags}, so this overlay selects nothing. The run stored none of them on any edge in this window — widening the query is the only thing that can change it.`;
+}
+
+/* THE canvas height, shared by the resolved layout and by both skeletons. One constant
  *  is the only reason the claim "the skeleton matches the resolved geometry" is true
  *  rather than merely intended — a second literal would drift the moment one moved. */
 const CANVAS_HEIGHT = 'min(62vh, 640px)';
 
-/** The hop ceiling the subgraph route documents, mirrored here the way the node cap is
- *  mirrored: it is the number the "re-run wider" actions name, so it is one constant. */
+/** The hop ceiling the subgraph route documents (`MAX_HOPS` at
+ *  apps/api/routers/graph.py:53, enforced by `le=MAX_HOPS` on the query at :96),
+ *  mirrored here the way the node cap is mirrored: it is the number the "re-run wider"
+ *  actions name, so it is one constant. */
 const MAX_HOPS = 4;
 
-const OVERLAYS: readonly {
-  id: Overlay;
-  label: string;
-  glyph: 'cycle' | 'velocity-spike' | 'fan-in' | 'chain' | 'hash-link';
-}[] = [
-  { id: 'cycles', label: 'cycles', glyph: 'cycle' },
-  { id: 'velocity', label: 'high-velocity hops', glyph: 'velocity-spike' },
-  { id: 'fans', label: 'fan stars', glyph: 'fan-in' },
-  { id: 'communities', label: 'dense communities', glyph: 'chain' },
-  { id: 'flagged', label: 'flagged nodes', glyph: 'hash-link' },
-];
+/** A window bound, or the word for its absence. `window_start` and `window_end` are
+ *  nullable on the wire, and an absent bound is an unbounded window: printing the epoch
+ *  would state a date the run never chose. */
+function boundOrUnbounded(iso: string | null, timeZone: string): string {
+  if (iso === null) return 'unbounded';
+  return formatDate(iso, timeZone);
+}
 
 /* The route reads its query string, and App Router can only do that on the client.
    Without a Suspense boundary above the reader the whole segment opts out of static
@@ -116,6 +197,7 @@ function NetworkSkeleton(): ReactElement {
           id="graph"
           title="Network"
           operation="Loading the subgraph"
+          resolved={false}
           skeleton={{ columns: [{ key: 'canvas', width: '100%' }], rows: 1 }}
         >
           <div style={{ height: CANVAS_HEIGHT }} aria-hidden="true">
@@ -138,6 +220,7 @@ function NetworkSkeleton(): ReactElement {
             id={entry.key}
             title={entry.key === 'controls' ? 'Subgraph query' : 'What the overlays select'}
             operation="Loading the explorer rail"
+            resolved={false}
             skeleton={{ columns: [{ key: 'c', width: '100%' }], rows: entry.rows }}
           >
             <span />
@@ -155,8 +238,9 @@ function NetworkExplorer(): ReactElement {
   const hops = Math.min(Math.max(Number(params.get('hops') ?? '2'), 1), MAX_HOPS);
   const minAmount = Number(params.get('min_minor') ?? '0');
   const stress = Number(params.get('nodes') ?? '0');
+  const timeZone = runtime.data?.deployment_timezone ?? '';
 
-  const [active, setActive] = useState<Overlay[]>(['cycles', 'flagged']);
+  const [requested, setRequested] = useState<Overlay[]>(['cycles', 'flagged']);
   const [frame, setFrame] = useState<number | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
   const [accountDraft, setAccountDraft] = useState<string>(root);
@@ -183,19 +267,33 @@ function NetworkExplorer(): ReactElement {
   const buckets = data?.edges_by_bucket ?? [];
   const frameIndex = frame === null ? buckets.length : Math.min(frame, buckets.length);
 
+  /* A chip can only be active if this payload gives it something to select. The initial
+     request is `cycles + flagged`, and on a run that stored no cycle flag that would
+     otherwise be an invisible filter over the canvas. */
+  const active = useMemo(
+    () => (data === null ? [] : requested.filter((id) => (OVERLAYS.find((o) => o.id === id)?.count(data) ?? 0) > 0)),
+    [data, requested],
+  );
+
   /* The visible subgraph at the scrubber's frame. Edges appear in bucket order, which
-     is how the replay reads as the network assembling rather than as a fade. */
+     is how the replay reads as the network assembling rather than as a fade. The
+     cutoff is a served `first_ts` instant, never a synthesised midnight. */
   const visible = useMemo(() => {
     if (data === null) return null;
     if (frame === null) return data;
-    const cutoff = buckets[Math.max(frameIndex - 1, 0)]?.bucket ?? data.window.to;
-    const edges = data.edges.filter((edge) => edge.ts_first <= cutoff);
+    const cutoff = buckets[Math.max(frameIndex - 1, 0)]?.cutoff ?? null;
+    if (cutoff === null) return data;
+    const edges = data.edges.filter((edge) => Date.parse(edge.ts_first) <= Date.parse(cutoff));
     const live = new Set(edges.flatMap((edge) => [edge.source, edge.target]));
-    return { ...data, edges, nodes: data.nodes.filter((node) => live.has(node.key) || node.hops === 0) };
+    return {
+      ...data,
+      edges,
+      nodes: data.nodes.filter((node) => live.has(node.key) || node.hops === 0),
+    };
   }, [data, frame, frameIndex, buckets]);
 
   const toggle = (id: Overlay): void =>
-    setActive((current) => (current.includes(id) ? current.filter((entry) => entry !== id) : [...current, id]));
+    setRequested((current) => (current.includes(id) ? current.filter((entry) => entry !== id) : [...current, id]));
 
   const publish = useCallback(
     (next: Record<string, string>) => {
@@ -221,7 +319,9 @@ function NetworkExplorer(): ReactElement {
           title="Network"
           operation="Loading the subgraph"
           meta={graph.meta}
+          resolved={false}
           failure={root.length >= 3 ? graph.failure : null}
+          pending={graph.isPending}
           onRetry={() => void graph.refetch()}
           attempt={graph.attempts}
           retrying={graph.isFetching}
@@ -269,17 +369,19 @@ function NetworkExplorer(): ReactElement {
   const empty = visible !== null && visible.edges.length === 0;
   /* The cycle overlay's own empty state, and the one this product is judged on.
    *
-   * `overlays.cycles` is the server's count of cycle members in the subgraph it just
-   * returned, so "zero" is a measurement rather than an absence: accounts were drawn,
-   * edges between them were drawn, and none of it closed a loop inside the window and
-   * the time order the filter enforces. That is the DEV-011 result for at least one of
-   * the two corpora, so the explorer has to be able to say it out loud instead of
-   * showing a canvas of faded nodes and calling it a graph.
+   * `overlays.cycles` is the count of nodes in THIS payload that carry the `cycle` flag,
+   * derived from the served `flags` lists, so two different zeros have to be told apart:
+   * a payload in which the flag exists but the scrubbed frame has not reached it yet
+   * (this state — accounts drawn, edges drawn, no loop closed by this instant), and a
+   * payload in which no member carries the flag at all (a dead chip, disabled and
+   * explained, never an overlay that was "requested"). Only the first one gets here.
    *
-   * Only while the overlay is actually requested, and only when something was drawn —
-   * with nothing drawn at all the honest state is the window one, and it says so. */
+   * The DEV-011 finding — a corpus whose surviving cycles are zero — is stated by the
+   * disabled chip's tooltip and the rail's zero, in the payload's own terms, rather than
+   * by a canvas of faded nodes called a graph. */
   const cyclesRequested = active.includes('cycles');
-  const noCyclesSurvived = !empty && cyclesRequested && data.overlays.cycles === 0;
+  const noCyclesInFrame =
+    !empty && cyclesRequested && (visible?.nodes ?? []).filter((node) => node.is_cycle_member).length === 0;
 
   return (
     <div
@@ -297,6 +399,7 @@ function NetworkExplorer(): ReactElement {
           title="Network"
           operation="Drawing the subgraph"
           meta={graph.meta}
+          resolved
           actions={
             <span className="u-num" style={{ ...T_MICRO, color: 'var(--color-ink-faint)' }}>
               {count(visible?.nodes.length ?? 0)} nodes · {count(visible?.edges.length ?? 0)} edges · cap{' '}
@@ -311,8 +414,8 @@ function NetworkExplorer(): ReactElement {
               <EmptyState
                 kind="window-empty"
                 accountId={root === '' ? 'the selected root' : root}
-                from={formatDate(data.window.from, runtime.data?.deployment_timezone ?? '')}
-                to={formatDate(data.window.to, runtime.data?.deployment_timezone ?? '')}
+                from={boundOrUnbounded(data.window.from, timeZone)}
+                to={boundOrUnbounded(data.window.to, timeZone)}
                 edgesAtCurrentHops={data.edges.length}
                 edgesAtWiderWindow={null}
                 currentHops={hops}
@@ -320,8 +423,15 @@ function NetworkExplorer(): ReactElement {
                 onWidenHops={(next) => publish({ hops: String(next) })}
                 onWidenDates={() => undefined}
               />
+              {/* The route states the empty case itself when it knows why; the client
+                  quotes it instead of paraphrasing a measurement it did not take. */}
+              {data.counterparty_note !== null ? (
+                <p style={{ ...T_MICRO, color: 'var(--color-ink-muted)', maxWidth: '76ch', marginTop: 10 }}>
+                  {data.counterparty_note}
+                </p>
+              ) : null}
             </div>
-          ) : noCyclesSurvived ? (
+          ) : noCyclesInFrame ? (
             /* The panel sits in the canvas's own box, at the canvas's own height, so the
              * scrubber, the overlay row and the rail do not move when it appears. */
             <div
@@ -339,12 +449,12 @@ function NetworkExplorer(): ReactElement {
                 kind="no-cycles"
                 accountsDrawn={visible?.nodes.length ?? 0}
                 edgesDrawn={visible?.edges.length ?? 0}
-                windowFrom={formatDate(data.window.from, runtime.data?.deployment_timezone ?? '')}
-                windowTo={formatDate(data.window.to, runtime.data?.deployment_timezone ?? '')}
+                windowFrom={boundOrUnbounded(data.window.from, timeZone)}
+                windowTo={boundOrUnbounded(data.window.to, timeZone)}
                 currentHops={hops}
                 maxHops={MAX_HOPS}
                 onWidenHops={(next) => publish({ hops: String(next) })}
-                onShowAllEdges={() => setActive((current) => current.filter((entry) => entry !== 'cycles'))}
+                onShowAllEdges={() => setRequested((current) => current.filter((entry) => entry !== 'cycles'))}
               />
             </div>
           ) : (
@@ -377,12 +487,12 @@ function NetworkExplorer(): ReactElement {
           <span
             style={{ ...T_MICRO, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--color-ink-faint)' }}
           >
-            time scrubber
+            time scrubber · UTC day
           </span>
           <input
             type="range"
             min={0}
-            max={buckets.length}
+            max={Math.max(buckets.length, 1)}
             value={frame === null ? buckets.length : frame}
             onChange={(event) =>
               setFrame(Number(event.target.value) === buckets.length ? null : Number(event.target.value))
@@ -390,22 +500,30 @@ function NetworkExplorer(): ReactElement {
             aria-label="Replay edge formation up to a point in the window"
             style={{ flex: 1, minWidth: 160, accentColor: 'var(--color-evidence)' }}
           />
-          <span className="u-num" style={{ ...T_MICRO, color: 'var(--color-ink-muted)', minWidth: 150 }}>
+          <span className="u-num" style={{ ...T_MICRO, color: 'var(--color-ink-muted)', minWidth: 190 }}>
             {frame === null
-              ? 'whole window'
-              : `edges formed to ${buckets[Math.max(frameIndex - 1, 0)]?.bucket?.slice(0, 10) ?? '—'}`}
+              ? `${count(buckets.length)} formation days, whole window`
+              : `edges formed to ${buckets[Math.max(frameIndex - 1, 0)]?.utcDay ?? '—'}`}
           </span>
+          {data.unbucketed_edges > 0 ? (
+            <span className="u-num" style={{ ...T_MICRO, color: 'var(--color-band-d)' }}>
+              {count(data.unbucketed_edges)} edges carry no parseable first_ts, so the replay does not order them
+            </span>
+          ) : null}
         </div>
 
         <div data-print-hide style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
           <span style={{ ...T_MICRO, color: 'var(--color-ink-faint)' }}>overlays</span>
           {OVERLAYS.map((overlay) => {
-            const on = active.includes(overlay.id);
+            const available = overlay.count(data) > 0;
+            const on = available && active.includes(overlay.id);
             return (
               <button
                 key={overlay.id}
                 type="button"
                 aria-pressed={on}
+                disabled={!available}
+                title={available ? undefined : deadOverlayReason(overlay)}
                 onClick={() => toggle(overlay.id)}
                 style={{
                   ...T_MICRO,
@@ -413,15 +531,19 @@ function NetworkExplorer(): ReactElement {
                   alignItems: 'center',
                   gap: 5,
                   padding: '2px 8px',
-                  cursor: 'pointer',
-                  color: 'var(--color-ink)',
+                  cursor: available ? 'pointer' : 'not-allowed',
+                  color: available ? 'var(--color-ink)' : 'var(--color-ink-disabled)',
                   background: on ? 'var(--color-elev-2)' : 'transparent',
                   border: `1px solid ${on ? 'var(--color-evidence)' : 'var(--color-hairline-strong)'}`,
                   borderRadius: 'var(--radius-control)',
+                  opacity: available ? 1 : 0.55,
                 }}
               >
                 <Icon name={overlay.glyph} size={13} />
                 {overlay.label}
+                <span className="u-num" style={{ color: 'var(--color-ink-faint)' }}>
+                  {count(overlay.count(data))}
+                </span>
               </button>
             );
           })}
@@ -435,11 +557,12 @@ function NetworkExplorer(): ReactElement {
           title="Subgraph query"
           operation="Adjusting the subgraph"
           meta={graph.meta}
+          resolved
           skeleton={{ columns: [{ key: 'c', width: '100%' }], rows: 3 }}
         >
           <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
             <label style={{ ...T_LABEL, display: 'flex', flexDirection: 'column', gap: 4 }}>
-              hops · {String(hops)}
+              hops · {String(data.hops)}
               <input
                 type="range"
                 min={1}
@@ -464,7 +587,7 @@ function NetworkExplorer(): ReactElement {
             </label>
             <p style={{ ...T_MICRO, color: 'var(--color-ink-faint)' }}>
               {count(data.edges.length)} edges total · {count(data.nodes.length)} nodes returned · window{' '}
-              {data.window.from.slice(0, 10)} → {data.window.to.slice(0, 10)}
+              {boundOrUnbounded(data.window.from, timeZone)} → {boundOrUnbounded(data.window.to, timeZone)}
             </p>
           </div>
         </Pane>
@@ -475,11 +598,15 @@ function NetworkExplorer(): ReactElement {
             title="Cap reached"
             operation="Reporting the subgraph cap"
             meta={graph.meta}
+            resolved
             skeleton={{ columns: [{ key: 'c', width: '100%' }], rows: 2 }}
           >
+            {/* `truncation_reason` is the server's own sentence about how it applied the
+                cap, including how many communities collapsed and how many account nodes
+                it still drew. Restating it here would be a second place to be wrong. */}
             <p style={{ ...T_LABEL, color: 'var(--color-ink-muted)', maxWidth: '40ch' }}>
-              The server capped this subgraph at {count(data.cap)} nodes. {count(data.collapsed_communities.length)}{' '}
-              communities are drawn as meta-nodes, each labelled with its true size:
+              {data.truncation_reason ??
+                `The server capped this subgraph at ${count(data.cap)} nodes. The response says truncated but stores no reason.`}
             </p>
             <ul style={{ listStyle: 'none', margin: '8px 0 0', padding: 0 }}>
               {data.collapsed_communities.map((entry) => (
@@ -491,7 +618,8 @@ function NetworkExplorer(): ReactElement {
                     community {String(entry.community_id)}
                   </span>
                   <span className="u-num" style={{ ...T_LABEL, color: 'var(--color-ink-muted)' }}>
-                    {count(entry.true_size)} accounts
+                    {count(entry.member_count)} accounts
+                    {entry.total === null ? '' : ` · ${compactFromMinor(entry.total.minor, entry.total.decimals)}`}
                   </span>
                 </li>
               ))}
@@ -504,6 +632,7 @@ function NetworkExplorer(): ReactElement {
           title="What the overlays select"
           operation="Counting overlay members"
           meta={graph.meta}
+          resolved
           skeleton={{
             columns: [
               { key: 'k', width: '70%' },
@@ -537,27 +666,33 @@ function selectEdges(edges: readonly GraphEdge[], key: string): GraphEdge[] {
   return edges.filter((edge) => edge.source === key || edge.target === key);
 }
 
+/** The rail's own reading of the derived counts. A zero is printed with the flag it
+ *  would have needed, because a bare zero on a chip that does nothing is the dead
+ *  capability this page is not allowed to offer. */
 function OverlayCounts({ subgraph }: { subgraph: Subgraph }): ReactElement {
-  const rows = [
-    { label: 'cycle members', value: subgraph.overlays.cycles },
-    { label: 'high-velocity hops', value: subgraph.overlays.high_velocity_hops },
-    { label: 'fan stars', value: subgraph.overlays.fan_stars },
-    { label: 'communities present', value: subgraph.overlays.dense_communities },
-    { label: 'flagged accounts', value: subgraph.overlays.flagged },
-  ];
   return (
     <ul style={{ listStyle: 'none', margin: 0, padding: 0 }}>
-      {rows.map((row) => (
-        <li
-          key={row.label}
-          style={{ display: 'flex', justifyContent: 'space-between', padding: '3px 0', ...HAIRLINE_BOTTOM_ROW }}
-        >
-          <span style={{ ...T_LABEL, color: 'var(--color-ink-muted)' }}>{row.label}</span>
-          <span className="u-num" style={{ ...T_LABEL, color: 'var(--color-ink)' }}>
-            {count(row.value)}
-          </span>
-        </li>
-      ))}
+      {OVERLAYS.map((overlay) => {
+        const value = overlay.count(subgraph);
+        return (
+          <li key={overlay.id} style={{ padding: '3px 0', ...HAIRLINE_BOTTOM_ROW }}>
+            <span style={{ display: 'flex', justifyContent: 'space-between', gap: 8 }}>
+              <span style={{ ...T_LABEL, color: 'var(--color-ink-muted)' }}>{overlay.label}</span>
+              <span
+                className="u-num"
+                style={{ ...T_LABEL, color: value === 0 ? 'var(--color-ink-faint)' : 'var(--color-ink)' }}
+              >
+                {count(value)}
+              </span>
+            </span>
+            {value === 0 ? (
+              <p style={{ ...T_MICRO, color: 'var(--color-ink-faint)', margin: '2px 0 0', maxWidth: '38ch' }}>
+                {deadOverlayReason(overlay)}
+              </p>
+            ) : null}
+          </li>
+        );
+      })}
     </ul>
   );
 }
@@ -585,12 +720,17 @@ function NodeDetail({
           decimals: first.decimals,
           currency: first.currency,
         };
+  const selfPairs = edges.filter((edge) => edge.self_pair).length;
   return (
     <Pane
       id="node"
       title="Selected node"
       operation="Reading the selected node"
       meta={null}
+      /* Answered: this pane exists only once a node has been tapped, and it renders from
+         the payload already in hand. It used to pass `meta={null}` beside a skeleton
+         spec, and the pane read that as "still loading" — so the rail could never appear. */
+      resolved
       skeleton={{ columns: [{ key: 'n', width: '100%' }], rows: 3 }}
     >
       <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
@@ -599,57 +739,71 @@ function NodeDetail({
           href={node.node_type === 'meta' ? `/network?account=${node.key}` : `/cases/${node.key}`}
         />
         <p style={{ ...T_MICRO, color: 'var(--color-ink-muted)' }}>
-          {node.node_type} · community {String(node.community_id)} · degree {count(node.degree)} ·{' '}
-          {node.hops === 0 ? 'the root' : `${String(node.hops)} hop${node.hops === 1 ? '' : 's'} out`}
+          {node.node_type} ·{' '}
+          {node.community_id === null
+            ? 'no community stored for this account'
+            : `community ${String(node.community_id)}`}
+          {' · degree '}
+          {count(node.degree)} ·{' '}
+          {node.hops === null
+            ? 'no path from the seed within the route’s four-hop ceiling'
+            : node.hops === 0
+              ? 'the root'
+              : `${String(node.hops)} hop${node.hops === 1 ? '' : 's'} out`}
         </p>
         {node.true_size !== null ? (
           <p style={{ ...T_LABEL, color: 'var(--color-ink)' }}>
-            meta-node standing for {count(node.true_size)} accounts — the label is the true size, not the drawn one
+            meta-node standing for {count(node.true_size)} accounts — the label is the stored member count, not the
+            drawn one
           </p>
         ) : null}
         {node.node_type === 'rail' ? (
           <p style={{ ...T_MICRO, color: 'var(--color-state-running)' }}>
-            typed as a rail by the supernode guard: excluded from fan-in and fan-out scoring, shown because it is part
-            of the topology
+            flagged as a rail by the stored edge’s `is_rail`, which is what excludes it from fan-in and fan-out scoring;
+            it is drawn because it is part of the topology
           </p>
         ) : null}
         {node.band !== null ? (
           <p style={{ ...T_LABEL }}>
             band <BandBadge band={node.band} describe={false} />
           </p>
-        ) : null}
+        ) : (
+          <p style={{ ...T_MICRO, color: 'var(--color-ink-faint)' }}>
+            no band: this account is in the graph and the run stored no score row for it
+          </p>
+        )}
         {node.exposure !== null ? (
           <p style={{ ...T_LABEL, color: 'var(--color-ink)' }}>
             exposure {compactFromMinor(node.exposure.minor, node.exposure.decimals)} {node.exposure.currency}
           </p>
-        ) : null}
+        ) : (
+          <p style={{ ...T_MICRO, color: 'var(--color-ink-faint)' }}>
+            no exposure stored for this account, so the node is drawn at the minimum radius
+          </p>
+        )}
         <p style={{ ...T_MICRO, color: 'var(--color-ink-faint)' }}>
           {count(edges.length)} drawn edges ·{' '}
           {total === null
             ? 'no value moved along a drawn edge in this view'
             : `${compactFromMinor(total.minor, total.decimals)} ${total.currency} moved along them`}
         </p>
+        {/* The one edge flag the pipeline writes. Stated because it is served, and not
+            as a typology: the response carries no typology on an edge. */}
+        {selfPairs > 0 ? (
+          <p style={{ ...T_MICRO, color: 'var(--color-ink-muted)' }}>
+            {count(selfPairs)} of them flagged `self_pair` — a self-transfer, the same account on both ends, kept in the
+            picture and excluded from cycle and fan scoring
+          </p>
+        ) : null}
+        {node.flags.length > 0 ? (
+          <p style={{ ...T_MONO, fontSize: 'var(--text-micro)', color: 'var(--color-ink-faint)' }}>
+            flags on this node: {node.flags.join(', ')}
+          </p>
+        ) : null}
         {/* An amount without a currency code is not a number anyone can check, and an
             amount with one still owes its assumptions: this total is a sum of edge
             amounts the run measured, priced on the keys below. */}
         <Assumptions assumptions={assumptions} />
-        {edges.some((edge) => edge.typology !== null) ? (
-          <p style={{ ...T_MICRO, color: 'var(--color-ink-muted)' }}>
-            typologies on these edges:{' '}
-            {[
-              ...new Set(
-                edges
-                  .map((edge) => edge.typology)
-                  .filter((entry): entry is NonNullable<typeof entry> => entry !== null),
-              ),
-            ].map((typology) => (
-              <span key={typology} title={TYPOLOGY_META[typology].name}>
-                {' '}
-                <Icon name={glyphFor(typology)} size={12} /> {TYPOLOGY_META[typology].code}
-              </span>
-            ))}
-          </p>
-        ) : null}
       </div>
     </Pane>
   );

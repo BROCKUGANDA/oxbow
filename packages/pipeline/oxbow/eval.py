@@ -27,7 +27,11 @@ Four invariants, enforced rather than intended:
    the run if absent. Not-yet-produced artifacts (P4b's scored rows, P5's capacity
    sweep, P7's audit chain) render a line naming the path. Emitting a number for a run
    that has not happened is plan §18's rejection trigger, and it is also the one
-   failure mode that survives review, because the document looks complete.
+   failure mode that survives review, because the document looks complete. The same rule
+   governs the command's own verdict: every refusal a section builder publishes
+   (:func:`collect_refusals`) is printed by ``main`` and makes the exit status non-zero, so
+   ``make eval`` cannot print ``COMPLETE`` while a builder has said it measured nothing. A
+   swallowed refusal is how a rigorous project ships a hollow page.
 3. **Provenance travels with the number.** The backtest artifacts on this host were
    produced by ``oxbow.backtest.fakes`` — a hand-computed harness self-check, not a
    corpus result — and say so in their own ``provenance`` field. That field is copied
@@ -1861,6 +1865,74 @@ def _flagged_fraud_count() -> int:
 
 
 # --------------------------------------------------------------------------
+# refusals: what a builder says when it cannot publish
+# --------------------------------------------------------------------------
+
+#: A section that could not be built does not raise: it returns a mapping declaring its own
+#: ``status``, the artifact it is waiting for and the producer that owes it. ``missing_artifact``
+#: is that declaration, and it is a refusal in the same sense an empty alert queue is — the
+#: builder is reporting that it measured nothing, in its own words, into ``eval.json``.
+#:
+#: Before this list existed those strings reached the JSON and the rendered documents and stopped
+#: there. ``run_eval`` scored a run on one question — *does the file exist* — so a directory that
+#: exists but holds nothing (``out/warehouse/curve_point/``, ``out/warehouse/drift_period/``), or a
+#: model card beside a missing ablation table, or a money figure with no audit chain behind it, all
+#: printed ``[eval] COMPLETE`` and exited 0 while the builder two lines above had said it could not
+#: measure the thing. A gate that cannot fail on a refusal is a decoration; §15's invariant 2 ("a
+#: missing artifact fails by name") was true of the documents and false of the command.
+REFUSAL_STATUSES: Final = frozenset({"missing_artifact"})
+
+
+def collect_refusals(payload: Mapping[str, Any]) -> list[str]:
+    """Every refusal a section builder reported, named by where it was published from.
+
+    Two shapes are refusals, and they are the only two a builder has:
+
+    * a mapping declaring a ``status`` outside :data:`REFUSAL_ACCEPTED_STATUSES` beside the
+      ``artifact`` it is waiting for — the section-level "I could not measure this";
+    * a :class:`Metric` whose value is :data:`NO_NUMBER` — the figure-level version of the same
+      sentence, which the documents print as *not yet published* and the exit status used to
+      ignore completely.
+
+    Deliberately *not* refusals here: ``payload["missing_artifacts"]``, which is the file-level
+    list and is already reported as a gap. Counting the same absence twice would let one missing
+    file look like two independent findings, and the point of this function is to make a refusal
+    that was previously invisible visible — not to inflate a tally.
+    """
+    found: list[str] = []
+    _collect_refusals(payload, "$", found)
+    return sorted(set(found))
+
+
+#: A published section says which of these it is. Anything else in ``status`` is a refusal.
+REFUSAL_ACCEPTED_STATUSES: Final = frozenset({"present", "ok", "complete"})
+
+
+def _collect_refusals(node: Any, path: str, found: list[str]) -> None:
+    if isinstance(node, Mapping):
+        status = node.get("status")
+        if (
+            isinstance(status, str)
+            and status not in REFUSAL_ACCEPTED_STATUSES
+            and "artifact" in node
+        ):
+            found.append(
+                f"{path}: refused with status {status!r} — waiting on {node['artifact']} "
+                f"(produced by {node.get('produced_by', 'the pipeline')}, "
+                f"stage {node.get('stage', 'unnamed')})"
+            )
+        if node.get("value") == NO_NUMBER and "source" in node:
+            found.append(
+                f"{path}: refused to publish a figure — {NO_NUMBER!r} from {node['source']}"
+            )
+        for key, value in node.items():
+            _collect_refusals(value, f"{path}/{key}", found)
+    elif isinstance(node, list):
+        for index, value in enumerate(node):
+            _collect_refusals(value, f"{path}[{index}]", found)
+
+
+# --------------------------------------------------------------------------
 # assembly
 
 
@@ -1955,6 +2027,10 @@ def build_eval_payload(root: Path) -> dict[str, Any]:
             },
         },
     }
+    # Named field in the published card, computed last so the walk cannot meet its own output.
+    # `oxbow eval` exits non-zero on it, and the rendered documents already carry the same
+    # refusals in their sections, so the reader and the CI are handed the identical list.
+    payload["refusals"] = collect_refusals(payload)
     return payload
 
 
@@ -1998,10 +2074,11 @@ def render_documents(root: Path, payload: Mapping[str, Any]) -> tuple[Path, ...]
 def run_eval(root: Path, *, write_docs: bool = True) -> dict[str, Any]:
     """The verb behind ``make eval``: build, write, render, verify, report.
 
-    The returned report lists every section still without an artifact and the dataset
-    card's verdict. The CLI exits non-zero on either, because documentation that presents
-    itself as finished while a pipeline stage has never run is one failure, and a dataset
-    card whose figures no longer match the artifacts that own them is another — worse,
+    The returned report lists every section still without an artifact, every refusal a builder
+    reported, and the dataset card's verdict. The CLI exits non-zero on any of the three, because
+    documentation that presents itself as finished while a pipeline stage has never run is one
+    failure, a producer that said *I could not measure this* and was not heard is a second, and a
+    dataset card whose figures no longer match the artifacts that own them is another — worse,
     since it looks measured.
     """
     payload = build_eval_payload(root)
@@ -2012,6 +2089,7 @@ def run_eval(root: Path, *, write_docs: bool = True) -> dict[str, Any]:
         "eval_json": eval_path,
         "documents": list(documents),
         "gaps": _section_gaps(payload),
+        "refusals": payload["refusals"],
         "missing_artifacts": payload["missing_artifacts"],
         "limitation_count": len(payload["limitations"]),
         "harness_provenance": payload["provenance_summary"]["harness_provenance"],
@@ -2899,7 +2977,14 @@ def render_limitations(payload: Mapping[str, Any]) -> str:
 def main(argv: Sequence[str] | None = None) -> int:
     """``oxbow eval``: regenerate every metric, curve, frontier row, ablation row and drift
     table from the artifacts on disk, render the documents from that output, and verify the
-    dataset card against the figures it claims."""
+    dataset card against the figures it claims.
+
+    Non-zero exit means one of three named things: a required artifact is absent (3), the
+    dataset card drifts from the artifacts that own its figures (5), or the run is unfinished
+    (4) — and *unfinished* now counts a builder's refusal, not only a missing file, so a
+    producer that reported it could not measure something cannot be out-printed by a success
+    line. The refusal lines themselves go to stderr, under ``--quiet`` included.
+    """
     parser = argparse.ArgumentParser(
         prog="oxbow eval", description=(main.__doc__ or "").strip().splitlines()[0]
     )
@@ -2923,6 +3008,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(f"[eval] refusing to publish: {exc}", file=sys.stderr)
         return 3
     audit: CardAudit = report["card_audit"]
+    refusals: list[str] = list(report["refusals"])
+    incomplete = bool(report["gaps"] or refusals)
     if not args.quiet:
         print(f"[eval] wrote {report['eval_json'].relative_to(root)}")
         for document in report["documents"]:
@@ -2940,14 +3027,28 @@ def main(argv: Sequence[str] | None = None) -> int:
             print(_safe(f"[card] {line}"))
         for gap in report["gaps"]:
             print(f"[eval] not yet published: {gap}")
+    # A refusal is printed even under `--quiet`, and to stderr so a pipe that swallows stdout
+    # cannot swallow it too. This is the whole point of the change: a producer said it could not
+    # measure something, and the only acceptable outcomes are that the terminal hears it or that
+    # the command stops existing quietly.
+    for refusal in refusals:
+        print(_safe(f"[eval] REFUSED BY BUILDER: {refusal}"), file=sys.stderr)
+    if refusals:
+        print(f"[eval] refusals reported by builders: {len(refusals)}", file=sys.stderr)
     if not audit.ok:
         print(
-            _safe(f"[eval] {'CARD DRIFT AND INCOMPLETE' if report['gaps'] else 'CARD DRIFT'}"),
+            _safe(
+                f"[eval] {'CARD DRIFT AND INCOMPLETE' if incomplete else 'CARD DRIFT'} "
+                f"({len(report['gaps'])} gap(s), {len(refusals)} refusal(s))"
+            ),
             file=sys.stderr,
         )
-        return 6 if report["gaps"] else 5
-    print(f"[eval] {'INCOMPLETE' if report['gaps'] else 'COMPLETE'}")
-    return 4 if report["gaps"] else 0
+        return 6 if incomplete else 5
+    print(
+        f"[eval] {'INCOMPLETE' if incomplete else 'COMPLETE'} "
+        f"({len(report['gaps'])} gap(s), {len(refusals)} refusal(s))"
+    )
+    return 4 if incomplete else 0
 
 
 __all__ = [
@@ -2961,10 +3062,13 @@ __all__ = [
     "PROVENANCE_FAKE",
     "PROVENANCE_MEASURED",
     "PROVENANCE_RECORDED",
+    "REFUSAL_ACCEPTED_STATUSES",
+    "REFUSAL_STATUSES",
     "SCENARIO_DRESSING",
     "Metric",
     "artifact_descriptors",
     "build_eval_payload",
+    "collect_refusals",
     "corpus_section",
     "cycle_reality_section",
     "economics_section",

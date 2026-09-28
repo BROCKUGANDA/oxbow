@@ -38,6 +38,21 @@ export type PaneProps = {
   operation: string;
   children: ReactNode;
   meta?: ListMeta | null;
+  /**
+   * THE settled-ness signal, and the only one. Required, because a pane cannot know it.
+   *
+   * Until now the pane inferred this from `meta !== null`, which made the provenance
+   * slot double as the liveness slot while the page decided liveness on a different slot
+   * entirely (`validation.data === null`). One concept, two signals, free to disagree —
+   * and they did: a pane handed `meta={null}` beside real children rendered a permanent
+   * skeleton over an answer (the explorer's selected-node rail, the policy route's
+   * degraded-solver notice), and a route whose envelope answered with no meta rendered
+   * `Unanswered` over a payload that was there.
+   *
+   * `resolved` says what it means: the query that owns this pane has answered with
+   * something this pane may render. `meta` means provenance and nothing else.
+   */
+  resolved: boolean;
   /** Right-aligned actions: a filter chip, a link, a retry. */
   actions?: ReactNode;
   /** Matched-geometry skeleton spec. Required: a pane with no skeleton is a pane
@@ -89,6 +104,7 @@ export function Pane({
   operation,
   children,
   meta = null,
+  resolved,
   actions = null,
   skeleton,
   reserveHeight,
@@ -158,7 +174,7 @@ export function Pane({
           <MaybeSuspense
             skeleton={skeleton}
             label={title}
-            meta={meta}
+            resolved={resolved}
             failure={failure}
             pending={pending}
             onRetry={onRetry}
@@ -175,13 +191,18 @@ export function Pane({
   );
 }
 
-/** Renders the matched-geometry skeleton while the pane's own query is pending, and
- *  the pane's ErrorPane when the query failed — the reserved geometry is identical
- *  either way, which is what keeps resolution (and failure) at zero layout shift. */
+/** Renders the matched-geometry skeleton while the pane's own query is unresolved, and
+ *  the pane's ErrorPane when that query failed — the reserved geometry is identical
+ *  either way, which is what keeps resolution (and failure) at zero layout shift.
+ *
+ *  Reads one settled-ness signal (`resolved`), so DESIGN.md §5's pane-error tier is
+ *  reachable on the live path: a route that answers 200 with a body no decoder accepts
+ *  leaves `resolved === false` and sets `failure`, and the pane refuses in place instead
+ *  of shimmering. */
 function MaybeSuspense({
   skeleton,
   label,
-  meta,
+  resolved,
   failure,
   pending,
   onRetry,
@@ -193,7 +214,7 @@ function MaybeSuspense({
 }: {
   skeleton: PaneProps['skeleton'];
   label: string;
-  meta: ListMeta | null;
+  resolved: boolean;
   failure: ApiFailure | null;
   pending: boolean;
   onRetry: (() => void) | null;
@@ -203,7 +224,7 @@ function MaybeSuspense({
   operation: string;
   children: ReactNode;
 }): ReactElement {
-  if (failure !== null && meta === null) {
+  if (failure !== null && !resolved) {
     return (
       <QueryFailure
         id={paneId}
@@ -215,7 +236,7 @@ function MaybeSuspense({
       />
     );
   }
-  if (skeleton === undefined || skeleton.columns.length === 0 || meta !== null) return <>{children}</>;
+  if (skeleton === undefined || skeleton.columns.length === 0 || resolved) return <>{children}</>;
   /* Asking has stopped and nothing arrived that this pane may render. It says so, in
      the same reserved geometry, rather than claiming to still be loading — the one lie
      a loading state is not allowed to tell (DESIGN.md §3 rule 6, §5 "degraded, not

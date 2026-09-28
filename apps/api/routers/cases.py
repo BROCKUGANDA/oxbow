@@ -153,11 +153,17 @@ def case_detail(
         fused_score=float(score["fused_score"]),
         scorecard_points_total=int(score["scorecard_points"]),
         scorecard_points=[ScorecardPointRow.model_validate(row) for row in points],
+        # Passed through as stored, `None` included: `kind` decides whether the three
+        # measurements are all present or all absent, and `CalibrationBand` refuses a
+        # reading that contradicts its own kind. The `str()` coercion the old code applied
+        # to each of them was safe only while the columns were NOT NULL; `f"{None}"`
+        # would have turned an uncalibrated row into the string "None" on a signed case.
         calibration=CalibrationBand(
-            band=str(score["calibration_band"]),
-            observed_rate=float(score["observed_rate"]),
-            n=int(score["calibration_n"]),
-            note="observed rate over the calibration population, not this account's outcome",
+            kind=score["calibration_kind"],
+            band=score["calibration_band"],
+            observed_rate=score["observed_rate"],
+            n=score["calibration_n"],
+            note=score["calibration_note"],
         ),
         predicted_typology=score.get("predicted_typology"),
         model_version=str(score["model_version"]),

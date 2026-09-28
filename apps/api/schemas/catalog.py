@@ -18,9 +18,9 @@ from __future__ import annotations
 from datetime import date, datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from api.schemas.common import Money
+from api.schemas.common import CalibrationKind, Money
 from api.schemas.events import StageEvent
 
 Band = Literal["A", "B", "C", "D", "E"]
@@ -158,6 +158,13 @@ class AlertRow(BaseModel):
     ``rank`` and ``beyond_capacity`` come from the active policy's stored allocation,
     and ``cutoff_rank`` repeats the policy's line position on every row so a virtualised
     list can draw the line without a second request per scroll.
+
+    ``calibration_kind`` is whether a stored probability was measured against a population.
+    ``uncalibrated`` carries neither a rate nor an ``n`` but a reason instead: the fold was
+    refused calibration because it held fewer validation positives than
+    ``config/model.yaml``'s ``min_positives_for_calibration``, which plan 03 §H says the
+    product must *state* rather than suppress. The vocabulary is the pipeline's own — the
+    ``kind`` field of ``CalibrationResult.confidence_label``.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -166,9 +173,17 @@ class AlertRow(BaseModel):
     run_id: str
     band: Band
     fused_score: float
-    calibrated_probability: float
-    observed_rate: float
-    calibration_n: int
+    calibration_kind: CalibrationKind
+    calibration_note: str | None = Field(
+        default=None,
+        description="Why calibration was refused, in the fold's own words. Present exactly when "
+        "calibration_kind is 'uncalibrated' and absent exactly when it is not — the pairing the "
+        "database enforces in ck_score_calibration_pairing is restated here so a client cannot "
+        "receive an uncalibrated row that looks like a calibrated one with a missing number.",
+    )
+    calibrated_probability: float | None = None
+    observed_rate: float | None = None
+    calibration_n: int | None = None
     predicted_typology: str | None = None
     reasons: list[AlertReason]
     exposure: Money
@@ -188,6 +203,41 @@ class AlertRow(BaseModel):
     first_seen_at: datetime
     last_seen_at: datetime
     txn_count: int
+
+    @model_validator(mode="after")
+    def _calibration_shape(self) -> AlertRow:
+        if self.calibration_kind is CalibrationKind.calibrated_band:
+            missing = [
+                name
+                for name, value in (
+                    ("calibrated_probability", self.calibrated_probability),
+                    ("observed_rate", self.observed_rate),
+                    ("calibration_n", self.calibration_n),
+                )
+                if value is None
+            ]
+            if missing:
+                raise ValueError(
+                    f"calibration_kind='calibrated_band' but {missing} is absent; a confidence "
+                    "figure without its population is an adjective, and the queue refuses one"
+                )
+            if self.calibration_note is not None:
+                raise ValueError("a calibrated row must not carry a refusal note")
+        elif self.calibration_note is None:
+            raise ValueError(
+                "calibration_kind='uncalibrated' requires calibration_note: the reader is "
+                "entitled to know why no rate was measured"
+            )
+        elif (
+            self.calibrated_probability is not None
+            or self.observed_rate is not None
+            or self.calibration_n is not None
+        ):
+            raise ValueError(
+                "an uncalibrated row may not carry a rate, an n or a calibrated probability; "
+                "the fold refused to measure them"
+            )
+        return self
 
 
 class AlertQueue(BaseModel):

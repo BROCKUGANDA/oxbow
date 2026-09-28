@@ -12,14 +12,23 @@ correctly said *there are none*.
 
 Two rules shape every function here:
 
-**A required column with no measurement refuses the row.** ``score.observed_rate`` and
-``score.calibration_n`` are NOT NULL because a confidence figure without its ``n`` is an
-adjective, and when a fold's calibration was refused there is no ``n`` — the row's own
-``band_n`` is 0 and ``band_observed_rate`` is NaN. Writing ``0.0`` would be the fabrication the
-plan's §18 calls a lie, and writing NaN into a NOT NULL double column would smuggle it into
-arithmetic. So the row is refused, counted, and the reason is reported with the count. The fix
-is named in the message: fit a fold that clears ``min_positives_for_calibration`` — which is
-exactly what DEV-024's larger slice is for.
+**A required column with no measurement refuses the row.** ``score.band`` and
+``score.fused_score`` are NOT NULL because a queue cannot position an account without them,
+and a row missing one is refused, counted, and the reason reported with the count.
+
+**A refused calibration is a labelled state, not a dropped row.** ``score.observed_rate`` and
+``score.calibration_n`` used to be NOT NULL, on the right reasoning — a confidence figure
+without its ``n`` is an adjective — applied the wrong way round. When a fold's calibration was
+refused there is no ``n``, so the loader refused, and a run whose every fold sat below
+``min_positives_for_calibration`` landed *nothing*: the queue an analyst opens came up empty,
+which is indistinguishable on screen from an account nobody scored. Plan 03 §H specifies the
+other behaviour ("calibration is refused and the UI says probabilities are uncalibrated") and
+plan §12.8 requires degraded rather than broken, so the row now lands with
+``calibration_kind='uncalibrated'``, the four measurement columns NULL, and the fold's own
+refusal text in ``calibration_note``. ``ck_score_calibration_pairing`` in migration 0003 makes
+a half-populated row impossible at the database, which is where the adjective ban belongs;
+the calibration floor itself is untouched, and an uncalibrated probability is still never
+written into a column that calls itself calibrated.
 
 **Column names are the table's, not the frame's.** The scored frame carries feature columns and
 model columns mixed; ``SCORE_FIELDS`` is the whitelist, so a renamed model column fails loudly
@@ -36,6 +45,11 @@ lands only when the arms agree on it, and the agreement is stated; a figure the 
 refuses. ``band_definition``, ``scorecard_bin`` and ``scorecard_point`` are aggregates over the
 run's own landed scored rows at the grain ``score`` uses — one current row per account — because a
 band table counted per account-instant would report a population the queue cannot have.
+``economics`` is priced at that same grain by :func:`economics_rows`, and it is the table the two
+rules bite hardest on: every money column is read from a scored-frame column or an
+``config/economics.yaml`` declaration, ``EV_i`` is computed by ``quant/ev.py`` rather than restated,
+and the three Monte Carlo quantile columns — NOT NULL, and measured by nothing in this repository —
+refuse the row by name instead of taking a zero or an invented draw count.
 
 Nothing here computes a statistic the producer did not publish. A rate or a share taken over the
 run's own rows (a band's observed rate, a bin's population share) is the same class of aggregation
@@ -61,7 +75,11 @@ from oxbow.adapters.warehouse.models import (
     REASON_CODE_LEN,
     RUN_ID_LEN,
 )
+from oxbow.ports.case_sink import MonteCarloInterval
 from oxbow.ports.warehouse import assert_run_id
+from oxbow.quant.economics import Economics
+from oxbow.quant.ev import CalibratedScore, price_account
+from oxbow.quant.money import Money
 
 
 class LandingError(ValueError):
@@ -98,8 +116,9 @@ SCORE_SOURCES: Final[dict[str, str | None]] = {
     "p_scorecard": "p_scorecard",
     "p_gbm": "p_gbm",
     "anomaly_norm": "anomaly_norm",
-    # The fused probability IS the calibrated one whenever the fold calibrated, and the fold
-    # has already been refused above if it did not (see `calibrated`/`band_n` handling).
+    # The fused probability IS the calibrated one whenever the fold calibrated. When it did
+    # not, `calibrated_probability` is stored NULL and the fused score still lands — see the
+    # `calibrated`/`band_n` handling in `score_rows`.
     "calibrated_probability": "p_fused",
     # `band_observed_rate`/`band_n` are the rate measured *within the band*, so the band that
     # carries them is the band the column names. Two different names for one thing across the
@@ -107,6 +126,8 @@ SCORE_SOURCES: Final[dict[str, str | None]] = {
     "calibration_band": "band",
     "observed_rate": "band_observed_rate",
     "calibration_n": "band_n",
+    "calibration_kind": None,  # derived from `calibrated`, the frame's own boolean
+    "calibration_note": "uncalibrated_reason",
     "predicted_typology": "label_typology",
     "reason_codes": "reason_codes",
     "rule_ids": None,  # derived from the rule_*_severity columns
@@ -116,6 +137,13 @@ SCORE_SOURCES: Final[dict[str, str | None]] = {
 SCORE_COLUMNS: Final = tuple(SCORE_SOURCES)
 
 _BANDS: Final = frozenset("ABCDE")
+
+# The refusal reason is the fold's sentence, and the fold's sentence is long: it names the
+# positive count it measured, the configured floor, and why the floor exists. Truncating it
+# mid-clause would leave a quoted number with no referent, so the ceiling is generous and
+# stated, and the value it bounds is the storage column's practical limit rather than a
+# number the reader has to guess at.
+_CALIBRATION_NOTE_MAX: Final = 512
 
 
 def _pairs(events: pl.DataFrame) -> tuple[pl.DataFrame, pl.DataFrame]:
@@ -317,52 +345,107 @@ def score_rows(
         observed_rate = record.get("band_observed_rate")
         calibration_n = record.get("band_n")
         band = record.get("band")
-        calibrated_probability = record.get("p_fused")
+        fused = record.get("p_fused")
 
+        # Two different questions get two different answers here. "Is there a score?" is
+        # about the run's output: no fused probability or a band outside A-E means there is
+        # nothing to land, and the row is refused. "Was that score calibrated?" is about the
+        # *confidence* attached to it, and plan 03 §H answers it by labelling, not by
+        # discarding: below the positive-count floor calibration is refused and the UI says
+        # the probabilities are uncalibrated. Refusing the row for the second question is
+        # what emptied the queue when every fold of a run sat below the floor.
         problems: list[str] = []
         if band not in _BANDS:
             problems.append(f"band={band!r} is not one of A-E")
-        if calibrated_probability is None:
-            problems.append("p_fused is absent")
-        if calibration_n is None or int(calibration_n) <= 0:
-            problems.append(
-                f"calibration_n={calibration_n!r}: the fold's calibration was refused "
-                f"({str(record.get('uncalibrated_reason') or 'no reason recorded')[:72]}), so "
-                "there is no population behind the rate and none can be stored"
-            )
-        elif observed_rate is None or observed_rate != observed_rate:  # NaN is not a measurement
-            problems.append("band_observed_rate is NaN while band_n is non-zero")
+        if fused is None:
+            problems.append("p_fused is absent, so the run recorded no score for this account")
+        if problems:
+            refused.append(f"account {account_key[:ACCOUNT_KEY_LEN]}: " + "; ".join(problems))
+            continue
+
+        calibrated_claim = record.get("calibrated")
+        # The measurement and the flag have to agree, and neither one is trusted alone.
+        # `band_n > 0` with a finite rate is what "there is a measured population" means;
+        # `calibrated` is what the fold decided. A frame that carries no `calibrated` column
+        # at all predates the flag, so the measurement answers alone — and a frame that
+        # carries a flag contradicting its own measurement is refused, because either the
+        # flag or the rate is a lie and this loader cannot tell which.
+        has_measurement = (
+            calibration_n is not None
+            and int(calibration_n) > 0
+            and observed_rate is not None
+            and observed_rate == observed_rate  # NaN is not a measurement
+        )
+        if calibrated_claim is None:
+            calibrated = has_measurement
+            if not calibrated and calibration_n is not None and int(calibration_n) > 0:
+                problems.append(
+                    f"band_n={calibration_n!r} but band_observed_rate={observed_rate!r} is not a "
+                    "measurement, and the frame carries no `calibrated` flag to arbitrate"
+                )
+        else:
+            calibrated = bool(calibrated_claim)
+            if calibrated != has_measurement:
+                problems.append(
+                    f"calibrated={calibrated_claim!r} contradicts the population it reports "
+                    f"(band_n={calibration_n!r}, band_observed_rate={observed_rate!r}); the row "
+                    "cannot be labelled either way without discarding one of the two"
+                )
         if problems:
             refused.append(f"account {account_key[:ACCOUNT_KEY_LEN]}: " + "; ".join(problems))
             continue
 
         reason_codes = record.get("reason_codes") or []
-        rows.append(
-            {
-                "account_key": account_key,
-                "fused_score": float(record["p_fused"]),
-                "band": str(band),
-                "scorecard_points": int(record["score_points"]),
-                "p_scorecard": record.get("p_scorecard"),
-                "p_gbm": record.get("p_gbm"),
-                "anomaly_norm": record.get("anomaly_norm"),
-                "calibrated_probability": float(record["p_fused"]),
-                "calibration_band": str(band),
-                "observed_rate": float(observed_rate),
-                "calibration_n": int(calibration_n),
-                "predicted_typology": record.get("label_typology"),
-                "reason_codes": (
-                    reason_codes
-                    if isinstance(reason_codes, list)
-                    else _load_json(reason_codes, column="reason_codes", account_key=account_key)
-                    or []
-                ),
-                "rule_ids": _rule_ids(record),
-                "model_version": str(
-                    record.get("model_version") or record.get("model_fingerprint") or ""
-                )[:128],
-            }
-        )
+        row: dict[str, Any] = {
+            "account_key": account_key,
+            "fused_score": float(fused),
+            "band": str(band),
+            "scorecard_points": int(record["score_points"]),
+            "p_scorecard": record.get("p_scorecard"),
+            "p_gbm": record.get("p_gbm"),
+            "anomaly_norm": record.get("anomaly_norm"),
+            "calibration_kind": "calibrated_band" if calibrated else "uncalibrated",
+            "predicted_typology": record.get("label_typology"),
+            "reason_codes": (
+                reason_codes
+                if isinstance(reason_codes, list)
+                else _load_json(reason_codes, column="reason_codes", account_key=account_key) or []
+            ),
+            "rule_ids": _rule_ids(record),
+            "model_version": str(
+                record.get("model_version") or record.get("model_fingerprint") or ""
+            )[:128],
+        }
+        if calibrated:
+            row.update(
+                {
+                    "calibrated_probability": float(fused),
+                    # The band the rate was measured *within* is the score band, which is
+                    # why both travel together; `band_observed_rate` is computed per band by
+                    # the scorer, so this is the same string, not a substitute for one.
+                    "calibration_band": str(band),
+                    "observed_rate": float(observed_rate),
+                    "calibration_n": int(calibration_n),
+                    "calibration_note": None,
+                }
+            )
+        else:
+            # The whole pairing goes empty together, and the reason the fold recorded comes
+            # with it, so the queue can print "uncalibrated: <why>" instead of a blank. The
+            # reason is the fold's own text (models/run.py writes it), never a summary here.
+            why = str(record.get("uncalibrated_reason") or "").strip()
+            row.update(
+                {
+                    "calibrated_probability": None,
+                    "calibration_band": None,
+                    "observed_rate": None,
+                    "calibration_n": None,
+                    "calibration_note": (
+                        why or "the fold recorded calibrated=False with no reason"
+                    )[:_CALIBRATION_NOTE_MAX],
+                }
+            )
+        rows.append(row)
 
     if rows and len(refused) == len(part):  # pragma: no cover - defensive, rows implies passes
         raise LandingError("score_rows returned nothing while refusing every row")
@@ -1509,6 +1592,349 @@ def band_definition_rows(
     return rows, refused
 
 
+# --- the queue's money: ``economics`` ---------------------------------------
+
+#: ``economics`` is the table ``/api/alerts`` joins to ``score`` to put a number on a card, and
+#: ``apps/api/schemas/catalog.py``'s ``AlertRow`` declares ``exposure`` and ``expected_value`` as
+#: required, so an account with no economics row is an account the queue cannot price. Every value
+#: below comes from one of exactly two places: a column the run wrote into its own scored frame, or
+#: a key ``config/economics.yaml`` declares. There is no third.
+#:
+#: ``E_i`` — plan §3.2's "value still interceptable" — is read from **`downstream_outflow_24h_minor`**
+#: and capped at **`amount_in_24h_minor`**. The first is the graph layer's fold-scoped measure of "the
+#: money that left the node *and the nodes it pays directly*" inside the 24 hours ending at the fold's
+#: cutoff (:class:`oxbow.features.fold_providers.GraphFeatureProvider`, ``config/features.yaml`` group
+#: ``exposure``), which is the stored column whose definition matches the spec's — account plus
+#: 1-hop downstream, same window. The cap is read from the stored inflow of the same window. Two
+#: differences from §3.2 are stated rather than smoothed over, because a reader who does not know
+#: them will over-read the number: the frame records inflow to the **subject** while §3.2 caps against
+#: inflow to the **cluster**, so the cap applied here is never looser than the spec's; and the two
+#: windows have different anchors (fold cutoff vs the scored row's event timestamp), which the frame
+#: cannot reconcile because it stores no per-cluster inflow at all.
+#: **`amount_out_24h_minor`** measures the subject's own outflow only — no downstream legs — and is
+#: deliberately NOT used as a fallback when ``downstream_outflow_24h_minor`` is absent. Swapping in a
+#: narrower definition to fill a null is the substitution this module's first rule exists to stop, and
+#: the refusal names both columns so the choice is visible in the output rather than only here.
+ECONOMICS_EXPOSURE_SOURCE: Final = "downstream_outflow_24h_minor"
+ECONOMICS_INFLOW_CAP_SOURCE: Final = "amount_in_24h_minor"
+#: The frame's own currency column, when the producer kept the corpus's currency dimension.
+#: ``config/features.yaml`` groups the money features by ``[entity, currency]`` and the score stage
+#: collapses that dimension before writing ``scored_rows.parquet``, so on the landed 40k run the
+#: column is absent and the currency is ``config/economics.yaml``'s declaration — which is what the
+#: costs are denominated in, so it is the only basis there is to price against. A frame that DOES
+#: carry one is cross-checked against the configuration rather than trusted, and a disagreement
+#: raises: the exposure would otherwise be multiplied by a per-minute price stated in another money,
+#: which is a difference of two unrelated amounts and not an expected value.
+ECONOMICS_CURRENCY_SOURCE: Final = "currency"
+#: The scored frame's fused probability. ``SCORE_SOURCES`` already maps it into
+#: ``score.calibrated_probability`` for a fold that calibrated and ``score_rows`` refuses a row
+#: without it, so this layer reads the exact number the queue ranks on and no other.
+ECONOMICS_PROBABILITY_SOURCE: Final = "p_fused"
+#: The three ``economics`` columns that ``models.py`` declares NOT NULL and that no artifact this
+#: repository writes measures per account. ``mc_runs``, ``mc_seed`` and ``mc_interval`` ARE declared
+#: by ``config/economics.yaml`` (``monte_carlo.*``) — they describe the intended experiment. The
+#: quantiles are results of an experiment that has to be run per account against the component's
+#: edge list (:func:`oxbow.quant.monte_carlo.simulate_exposure_interval`), and the score stage never
+#: runs it: it builds its graph in memory for the rules layer and does not land it, so the artifact
+#: the propagator would read (`out/graph/<run>/pairs.parquet`) is the one :func:`_graph_tables`
+#: already reports as missing. Landing them is therefore refused by name, not filled.
+ECONOMICS_UNMEASURED_COLUMNS: Final = ("mc_p05_minor", "mc_p50_minor", "mc_p95_minor")
+#: How many accounts a gap line names before switching to a count. A 43k-entry refusal list would
+#: bury the other reasons, and the count is the finding.
+_MC_GAP_NAMED: Final = 6
+
+
+def _mc_gap_line(accounts: Sequence[str], *, supplied: bool, config: Economics) -> str:
+    """The refusal every account without a measured exposure interval gets, phrased once."""
+    named = ", ".join(sorted(accounts)[:_MC_GAP_NAMED])
+    more = f" and {len(accounts) - _MC_GAP_NAMED} more" if len(accounts) > _MC_GAP_NAMED else ""
+    header = (
+        f"economics: {len(accounts):,} account(s) have no simulated exposure interval"
+        f" ({named}{more})"
+    )
+    return (
+        f"{header}. `{config.source_path.name}` declares monte_carlo.runs/seed/interval — those "
+        "describe the experiment — while "
+        f"{', '.join(f'`economics.{column}`' for column in ECONOMICS_UNMEASURED_COLUMNS)} are its "
+        "results, and the run recorded none: `oxbow score` builds its graph in memory for the rules "
+        "layer and never lands the edge list "
+        "(`oxbow.quant.monte_carlo.simulate_exposure_interval`) would propagate. A zero would claim "
+        "a distribution concentrated at nothing and a config `runs` would claim "
+        f"{config.monte_carlo.runs:,} draws that were never taken, so the rows are refused and "
+        "counted instead. Supply measured intervals through `intervals=` and the same accounts "
+        "land; note that `oxbow.ports.case_sink.EconomicsBlock` already makes this block optional "
+        "for the packet, so it is the warehouse table's NOT NULL set that is out of step with the "
+        "money boundary the rest of the product uses."
+        if not supplied
+        else (
+            f"{header}. `economics.{', '.join(ECONOMICS_UNMEASURED_COLUMNS)}` are NOT NULL and this "
+            "run's caller supplied intervals for the rest, so these accounts stay unpriced rather "
+            "than borrowing another account's distribution."
+        )
+    )
+
+
+def _assumptions_record(
+    config: Economics,
+    *,
+    exposure_column: str,
+    cap_column: str,
+    probability_column: str,
+    score: Mapping[str, Any],
+    capped: bool,
+    outflow_minor: int,
+    currency: str,
+    currency_from_frame: bool,
+) -> dict[str, Any]:
+    """The assumption line that travels with every money figure on this row (plan §13).
+
+    Stored on the row rather than joined, so a later edit of ``config/economics.yaml`` cannot
+    reinterpret an older run's money: the numbers below are the ones this row's arithmetic used.
+    """
+    return {
+        "source": f"config/{config.source_path.name}",
+        "currency": currency,
+        "currency_is_frame_measurement": currency_from_frame,
+        "minor_units_per_major": config.minor_units_per_major,
+        "recovery.rate": config.recovery.rate,
+        "recovery.sensitivity_band": list(config.recovery.band),
+        "analyst.cost_per_minute_minor": config.analyst.cost_per_minute_minor,
+        "analyst.min_review_minutes": config.analyst.min_review_minutes,
+        "friction_cost_minor": config.friction_cost.minor,
+        "review_minutes_by_alert_class": dict(config.review_minutes_by_alert_class),
+        "exposure.window_hours": config.exposure.window_hours,
+        "exposure.downstream_hops": config.exposure.downstream_hops,
+        "capacity.review_minutes_per_period": config.capacity.review_minutes_per_period,
+        "ev_formula": "EV_i = p_i * E_i * r - c_i - (1 - p_i) * f, ranked by EV_i / m_i",
+        # Where each term was read from, so a reviewer can go to the column rather than the code.
+        "exposure_source_column": exposure_column,
+        "exposure_cap_column": cap_column,
+        "exposure_capped_by_inflow": capped,
+        "exposure_before_cap_minor": outflow_minor,
+        "probability_source_column": probability_column,
+        # The confidence label is part of the money row, not a tooltip: plan §12.8 and this file's
+        # own rules both say an uncalibrated figure may not reach a reader unlabelled, and
+        # `apps/api/routers/cases.py` renders every key of this column as an assumption line beside
+        # the figures it qualifies. `CalibratedScore.confidence_label` is the pipeline's own wording
+        # for both states, so the queue and the case page cannot drift into two different sentences.
+        "calibration_kind": score["calibration_kind"],
+        "probability_is_uncalibrated": score["calibration_kind"] != "calibrated_band",
+        "confidence_label": score["confidence_label"],
+        "monte_carlo_propagated": True,
+        "disclaimer": (
+            "Monetary figures are model estimates derived from the stated assumptions, not measured "
+            "outcomes, and are not validated for operational use by any financial institution."
+        ),
+    }
+
+
+def economics_rows(
+    scored: pl.DataFrame,
+    *,
+    config: Economics,
+    role: str = "test",
+    intervals: Mapping[str, MonteCarloInterval] | None = None,
+) -> tuple[list[dict[str, Any]], list[str]]:
+    """One priced ``economics`` row per landed ``score`` row's account, plus the refusals.
+
+    THE GRAIN is the queue's, not the frame's: :func:`_current_score_per_account`, the same rule
+    ``score_rows`` uses, so an account scored in two folds is priced once and on the same row the
+    score table shows. Pricing a stale fold while the queue shows the current one is DEV-026's
+    double-charge wearing a money column.
+
+    THE ARITHMETIC is not implemented here. :func:`oxbow.quant.ev.price_account` is called once per
+    account, because it already does the §11 formula in integer minor units over probabilities
+    carried as micro-ratios, already raises on a currency disagreement, already refuses to divide
+    ``m_i`` below ``analyst.min_review_minutes``, and already defines the ``(-density, account_key)``
+    order the allocator ranks on. A second implementation of ``EV_i`` is how the queue and the case
+    page start disagreeing about the same money, which is the failure this whole seam exists to
+    prevent.
+
+    THE PROBABILITY is ``p_fused``, calibrated or not, and an uncalibrated one still prices. That is
+    a decision, and it is not a new one: ``apps/api/policy_engine.stored_priced_rows`` already reads
+    the stored score the same way on the read side and its own comment cites DEV-024 — "pricing an
+    uncalibrated alert is the documented position; calling it calibrated is not". Refusing to price
+    an uncalibrated account would leave this run's 43,046 accounts unpriced and the queue
+    unrankable, i.e. the empty screen again from the other side. So the row prices, and it says so
+    on its face: ``CalibratedScore`` is built with the band's rate and population exactly as
+    ``score_rows`` landed them — both ``None`` for an uncalibrated fold — so
+    ``confidence_label`` comes out in the pipeline's own words ("probabilities are uncalibrated: no
+    observed rate was measured for the fold that scored this account"), and it is stored in this
+    row's ``assumptions`` column along with ``probability_is_uncalibrated`` and the source frame's
+    ``calibration_kind``. ``calibrated_probability``, ``observed_rate`` and ``calibration_n`` are
+    never written into anything that calls itself calibrated. What the label does NOT do is make the
+    figure trustworthy: an uncalibrated EV is a ranking device under stated assumptions, and the
+    row hands the API the vocabulary to say exactly that.
+
+    THE INTERVAL is the other gate, and it is not a labelling question. ``models.py`` declares
+    ``mc_p05_minor``, ``mc_p50_minor`` and ``mc_p95_minor`` NOT NULL, and they are the results of a
+    per-account propagation run (:func:`oxbow.quant.monte_carlo.simulate_exposure_interval` over the
+    fold's landed edge list) that ``oxbow score`` never performs and never can retroactively: the
+    graph it scores against is built in memory and not written. So ``intervals`` is the measured
+    answer, supplied by a caller who ran it, and with nothing supplied every account is refused by
+    name — because a zero would claim a distribution concentrated at nothing, and the config's
+    ``monte_carlo.runs`` would claim 10,000 draws that were never taken. Either is a fabrication with
+    a convincing face, and a row that does not exist is a smaller lie than a row that invents one of
+    its own columns. See :func:`drift_period_rows`, which refuses ``bad_rate`` on exactly this
+    reasoning, and note that ``ports/case_sink.EconomicsBlock`` already treats this block as optional
+    at the money boundary the packet crosses: it is the warehouse table that is out of step.
+
+    A ``*_minor`` column is an integer or the row does not exist. ``assert_money_is_integer_minor``
+    runs again in both sinks, but it runs after the row was built: a float that got this far has
+    already been through a rounding rule nobody measured, so :func:`_integer` bars it here.
+    """
+    required = {
+        "account_key",
+        "band",
+        ECONOMICS_PROBABILITY_SOURCE,
+        ECONOMICS_EXPOSURE_SOURCE,
+        ECONOMICS_INFLOW_CAP_SOURCE,
+    }
+    missing = sorted(required - set(scored.columns))
+    if missing:
+        raise LandingError(
+            f"the scored frame cannot populate {missing} for `economics`, so no account can be "
+            f"priced: E_i is read from {ECONOMICS_EXPOSURE_SOURCE} capped at "
+            f"{ECONOMICS_INFLOW_CAP_SOURCE} and p_i from {ECONOMICS_PROBABILITY_SOURCE}"
+        )
+
+    # Asked first, and its answer is the only account set this table may price: the calibration
+    # state, the band, the rate and the population all come off the row the queue will show, so the
+    # money and the score cannot be two different readings of the same account.
+    scores, score_refusals = score_rows(scored, role=role)
+    landed = {str(row["account_key"]): row for row in scores}
+    part = _require_out_of_sample(
+        _current_score_per_account(scored.filter(pl.col("role") == role)),
+        table="economics",
+        role=role,
+    )
+
+    supplied = dict(intervals or {})
+    rows: list[dict[str, Any]] = []
+    refused: list[str] = []
+    unmeasured: list[str] = []
+
+    for record in part.to_dicts():
+        account_key = _account_key(record.get("account_key"))
+        if account_key is None:
+            raw = str(record.get("account_key"))
+            refused.append(
+                f"account {raw[:32]!r} ({len(raw)} characters): not a {ACCOUNT_KEY_LEN}-character "
+                "key, so it cannot be priced into `economics.account_key` (CHAR"
+                f"({ACCOUNT_KEY_LEN})) — a truncated key would price a different account"
+            )
+            continue
+        score = landed.get(account_key)
+        if score is None:
+            # Refused by `score_rows` for a named reason, which that function already reported.
+            # Re-refusing it here would report one gap twice under two wordings.
+            continue
+
+        outflow = _integer(record.get(ECONOMICS_EXPOSURE_SOURCE))
+        inflow = _integer(record.get(ECONOMICS_INFLOW_CAP_SOURCE))
+        if outflow is None:
+            refused.append(
+                f"account {account_key}: `{ECONOMICS_EXPOSURE_SOURCE}` is "
+                f"{record.get(ECONOMICS_EXPOSURE_SOURCE)!r}, not a measured amount, so E_i was never "
+                "observed for this fold (the feature's own null policy is null_when_unobserved: the "
+                "fold's graph carried no downstream edge, DEV-011). The account is left unpriced "
+                "rather than priced at E_i = 0, and `amount_out_24h_minor` is not substituted for "
+                "it: that column measures the subject's outflow only, with no downstream legs, so "
+                "using it would answer a different question and let the reader believe otherwise"
+            )
+            continue
+        if inflow is None:
+            refused.append(
+                f"account {account_key}: `{ECONOMICS_INFLOW_CAP_SOURCE}` is "
+                f"{record.get(ECONOMICS_INFLOW_CAP_SOURCE)!r}. The inflow cap is part of E_i's "
+                "definition, not a refinement of it, so an uncapped exposure would be a larger "
+                "number than the plan licenses and no other stored column carries the window's "
+                "inflow"
+            )
+            continue
+        if outflow < 0:
+            refused.append(
+                f"account {account_key}: {ECONOMICS_EXPOSURE_SOURCE}={outflow} is negative, and a "
+                "cluster cannot have removed less than nothing; an absolute value here would be a "
+                "sign correction nobody measured"
+            )
+            continue
+
+        interval = supplied.get(account_key) or None
+        if interval is None:
+            unmeasured.append(account_key)
+            continue
+
+        capped = inflow < outflow
+        exposure_minor = inflow if capped else outflow
+        currency_from_frame = ECONOMICS_CURRENCY_SOURCE in scored.columns
+        currency = (
+            str(record.get(ECONOMICS_CURRENCY_SOURCE)) if currency_from_frame else config.currency
+        )
+        exposure = Money(exposure_minor, currency)
+
+        # `calibrated_probability` when the fold measured one, `fused_score` when it did not — which
+        # is the same branch, in the same order, the read side takes, so a row priced here and a row
+        # re-priced by `/api/alerts` start from one number.
+        probability = score["calibrated_probability"]
+        if probability is None:
+            probability = score["fused_score"]
+        score_row = CalibratedScore(
+            account_key=account_key,
+            p_calibrated=float(probability),
+            alert_class=str(score["band"]),
+            band_observed_rate=score["observed_rate"],
+            band_n=score["calibration_n"],
+        )
+        # Raises `CurrencyMismatchError` on a foreign exposure and `PricingError` on a review time
+        # below the configured floor. Both propagate: the first is a build that committed to one
+        # money meeting a row that contradicts it, the second is a registry/config contradiction,
+        # and defaulting either would price an alert on a term the configuration rejects.
+        priced = price_account(score_row, exposure, config)
+
+        rows.append(
+            {
+                "account_key": account_key,
+                "currency": priced.exposure.currency,
+                "exposure_minor": priced.exposure.minor,
+                "expected_value_minor": priced.ev.minor,
+                # Gross p*E*r: `expected_loss_avoided` is defined as the gross figure, and netting
+                # the two cost terms off it here would double-count them against EV.
+                "loss_avoided_minor": priced.expected_intercept.minor,
+                "analyst_cost_minor": priced.review_cost.minor,
+                "friction_cost_minor": priced.expected_friction_cost.minor,
+                "analyst_minutes": priced.review_minutes,
+                "recovery_rate": config.recovery.rate,
+                "ev_density": priced.density_ratio,
+                "mc_runs": interval.runs,
+                "mc_seed": interval.seed,
+                "mc_p05_minor": interval.p05_minor,
+                "mc_p50_minor": interval.p50_minor,
+                "mc_p95_minor": interval.p95_minor,
+                "mc_interval": list(interval.interval),
+                "assumptions": _assumptions_record(
+                    config,
+                    exposure_column=ECONOMICS_EXPOSURE_SOURCE,
+                    cap_column=ECONOMICS_INFLOW_CAP_SOURCE,
+                    probability_column=ECONOMICS_PROBABILITY_SOURCE,
+                    score={**score, "confidence_label": score_row.confidence_label},
+                    capped=capped,
+                    outflow_minor=outflow,
+                    currency=currency,
+                    currency_from_frame=currency_from_frame,
+                ),
+            }
+        )
+
+    if unmeasured:
+        refused.append(_mc_gap_line(unmeasured, supplied=bool(supplied), config=config))
+    # THE ORDER, STATED: EV density descending, account key ascending — `positive_ev_rows`' and
+    # `price_exposures`' own key, so the landed order is the order the allocator would have produced
+    # and the capacity cutoff line falls between the same two rows whichever side draws it.
+    rows.sort(key=lambda row: (-row["ev_density"], row["account_key"]))
+    return rows, score_refusals + refused
+
+
 #: ``scorecard_point`` and ``scorecard_bin`` both come out of the frame's ``points_json`` payload:
 #: one entry per admitted attribute with the bin the account fell in, the frozen WOE and the integer
 #: points. The bin table's population columns (``population_share``, ``bad_rate``, ``n``) are counted
@@ -2560,6 +2986,11 @@ __all__ = [
     "BAND_SOURCES",
     "CANONICAL_COMMUNITY_ORDER",
     "DRIFT_REPORT_SOURCES",
+    "ECONOMICS_CURRENCY_SOURCE",
+    "ECONOMICS_EXPOSURE_SOURCE",
+    "ECONOMICS_INFLOW_CAP_SOURCE",
+    "ECONOMICS_PROBABILITY_SOURCE",
+    "ECONOMICS_UNMEASURED_COLUMNS",
     "EVIDENCE_KIND_RULE_HIT",
     "EVIDENCE_KIND_TRANSACTION",
     "FAIRNESS_SOURCES",
@@ -2584,6 +3015,7 @@ __all__ = [
     "community_index_by_raw_label",
     "community_rows",
     "drift_period_rows",
+    "economics_rows",
     "evidence_event_rows",
     "fairness_rows",
     "graph_edge_rows",

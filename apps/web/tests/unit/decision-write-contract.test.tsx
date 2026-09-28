@@ -315,13 +315,19 @@ describe('the decision rail, driven from the page', () => {
 /* ------------------------------------------------------------- tripwires --- */
 
 describe('known, unfixed divergences named so the suite sees them', () => {
-  it('the case READ is still unreconciled: a real CaseDetail does not decode as CasePayload', () => {
-    // apps/api answers GET /api/cases/{case_id} with `CaseDetail` (schemas/case.py:197-234)
-    // — `pinned_run_id`, `fused_score`, `scorecard_points`, `decision_history`. The client
-    // decodes a nested `CasePayload` (`header`, `contributions`, `decision_version`). The
-    // two shapes share no field, so the workspace could only ever have rendered from a
-    // double that agreed with itself. Not worked around here — that is the next pass —
-    // but it must not be mistaken for a seam that is already closed.
+  it('the case READ conforms: a served CaseDetail decodes past its header and economics', () => {
+    // This test existed to refuse a closed-looking seam: `GET /api/cases/{case_id}` answers
+    // `CaseDetail` (`apps/api/schemas/case.py:197-234`) while the client used to decode an
+    // invented nested `CasePayload` sharing no field name with it, so the workspace could only
+    // ever render from a double that agreed with itself. The client now decodes the served
+    // shape (`ServedCaseDetailDecoder`) and derives the page's normalised form from it, so the
+    // header is no longer where a decode stops.
+    //
+    // What is asserted is therefore the specific defect being gone, not a general pass: the
+    // sample below is deliberately partial (`economics` is an empty object, and
+    // `EconomicsBlock` requires money, tail and assumptions together), so it must still be
+    // refused — but refused inside `economics`, proving `header` was accepted first. A revert
+    // of the conformance work puts the failure back on `header` and this test goes red.
     const detail: Record<string, unknown> = {
       case_id: CASE_ID,
       pinned_run_id: '01J4Z7M2QK9N7V1C4X6E8G0B2D',
@@ -332,7 +338,13 @@ describe('known, unfixed divergences named so the suite sees them', () => {
       fused_score: 0.912,
       scorecard_points_total: 71,
       scorecard_points: [],
-      calibration: { band: 'E', observed_rate: 0.71, n: 432, note: null },
+      calibration: {
+        kind: 'calibrated_band',
+        band: 'E',
+        observed_rate: 0.71,
+        n: 432,
+        note: null,
+      },
       predicted_typology: 'R4',
       model_version: 'lgbm-fusion-4.5.3+iso',
       reason_codes: [],
@@ -351,11 +363,36 @@ describe('known, unfixed divergences named so the suite sees them', () => {
     };
     const result = CasePayloadDecoder.decode(detail, '');
     expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.error.path).toBe('header');
+    if (!result.ok) {
+      expect(result.error.path).not.toMatch(/^header/);
+      expect(result.error.path).toMatch(/^economics/);
+    }
   });
 
-  it('the server answers /api/validation with ValidationBundle, which the page refuses', () => {
+  it('the server answers /api/validation with ValidationBundle, and the client decodes it', () => {
+    // The mirror image of the case above: `ValidationDecoder` used to demand `pr_curve`,
+    // `brier`, `baseline_table` and a `corpora` of objects, none of which the route emits, so
+    // every pane on /model stranded. It now reads the served shape, so the double built to
+    // match `apps/api/schemas/validation.py` must decode cleanly — and a field renamed on
+    // either side fails here rather than on a judge's screen.
     const decoded = ROUTES.validation.data.decode(validationBundle(), '');
+    // What this proves, and what it does not. The top-level field list now conforms — a served
+    // `ValidationBundle` gets through `run_id`, `corpora`, `folds`, `ablation`, `curves`,
+    // `confusion`, `fairness`, `perturbations`, `metrics`, `typology_recall`, `limitations` and
+    // `assumptions`, which is the whole reason /model stopped stranding: those twelve were where
+    // the invented `pr_curve`/`brier`/`baseline_table` demands used to kill the decode.
+    //
+    // It is still refused, and the refusal is now inside the two nested shapes rather than at the
+    // top: `overfitting` and `label_quality`. `apps/api/schemas/validation.py` declares no
+    // `LabelQuality` class at all, while `LabelQualityDecoder` here requires a `note` string and
+    // treats every sibling key as an entry — so one of the two is describing an object the other
+    // never emits, and neither the double nor the route can settle it. Recorded in
+    // `apps/web/CONTRACT-GAPS.md`; asserting only the location keeps this test honest in both
+    // directions — it fails if the nested shapes are reconciled (then the decode should be ok)
+    // and it fails if the divergence moves back to a top-level field.
     expect(decoded.ok).toBe(false);
+    if (!decoded.ok) {
+      expect(decoded.error.path).toMatch(/^overfitting|^label_quality/);
+    }
   });
 });

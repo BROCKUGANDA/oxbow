@@ -16,7 +16,19 @@ payload rather than being left to the client:
   card and the script.
 
 Curves come from ``curve_point``: reliability, PR, global SHAP importance, and
-per-typology recall, each with its axis meaning and its operating point marked.
+per-typology recall, each with its axis meaning and its operating point marked. The route
+forwards a family **only if rows exist for it** — no producer in this repository writes
+``curve_point`` yet, so on a run that never landed one the list is empty and the page shows
+the panes it has. That is the same rule the four served scalars below follow, and it is the
+rule that keeps a chart here a measurement rather than a decoration.
+
+THE FOUR NAMES THIS ROUTE NOW SERVES, each read off a stored row and never composed here:
+``brier`` from ``backtest_fold.brier`` (per fold, no aggregate), ``calibration_floor`` from
+``score.calibration_kind``/``calibration_note`` (the scorer's own refusal, echoed), ``time``
+from the ``run`` row's stamps plus the ``stage_event`` ledger, and ``policy_id`` from
+``policy_allocation.policy_id`` when the run landed allocations. ``pr_curve`` and
+``shap_waterfall`` are *not* served: neither has a stored row behind it on this host, and an
+empty curve or a chosen account's attribution would be a figure nobody measured.
 """
 
 from __future__ import annotations
@@ -33,10 +45,12 @@ from api.problems import (
 )
 from api.readmodel import ReadModel, money
 from api.routers.common import build_meta, row_view
-from api.schemas.common import Envelope, envelope
+from api.schemas.common import CalibrationKind, Envelope, envelope
 from api.schemas.validation import (
     AblationRowView,
     BandRowView,
+    BrierMeasurement,
+    CalibrationFloor,
     ConfusionCellView,
     ConfusionMatrixView,
     CurveDatum,
@@ -45,12 +59,15 @@ from api.schemas.validation import (
     DriftRowView,
     FairnessAxisView,
     FairnessRowView,
+    FoldBrier,
     FoldRow,
     MigrationCellView,
     PerturbationRowView,
+    RunTime,
     ScorecardAttributeView,
     ScorecardBinView,
     ScorecardStudioBundle,
+    StageTiming,
     ValidationBundle,
     ValidationMetricView,
 )
@@ -122,15 +139,22 @@ def validation(
             "would otherwise show empty axes, which reads as 'the model found nothing' rather "
             "than 'the backtest has not run' — run `make backtest`.",
         )
+    fold_views = [FoldRow.model_validate(_fold_dict(row)) for row in folds]
     budget_metric = next(
         (row for row in metrics if str(row["name"]) in {"review_budget", "budget"}), None
     )
+    policy_id, policy_id_note = _policy_identity(read_model, rid)
     body = ValidationBundle(
         run_id=rid,
         corpora=sorted({str(row["corpus"]) for row in folds}),
-        folds=[FoldRow.model_validate(_fold_dict(row)) for row in folds],
+        folds=fold_views,
         ablation=[_ablation_view(row) for row in ablation],
         curves=curves,
+        brier=_brier_measurement(folds),
+        calibration_floor=_calibration_floor(read_model, rid),
+        time=_run_time(read_model, run),
+        policy_id=policy_id,
+        policy_id_note=policy_id_note,
         confusion=None
         if confusion_total == 0
         else ConfusionMatrixView(
@@ -324,6 +348,149 @@ def _curve(read_model: ReadModel, run_id: str, family: str) -> CurveSeries:
         currency=None if not rows or rows[0].get("currency") is None else str(rows[0]["currency"]),
         operating_threshold=None if operating is None else float(operating["x"]),
         note=note,
+    )
+
+
+def _brier_measurement(folds: list[dict[str, Any]]) -> BrierMeasurement:
+    """The Brier values the fold rows carry, as a distribution and not a mean.
+
+    No arithmetic happens here. Each entry is ``backtest_fold.brier`` — a column the backtest
+    wrote per fold and :func:`oxbow.adapters.warehouse.landing.backtest_fold_rows` landed only
+    when the fold record itself carried it, which is why an artifact whose fold records have no
+    Brier key refuses the table instead of letting a run-level number be copied down into it.
+    The arm-and-ladder Brier in ``ablation_results.json`` is a different population, and no row
+    in this warehouse holds it; averaging five folds into one float here would replace a
+    distribution with an adjective.
+    """
+    return BrierMeasurement(
+        per_fold=[
+            FoldBrier(
+                fold_index=int(row["fold_index"]),
+                corpus=str(row["corpus"]),
+                brier=float(row["brier"]),
+            )
+            for row in folds
+        ],
+        aggregation=(
+            "none: one stored `backtest_fold.brier` value per fold, in fold order. The API "
+            "publishes no mean, because the pipeline published none for these folds"
+        ),
+        note=(
+            "the same values appear on folds[].brier; this field exists so the curve is "
+            "readable without unpacking the money fields beside it"
+        ),
+    )
+
+
+def _calibration_floor(read_model: ReadModel, run_id: str) -> CalibrationFloor | None:
+    """The floor the stored probabilities were measured against, read off the run's own rows.
+
+    Two existence probes on ``score``, not a count: "does this run hold a row labelled
+    ``uncalibrated``" and "does it hold one labelled ``calibrated_band``". The label and the
+    refusal sentence are the scorer's (``CalibrationResult.confidence_label``, landed per row by
+    ``landing.score_rows`` after DEV-028 made the pairing storable), and this function's only job
+    is to refuse to pick one when the rows disagree — which is why a run that landed both labels
+    gets ``None`` here rather than the first row it happens to read.
+
+    ``None`` is also the answer when the run landed no score rows at all. Both cases are the same
+    statement: there is no stored claim to echo, and an invented floor is the failure mode this
+    route was built to avoid.
+    """
+    uncalibrated, _ = read_model.source.select(
+        "score",
+        where={"run_id": run_id, "calibration_kind": "uncalibrated"},
+        limit=1,
+        allow_missing=True,
+        with_count=False,
+    )
+    calibrated, _ = read_model.source.select(
+        "score",
+        where={"run_id": run_id, "calibration_kind": "calibrated_band"},
+        limit=1,
+        allow_missing=True,
+        with_count=False,
+    )
+    if uncalibrated and calibrated:
+        return None
+    row = (uncalibrated or calibrated)[0] if (uncalibrated or calibrated) else None
+    if row is None:
+        return None
+    kind = CalibrationKind(str(row["calibration_kind"]))
+    return CalibrationFloor(
+        kind=kind,
+        refused=kind is CalibrationKind.uncalibrated,
+        note=None if row.get("calibration_note") is None else str(row["calibration_note"]),
+        basis=(
+            f"the stored `score` label for run {run_id}: every landed row of this run carries "
+            f"{kind.value!r} (checked by two limit-1 probes, one per label), and the refusal "
+            "sentence is the scorer's own text, not this route's"
+        ),
+    )
+
+
+def _run_time(read_model: ReadModel, run: dict[str, Any]) -> RunTime:
+    """The run's recorded clock: its two stamps, plus every stage row the ledger holds.
+
+    ``stage_event.elapsed_ms`` is emitted by the stage itself (:mod:`oxbow.stage_events`), and
+    each row is forwarded unchanged. No duration is computed from the two stamps — their
+    difference would silently include whatever the run never staged and publish a figure no
+    producer measured — so where no stage rows are readable the list is empty *and*
+    ``stages_note`` says which store was read. On the null-file backend that is the honest state
+    for most runs, because the pipeline appends its ledger to ``out/warehouse/stage_events.jsonl``
+    while ``FileWarehouseSource`` reads ``out/warehouse/stage_event/run=<id>.jsonl``.
+    """
+    run_id = str(run["run_id"])
+    stages, _ = read_model.source.select(
+        "stage_event",
+        where={"run_id": run_id},
+        order="id",
+        allow_missing=True,
+        with_count=False,
+    )
+    return RunTime(
+        run_id=run_id,
+        state=str(run["state"]),
+        created_at=run["created_at"],
+        finished_at=run.get("finished_at"),
+        stages=[row_view(StageTiming, row) for row in stages],
+        stages_note=None
+        if stages
+        else (
+            f"no stage rows are readable from `stage_event` for run {run_id} on the "
+            f"{read_model.source.name} backend, so the run's clock is its two recorded stamps "
+            "and nothing else; the pipeline appends its stage ledger to "
+            "out/warehouse/stage_events.jsonl, which is not the path this source reads"
+        ),
+    )
+
+
+def _policy_identity(read_model: ReadModel, run_id: str) -> tuple[str | None, str | None]:
+    """Which allocation policy produced this run's stored ranks, or why that is not knowable.
+
+    Read from ``policy_allocation``, the one warehouse table whose rows carry a ``policy_id``
+    the pipeline wrote. It is fetched in ``rank`` order and limited to one row: the answer is an
+    identifier, not a statistic, and a second row would not change it.
+
+    When the run landed none, the field is null with the reason beside it. The tempting
+    substitute — importing ``landing.BACKTEST_FOLD_OWNER``, which names the arm and ladder that
+    own the fold rows — would put a compile-time constant on the wire as a measurement, and the
+    page would then claim a policy the run never allocated.
+    """
+    rows, _ = read_model.source.select(
+        "policy_allocation",
+        where={"run_id": run_id},
+        order="rank",
+        limit=1,
+        allow_missing=True,
+        with_count=False,
+    )
+    if rows:
+        return str(rows[0]["policy_id"]), None
+    return (
+        None,
+        f"run {run_id} landed no `policy_allocation` rows, so no stored rank names a policy to "
+        "identify; `oxbow warehouse` builds the queue tables but has no builder for that table, "
+        "which is the artifact gap behind this null rather than a policy that was never chosen",
     )
 
 

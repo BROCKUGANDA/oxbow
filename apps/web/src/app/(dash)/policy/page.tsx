@@ -107,6 +107,7 @@ export default function PolicyPage(): ReactElement {
           title="Policy simulator"
           operation="Loading the active policy"
           meta={defaults.meta}
+          resolved={defaults.data !== null}
           failure={defaults.failure}
           onRetry={() => void defaults.refetch()}
           attempt={defaults.attempts}
@@ -147,6 +148,7 @@ export default function PolicyPage(): ReactElement {
           title="Assumptions under test"
           operation="Reading the economic assumptions"
           meta={defaults.meta}
+          resolved={defaults.data !== null}
           skeleton={{ columns: [{ key: 's', width: '100%' }], rows: 4 }}
         >
           <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
@@ -265,6 +267,7 @@ export default function PolicyPage(): ReactElement {
                 title="Allocation"
                 operation="Computing the allocation"
                 meta={null}
+                resolved={false}
                 skeleton={{ columns: [{ key: 'c', width: '100%' }], rows: 6 }}
               >
                 {MarkArc({ progress: null, label: 'solving' })}
@@ -326,6 +329,7 @@ export default function PolicyPage(): ReactElement {
                 title="What changed"
                 operation="Comparing review sets"
                 meta={allocation.meta}
+                resolved={allocation.data !== null}
                 skeleton={{ columns: [{ key: 'k', width: '100%' }], rows: 2 }}
               >
                 <div data-what-changed style={{ display: 'flex', gap: 16, flexWrap: 'wrap' }}>
@@ -349,6 +353,7 @@ export default function PolicyPage(): ReactElement {
                 title="Cumulative benefit against the baselines"
                 operation="Loading the benefit curve"
                 meta={allocation.meta}
+                resolved={allocation.data !== null}
                 skeleton={{ columns: [{ key: 'c', width: '100%' }], rows: 1, rowHeight: 300 }}
               >
                 <MultiLineChart series={answer.cumulative_curve} ariaLabel="Cumulative benefit by policy" />
@@ -366,6 +371,7 @@ export default function PolicyPage(): ReactElement {
                   title="Efficient frontier"
                   operation="Loading the frontier"
                   meta={allocation.meta}
+                  resolved={allocation.data !== null}
                   skeleton={{ columns: [{ key: 'f', width: '100%' }], rows: 1, rowHeight: 220 }}
                 >
                   <Frontier allocation={answer} currency={defaults.data.currency} />
@@ -376,6 +382,7 @@ export default function PolicyPage(): ReactElement {
                   title="Tail and gap"
                   operation="Loading the tail figures"
                   meta={allocation.meta}
+                  resolved={allocation.data !== null}
                   skeleton={{ columns: [{ key: 'r', width: '100%' }], rows: 4 }}
                 >
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
@@ -575,6 +582,10 @@ function DegradedSolver({
       title="Allocation"
       operation="Solving exactly"
       meta={null}
+      /* Answered, not loading: this pane is the degraded branch, and its children are
+         the greedy allocation the run actually produced. It used to render a skeleton
+         here, because `meta` was null and the pane read provenance as liveness. */
+      resolved={true}
       skeleton={{ columns: [{ key: 'c', width: '100%' }], rows: 4 }}
     >
       <div style={{ ...PANEL_SUNKEN, padding: 12, borderLeft: '2px solid var(--color-state-running)' }}>

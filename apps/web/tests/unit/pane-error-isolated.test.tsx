@@ -54,10 +54,14 @@ describe('pane error isolation', () => {
     withQuietConsole(() => {
       const view = render(
         <div>
-          <Pane id="failing" title="Failing" operation="Loading the network graph">
+          {/* `resolved={false}` for the pane whose render threw: it produced nothing this
+              page may render, which is precisely the state the boundary is there to
+              contain. The sibling is `resolved={true}` because its own query did answer —
+              the claim under test is that one failure does not strand the other. */}
+          <Pane id="failing" title="Failing" operation="Loading the network graph" resolved={false}>
             <Throwing />
           </Pane>
-          <Pane id="healthy" title="Healthy" operation="Loading the ledger">
+          <Pane id="healthy" title="Healthy" operation="Loading the ledger" resolved={true}>
             <p id="still-here">the ledger is live</p>
           </Pane>
         </div>,
@@ -76,7 +80,7 @@ describe('pane error isolation', () => {
   it('the failing pane prints the run_id with a copy button, not a stack trace', () => {
     withQuietConsole(() => {
       const view = render(
-        <Pane id="failing" title="Failing" operation="Loading the network graph">
+        <Pane id="failing" title="Failing" operation="Loading the network graph" resolved={false}>
           <Throwing />
         </Pane>,
       );
@@ -93,11 +97,15 @@ describe('pane error isolation', () => {
   });
 
   it('a failed query without a run_id says so plainly instead of inventing one', () => {
+    // `resolved={false}` is load-bearing here, not decoration: `MaybeSuspense` only routes
+    // to the QueryFailure surface when the pane has NOT resolved. Set it true and this
+    // test would be asserting an error surface the component correctly refuses to show.
     const view = render(
       <Pane
         id="alerts"
         title="Queue"
         operation="Loading the alert queue"
+        resolved={false}
         failure={{
           kind: 'problem',
           class: 'server',
@@ -136,6 +144,7 @@ describe('pane error isolation', () => {
         id="drift"
         title="Drift"
         operation="Loading the drift panel"
+        resolved={false}
         failure={{
           kind: 'network',
           class: 'network',

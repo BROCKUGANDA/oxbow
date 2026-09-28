@@ -147,8 +147,15 @@
       <tr><th scope="row">Scorecard total</th><td class="mono">{{ score.scorecard_points }} points</td>
           <td class="basis">integer points by construction, so the arithmetic is auditable by hand</td></tr>
       <tr><th scope="row">Calibrated confidence</th>
+          {% if score.calibration.kind == 'uncalibrated' %}
+          <td class="mono">no measured rate</td>
+          <td class="basis">{{ score.calibration.note }}; the score above is this run's own
+            output, and no observed rate or population was measured for the fold that produced
+            it, so no confidence figure is printed in this row</td>
+          {% else %}
           <td class="mono">{{ '%.4f' | format(score.calibration.observed_rate) }} observed rate on n={{ score.calibration.n }}</td>
-          <td class="basis">band {{ score.calibration.band }}; n is what stops "high confidence" being an adjective</td></tr>
+          <td class="basis">band {{ score.calibration.band }}; n is what stops "high confidence" being an adjective</td>
+          {% endif %}</tr>
       <tr><th scope="row">Rules fired</th>
           <td class="mono">{% if score.rule_ids %}{{ score.rule_ids | join(', ') }}{% else %}none recorded on the scored row{% endif %}</td>
           <td class="basis">typology indicators R1–R12 (plan §9)</td></tr>

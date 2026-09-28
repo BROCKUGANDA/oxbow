@@ -113,19 +113,24 @@ test.describe('the DOM never out-answers the API', () => {
     expect(invented.test(body)).toBe(false);
   });
 
-  test('a contract-violating response renders the refusal, not its own numbers', async ({ page, request }) => {
-    // /network's subgraph currently violates the client contract (the API's node
-    // shape is id/label/is_seed, the client decodes key/band/exposure/…). The
-    // decoder's job is to refuse — which is what keeps the §18 clause true even
-    // when the server drifts: nothing reaches the DOM that did not pass a decoder.
+  test('the served subgraph conforms, so nothing on screen bypassed a decoder', async ({ page, request }) => {
+    // This spec used to assert the OPPOSITE: that /network's response failed the client
+    // contract, because the API served `id/label/is_seed` while `contract.ts` decoded
+    // `key/node_type/true_size` and a handful of fields no route had ever emitted. Its own
+    // comment said what to do the day that stopped being true — replace the refusal
+    // assertion with a shape-conformance assertion, do not delete the test — and that day
+    // arrived when the client was made to follow the server (`ServedNetworkSubgraphDecoder`
+    // plus `deriveSubgraph`), not the other way round.
     //
-    // Driven against the live-mode origin with a real token, because this is a claim
+    // The clause worth keeping is the §18 one: nothing may reach the DOM that did not pass a
+    // decoder. So what is asserted is the ABSENCE of a contract refusal and the presence of a
+    // named outcome — the canvas, or one of the empty states the page is designed to render
+    // (no counterparties in the window, the hop/radius explanation). An empty graph is a real
+    // result for a run whose graph stage never landed its tables; a decode failure is a bug.
+    //
+    // Still driven against the live-mode origin with a real token, because this is a claim
     // about what the SERVER sends: on the fixture-mode port the graph comes from
-    // src/fixtures/graph.fixture.ts and the refusal can never appear, so the spec would
-    // be asserting a decoder path nobody took. It is also a tripwire: the day
-    // apps/api serves the contracted node shape, the assertion below stops finding the
-    // refusal and this test goes red pointing here — replace it with a shape-conformance
-    // assertion at that point, do not delete it.
+    // src/fixtures/graph.fixture.ts and the assertion could never fail for the right reason.
     const token = await mintToken(request);
     test.skip(
       token === null,
@@ -133,11 +138,22 @@ test.describe('the DOM never out-answers the API', () => {
     );
     await page.setExtraHTTPHeaders({ Authorization: `Bearer ${token ?? ''}` });
     await page.goto(`${LIVE_BASE}/network?account=${ACCOUNT}`, { waitUntil: 'load' });
-    await expect(
-      page.getByText(/Response did not match the API contract|expected string, got undefined/).first(),
-    ).toBeVisible();
-    await expect(page.locator('[data-money-figure]')).toHaveCount(0);
-    await expect(page.locator('[data-run-id]')).toHaveCount(0);
+    await expect(page.locator('main')).toBeVisible();
+    await expect(page.getByText(/Response did not match the API contract|expected string, got undefined/)).toHaveCount(
+      0,
+    );
+    // The canvas drew, and the run it drew for is named on screen. If this goes red because
+    // no host rendered, that is the finding: the landed run has no `community`/`graph_edge`/
+    // `account_membership` rows, because `oxbow score` builds its graph in memory and never
+    // persists it — a subgraph cannot be drawn from a graph that was not stored, and this
+    // spec is the place that should say so rather than a screenshot discovering it.
+    await expect(page.locator('[data-cytoscape-host]')).toBeVisible();
+    await expect(page.locator('[data-run-id]').first()).toBeVisible();
+    // And any money that DID render must carry the assumptions block that owns it.
+    const figures = page.locator('[data-money-figure]');
+    if ((await figures.count()) > 0) {
+      await expect(page.locator('[data-assumption]').first()).toBeVisible();
+    }
   });
 
   test('timestamps carry the deployment zone the API owns, not a component default', async ({ page }) => {

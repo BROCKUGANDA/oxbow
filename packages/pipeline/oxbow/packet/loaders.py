@@ -133,11 +133,11 @@ def case_bundle_from_payload(payload: Mapping[str, Any]) -> CaseBundle:
             band=_text(score_raw.get("band"), "score.band"),
             scorecard_points=_int(score_raw.get("scorecard_points"), "score.scorecard_points"),
             reason_codes=tuple(str(item) for item in _items(score_raw.get("reason_codes"))),
-            calibration=CalibrationReading(
-                band=_text(calibration_raw.get("band"), "calibration.band"),
-                observed_rate=float(str(calibration_raw.get("observed_rate"))),
-                n=_int(calibration_raw.get("n"), "calibration.n"),
-            ),
+            # The reading rebuilds itself, pairing check included, so a packet can never
+            # render a score whose confidence its payload does not state. A stored packet
+            # written before revision 0003 carries no `kind`; `from_payload` says exactly
+            # which of those it can reconstruct and which it refuses.
+            calibration=CalibrationReading.from_payload(calibration_raw),
             model_version=_text(score_raw.get("model_version"), "score.model_version"),
             rule_ids=tuple(str(item) for item in _items(score_raw.get("rule_ids"))),
         ),

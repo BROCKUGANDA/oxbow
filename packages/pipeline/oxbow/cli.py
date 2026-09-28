@@ -1647,6 +1647,9 @@ REFUSAL_PREVIEW_CHARS: Final = 150
 LANDING_REPORT_ORDER: Final = (
     "account",
     "score",
+    # The queue is `score` joined to `account` joined to `economics`, so the priced table is reported
+    # beside the score it prices and its refusals are never read as a separate stage.
+    "economics",
     "rule_hit",
     "transaction",
     "evidence_event",
@@ -1788,10 +1791,18 @@ def _frame_tables(
     configuration the run consumed, read from ``config/scorecard.yaml`` and
     ``config/economics.yaml`` through their own loaders rather than restated here, the same way
     ``_attach_corpus_economics`` reads the analyst price and the floor.
+
+    ``economics`` is priced off the same loaded configuration and is passed no Monte Carlo intervals,
+    because the run recorded none to pass: propagating an account's exposure needs the fold's landed
+    edge list, and ``oxbow score`` builds its graph in memory for the rules layer and never writes it
+    (see :func:`_graph_tables`). The builder therefore returns no rows and one named refusal for a
+    score-only run — which is reported per table rather than swallowed — and lands every account whose
+    measured intervals a caller does supply.
     """
     from oxbow.adapters.warehouse.landing import (
         band_definition_rows,
         drift_period_rows,
+        economics_rows,
         evidence_event_rows,
         scorecard_bin_rows,
         scorecard_point_rows,
@@ -1812,6 +1823,7 @@ def _frame_tables(
     tables["band_definition"], refusals["band_definition"] = band_definition_rows(
         scored, actions=actions, review_minutes=minutes
     )
+    tables["economics"], refusals["economics"] = economics_rows(scored, config=economics)
     tables["scorecard_bin"], refusals["scorecard_bin"] = scorecard_bin_rows(scored)
     tables["scorecard_point"], refusals["scorecard_point"] = scorecard_point_rows(scored)
     tables["drift_period"], refusals["drift_period"] = drift_period_rows(scored)
@@ -1920,13 +1932,15 @@ def land_warehouse_rows(ctx: StageContext, handle: StageHandle, *, run_id: str) 
     re-deriving the sample independently would be a second sampler disagreeing with the first,
     and the run identity that selected the slice is salted and cannot be replayed here.
 
-    A run whose folds refused calibration lands its accounts and nothing else: ``score`` needs a
-    measured ``observed_rate`` and a non-zero ``calibration_n``, and the loader refuses to write
-    a zero into either. That refusal is reported with a count, not swallowed, because "0 rows
-    landed" and "0 rows could be landed for this named reason" are different findings and the
-    second is the one an operator can act on. The analytical tables are now reported the same way,
-    table by table: on the landed 40k run ``backtest_fold``, ``drift_period`` and the three graph
-    tables refuse for named reasons, and the run still lands everything it did measure.
+    A run whose folds refused calibration still lands its scores: ``score`` carries
+    ``calibration_kind='uncalibrated'`` with the fold's refusal reason, and the four
+    measurement columns stay NULL rather than taking a zero (see ``landing.score_rows`` and
+    migration 0003). What is still refused is a row with no score at all, and refusals of both
+    kinds are reported with a count, not swallowed, because "0 rows landed" and "0 rows could be
+    landed for this named reason" are different findings and the second is the one an operator
+    can act on. The analytical tables are reported the same way, table by table: on the landed
+    40k run ``backtest_fold``, ``drift_period`` and the three graph tables refuse for named
+    reasons, and the run still lands everything it did measure.
     """
     import os
 

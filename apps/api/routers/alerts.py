@@ -11,10 +11,13 @@ router is responsible for:
   allocation. When a run wrote none, the queue re-allocates through the P5 layer and
   says so in ``allocation_source`` — a line drawn from a different computation than
   the ranking is the disagreement 02 §B seam 5 exists to prevent.
-* **confidence never appears alone.** Each row carries the calibrated probability with
-  its observed rate and the population behind it, because "high confidence" without an
-  ``n`` is an adjective (plan §10), and the queue card is where a reviewer decides
-  whether to open the case.
+* **confidence never appears alone.** A calibrated row carries the calibrated
+  probability with its observed rate and the population behind it, because "high
+  confidence" without an ``n`` is an adjective (plan §10), and the queue card is where a
+  reviewer decides whether to open the case. An uncalibrated row carries none of the
+  three and a reason instead: the fold refused calibration for want of positives, and
+  plan 03 §H requires the card to *say* that rather than show a gap. Both shapes are one
+  pairing, and :class:`~api.schemas.catalog.AlertRow` refuses a half-populated one.
 """
 
 from __future__ import annotations
@@ -123,19 +126,29 @@ def list_alerts(
             # first_seen_at/last_seen_at, txn_count) so other callers can use the same
             # join. Splatting that row here fed every one of those extra keys to the
             # schema and made /api/alerts a 500 on any real run -- `extra_forbidden` on
-            # ten keys, plus a `None` where `calibration_n` and `rank` require an int.
-            # Naming the fields is also the only way this endpoint keeps agreeing with
-            # the schema: a new column in the read model becomes a visible omission here
-            # rather than an unhandled 500.
+            # ten keys, plus a `None` where `rank` requires an int. Naming the fields is
+            # also the only way this endpoint keeps agreeing with the schema: a new
+            # column in the read model becomes a visible omission here rather than an
+            # unhandled 500.
             AlertRow.model_validate(
                 {
                     "account_key": row["account_key"],
                     "run_id": row["run_id"],
                     "band": row["band"],
                     "fused_score": row["fused_score"],
+                    # The confidence pairing passes through exactly as stored, with no
+                    # default for the absent half: `calibration_kind` decides whether the
+                    # three measurements are all present or all absent, and the schema's
+                    # `_calibration_shape` refuses a row that contradicts its own kind.
+                    # Substituting `0` for a missing `calibration_n` would be the
+                    # silent-zero swap 03 §A rule 2 forbids -- an unmeasured population
+                    # and a measured population of nothing are different claims, and only
+                    # one of them is a reason to rank an account last.
+                    "calibration_kind": row["calibration_kind"],
+                    "calibration_note": row["calibration_note"],
                     "calibrated_probability": row["calibrated_probability"],
                     "observed_rate": row["observed_rate"],
-                    "calibration_n": _required_int(row, "calibration_n", key=row["account_key"]),
+                    "calibration_n": row["calibration_n"],
                     "predicted_typology": row.get("predicted_typology"),
                     "reasons": _reasons(row.get("reason_codes")),
                     "exposure": money(
@@ -324,13 +337,19 @@ def _stored_allocations(
 
 
 def _required_int(row: dict[str, Any], field: str, *, key: str) -> int:
-    """A field the schema types as ``int``, read as an int or refused by name.
+    """A field the schema types as a bare ``int``, read as an int or refused by name.
 
-    ``calibration_n`` and ``rank`` are not optional in the queue's contract, and a
-    default would be the wrong kind of repair: a card with ``rank: 0`` or
-    ``calibration_n: 0`` renders a position and a sample size that no run measured. A
-    stored row that cannot supply one is a missing allocation or an unscored account,
-    and saying so beats a number that reads as measured.
+    ``rank`` and ``txn_count`` are not optional in the queue's contract, and a default
+    would be the wrong kind of repair: a card with ``rank: 0`` renders a position no run
+    measured, and ``txn_count: 0`` states that an account transacted not at all. A
+    stored row that cannot supply one is a missing allocation or an account the run never
+    built, and saying so beats a number that reads as measured.
+
+    ``calibration_n`` is deliberately NOT reached through here. It became nullable in
+    revision 0003 because a fold whose calibration was refused has no population to
+    count, and a queue that 400'd on that row would be hiding a scored account behind an
+    error — the same failure, one layer up. Its absence is carried by
+    ``calibration_kind='uncalibrated'`` with the refusal reason beside it.
     """
     value = row.get(field)
     if isinstance(value, bool) or not isinstance(value, int | float):

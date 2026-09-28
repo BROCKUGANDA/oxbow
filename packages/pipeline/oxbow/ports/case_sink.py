@@ -7,7 +7,8 @@ plan §13 states as a design constraint rather than decoration:
     depends on."
 
 So the assumptions travel *with* the money figure, the model version travels with
-the score, and the disclaimer travels with the payload. That is enforced by
+the score, the calibration state travels with the probability, and the disclaimer
+travels with the payload. That is enforced by
 :func:`assert_self_describing` at emit time, not by a reviewer remembering to
 fill in a field — a case that reaches a consumer without its recovery rate is a
 number with no honest meaning, and the failure is invisible after the fact.
@@ -52,6 +53,16 @@ _ID_SEPARATOR: Final = "|"
 # (plan §15: "mutation destroys the integrity claim").
 DECISION_ACTIONS: Final = ("escalate", "dismiss", "review", "reverse")
 
+# The two calibration states a payload may state, in the producer's own words: the
+# ``kind`` field ``CalibrationResult.confidence_label`` emits in the models layer. They
+# are literals here rather than an import, because contract 2 of ``.importlinter``
+# forbids ``oxbow.ports`` from depending on ``oxbow.models`` — a port that imports a
+# model has stopped being a port. The conformance suite pins the pair against the models
+# layer, so the two spellings cannot drift apart in silence.
+CALIBRATED_BAND: Final = "calibrated_band"
+UNCALIBRATED: Final = "uncalibrated"
+CALIBRATION_KINDS: Final = (CALIBRATED_BAND, UNCALIBRATED)
+
 
 def build_idempotency_key(run_id: str, case_id: str, decision_seq: int) -> str:
     """``sha256(run_id + case_id + decision_seq)``, delimited (02 §E).
@@ -82,11 +93,121 @@ class CalibrationReading:
     ``n`` is what stops "high confidence" being an adjective: a band with three
     members and a band with three thousand are not the same claim, and the
     consumer has to be able to tell (spec §12.4, case rail).
+
+    ``kind`` says whether that claim was measured at all. A fold that refused
+    calibration has a score and no rate, and the consumer must receive the refusal as a
+    refusal: emitting ``observed_rate: null`` with no kind would leave an FIU to guess
+    whether null means "zero positives" or "we never measured", which is the same
+    ambiguity 03 §A rule 2 refuses inside the product. ``CalibrationResult.confidence_label``
+    in the models layer emits exactly these two words; they are repeated as literals
+    here rather than imported because ``oxbow.ports`` may not depend on ``oxbow.models``
+    (import-linter contract 2 — a port that imports a model has stopped being a port).
     """
 
-    band: str
-    observed_rate: float
-    n: int
+    kind: str
+    band: str | None
+    observed_rate: float | None
+    n: int | None
+    note: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.kind not in CALIBRATION_KINDS:
+            raise ValueError(
+                f"calibration kind {self.kind!r} is not one of {list(CALIBRATION_KINDS)}; "
+                "the reading would arrive at a consumer labelled with a word that means "
+                "nothing on the other side"
+            )
+        measured = (self.band, self.observed_rate, self.n)
+        if self.kind == CALIBRATED_BAND:
+            absent = [
+                name
+                for name, value in zip(("band", "observed_rate", "n"), measured, strict=True)
+                if value is None
+            ]
+            if absent:
+                raise ValueError(
+                    f"kind='calibrated_band' but {absent} is absent: a consumer cannot "
+                    "weigh a rate it did not receive, and cannot weigh an n either"
+                )
+            if self.n is not None and self.n <= 0:
+                raise ValueError(
+                    f"n={self.n} is not a population; a calibrated reading states a rate "
+                    "measured over something"
+                )
+            if self.note is not None:
+                raise ValueError(
+                    "a calibrated reading carries no refusal note — the two kinds would "
+                    "arrive together and the consumer has no way to choose between them"
+                )
+        elif self.note is None:
+            raise ValueError(
+                "kind='uncalibrated' requires note: the consumer is entitled to know why "
+                "no rate was measured, not merely that one is missing"
+            )
+        else:
+            present = [
+                name
+                for name, value in zip(("band", "observed_rate", "n"), measured, strict=True)
+                if value is not None
+            ]
+            if present:
+                raise ValueError(
+                    f"an uncalibrated reading may not carry {present}: the fold refused to "
+                    "measure them, and a refusal shipped beside a number reads as a number"
+                )
+
+    def to_payload(self) -> dict[str, Any]:
+        """Wire form: the reading, or the refusal, in full.
+
+        The keys are the same in both shapes on purpose. A consumer that reads
+        ``observed_rate`` gets ``null`` and the ``kind`` that explains it on the same
+        object, rather than a payload whose shape depends on which branch the model took.
+        """
+        return {
+            "kind": self.kind,
+            "band": self.band,
+            "observed_rate": self.observed_rate,
+            "n": self.n,
+            "note": self.note,
+        }
+
+    @classmethod
+    def from_payload(cls, calibration: Mapping[str, Any]) -> CalibrationReading:
+        """Rebuild one reading from a stored payload — outbox row or case packet.
+
+        A payload that carries ``kind`` is reconstructed exactly, and the constructor
+        re-checks the pairing so a hand-edited or truncated JSON cannot arrive at a
+        renderer as a well-formed object.
+
+        A payload written before revision 0003 carries no ``kind``, and the only shape
+        that build could emit was a measured one: an uncalibrated score row could not be
+        landed at all, so it could never reach a decision. Reconstructing those as
+        ``calibrated_band`` is therefore read off what the writer was capable of
+        producing, not guessed from which fields happen to be set. A payload with
+        neither a kind nor a measurement is refused — labelling it ``uncalibrated`` would
+        assert a refusal the writer never recorded, and it would arrive with no note
+        because the note field did not exist yet.
+        """
+        kind = calibration.get("kind")
+        band = calibration.get("band")
+        rate = calibration.get("observed_rate")
+        size = calibration.get("n")
+        note = calibration.get("note")
+        if kind is None:
+            if rate is None or size is None:
+                raise ValueError(
+                    "a stored calibration payload carries neither `kind` nor a measurement, "
+                    "so it can be labelled neither calibrated nor uncalibrated; refusing to "
+                    "invent one for a consumer to sign"
+                )
+            kind = CALIBRATED_BAND
+        return cls(
+            kind=str(kind),
+            band=None if band is None else str(band),
+            observed_rate=None if rate is None else float(str(rate)),
+            n=None if size is None else int(str(size)),
+            note=None if note is None else str(note),
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -172,11 +293,11 @@ class ScoreBlock:
             "reason_codes": list(self.reason_codes),
             "rule_ids": list(self.rule_ids),
             "model_version": self.model_version,
-            "calibration": {
-                "band": self.calibration.band,
-                "observed_rate": self.calibration.observed_rate,
-                "n": self.calibration.n,
-            },
+            # The reading serialises itself, because the pairing that makes it honest is
+            # the reading's own invariant: a consumer must not be able to receive the
+            # numbers without also receiving the state that says whether they were
+            # measured, and that is one rule with one owner.
+            "calibration": self.calibration.to_payload(),
         }
 
 
@@ -332,6 +453,18 @@ def assert_self_describing(payload: Mapping[str, Any]) -> None:
         if not _has_model_version(payload):
             missing.append("model_version")
 
+    # The same rule one field over: a consumer cannot receive an OXBOW probability without
+    # the state that says whether it was measured. `CalibrationReading` refuses a
+    # half-populated reading in Python, but a payload can arrive here from a stored outbox
+    # row written by an older build, so the boundary checks the bytes too.
+    calibration = payload.get("score", {}).get("calibration") if "score" in payload else None
+    if isinstance(calibration, Mapping):
+        kind = calibration.get("kind")
+        if kind not in CALIBRATION_KINDS:
+            missing.append("score.calibration.kind (calibrated_band | uncalibrated)")
+        elif kind == UNCALIBRATED and not calibration.get("note"):
+            missing.append("score.calibration.note (why no rate was measured)")
+
     if missing:
         raise SelfDescribingPayloadError(
             f"outbound payload is not self-describing; missing {', '.join(missing)}. "
@@ -364,10 +497,13 @@ class CaseSink(Protocol):
 
 
 __all__ = [
+    "CALIBRATED_BAND",
+    "CALIBRATION_KINDS",
     "CASE_SCHEMA_VERSION",
     "DECISION_ACTIONS",
     "MONEY_FIELDS",
     "OXBOW_DISCLAIMER",
+    "UNCALIBRATED",
     "CalibrationReading",
     "CaseBundle",
     "CaseSink",

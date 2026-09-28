@@ -90,6 +90,7 @@ function ScorecardExplorer(): ReactElement {
           title="Attributes"
           operation="Loading the scorecard"
           meta={scorecard.meta}
+          resolved={scorecard.data !== null}
           failure={scorecard.failure}
           onRetry={() => void scorecard.refetch()}
           attempt={scorecard.attempts}
@@ -150,6 +151,7 @@ function ScorecardExplorer(): ReactElement {
         title="Points scaling"
         operation="Loading the scaling constants"
         meta={scorecard.meta}
+        resolved={scorecard.data !== null}
         skeleton={{ columns: [{ key: 'f', width: '100%' }], rows: 2 }}
       >
         <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', alignItems: 'flex-start' }}>
@@ -211,6 +213,7 @@ function ScorecardExplorer(): ReactElement {
             title="Attributes by IV"
             operation="Listing attributes"
             meta={scorecard.meta}
+            resolved={scorecard.data !== null}
             skeleton={{
               columns: [
                 { key: 'a', width: '60%' },
@@ -269,6 +272,7 @@ function ScorecardExplorer(): ReactElement {
               title={`${selected.label} · bins`}
               operation="Rendering the bin table"
               meta={scorecard.meta}
+              resolved={scorecard.data !== null}
               skeleton={{ columns: [{ key: 'chart', width: '100%' }], rows: 6, rowHeight: 36 }}
             >
               <AttributeBins attribute={selected} />
@@ -283,6 +287,7 @@ function ScorecardExplorer(): ReactElement {
           title="Band table"
           operation="Loading the band cut points"
           meta={scorecard.meta}
+          resolved={scorecard.data !== null}
           skeleton={{
             columns: [
               { key: 'band', width: '16%' },
@@ -360,6 +365,7 @@ function ScorecardExplorer(): ReactElement {
             title="PSI / CSI by period"
             operation="Loading drift"
             meta={drift.meta}
+            resolved={drift.data !== null}
             skeleton={{
               columns: [
                 { key: 'p', width: '60%' },
@@ -375,6 +381,7 @@ function ScorecardExplorer(): ReactElement {
             title="Rating migration"
             operation="Loading the migration matrix"
             meta={drift.meta}
+            resolved={drift.data !== null}
             skeleton={{ columns: [{ key: 'm', width: '100%' }], rows: 6 }}
           >
             {drift.data === null ? <span /> : <Migration drift={drift.data} />}
@@ -388,6 +395,7 @@ function ScorecardExplorer(): ReactElement {
           title="Scorecard vs GBM"
           operation="Loading the disagreement list"
           meta={disagreement.meta}
+          resolved={disagreement.data !== null}
           skeleton={{
             columns: [
               { key: 'a', width: '16%' },

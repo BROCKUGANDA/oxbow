@@ -23,19 +23,59 @@
    (`apps/api/schemas/common.py`, `apps/api/problems.py`) this file mirrors it.
    ============================================================================= */
 
-import { type Decoder, array, boolean, integer, nullable, number, object, oneOf, record, string } from '../codec';
+import {
+  type Decoder,
+  array,
+  boolean,
+  integer,
+  mapDecode,
+  nullable,
+  number,
+  object,
+  oneOf,
+  record,
+  string,
+  unknownDecoder,
+} from '../codec';
+import {
+  type EdgeBucket,
+  FLAG_CYCLE,
+  FLAG_FLAGGED,
+  FLAG_SELF_PAIR,
+  type OverlayCounts,
+  bucketEdges,
+  hopDepths,
+  overlayCounts,
+} from '../network/derive';
 import { ProblemDetailDecoder } from './problem';
 
 /* ============================================================ shared shapes */
 
 /** A JSON scalar — assumption values and rule-parameter values are a string or a
- *  number and nothing else, so it is decoded as that union rather than widened. */
+ *  number and nothing else, so it is decoded as that union rather than widened.
+ *  `AssumptionLine.value` is `float | int | str` on the model, so a boolean is not a
+ *  legal value there and is refused. */
 const scalarOrNumber: Decoder<string | number> = {
   kind: 'scalar',
   decode(value, path) {
     if (typeof value === 'string') return { ok: true, value };
     if (typeof value === 'number' && Number.isFinite(value)) return { ok: true, value };
     return { ok: false, error: { path, message: 'expected a string or number' } };
+  },
+};
+
+/** A scalar from a `dict[str, Any]` bag — `DatasetMeta.sampling` and
+ *  `DatasetMeta.deidentification`, both forwarded straight from `config/pipeline.yaml`
+ *  (`routers/meta.py`). A YAML `false` is a legal value in those sections and the model
+ *  allows anything JSON can hold, so this bag takes booleans too. Deciding with
+ *  `scalarOrNumber` here would refuse a config that says `reversible: false`, and a
+ *  refused bag is a pane that stops rendering over what is really a keyword in a file. */
+const scalarInBag: Decoder<string | number | boolean> = {
+  kind: 'bag-scalar',
+  decode(value, path) {
+    if (typeof value === 'string' || typeof value === 'boolean') return { ok: true, value };
+    if (typeof value === 'number' && Number.isFinite(value)) return { ok: true, value };
+    return { ok: false, error: { path, message: 'expected a string, number or boolean' } };
   },
 };
 
@@ -440,246 +480,36 @@ export const AlertPageDecoder: Decoder<AlertPage> = object('AlertPage', {
 
 /* ========================================================== 3. case workspace */
 
-export type ScorecardPoints = {
-  attribute: string;
-  label: string;
-  bin: string;
-  points: number;
-  population_share: number;
-  bad_rate: number;
-  is_reason_code: boolean;
-};
-
-const ScorecardPointsDecoder: Decoder<ScorecardPoints> = object('ScorecardPoint', {
-  attribute: string,
-  label: string,
-  bin: string,
-  points: number,
-  population_share: number,
-  bad_rate: number,
-  is_reason_code: boolean,
-});
-
-export type MonteCarloInterval = {
-  lower: Money;
-  upper: Money;
-  runs: number;
-  max_depth: number;
-  seed: number;
-  interval: number[];
-};
-
-const MonteCarloIntervalDecoder: Decoder<MonteCarloInterval> = object('MonteCarlo', {
-  lower: MoneyDecoder,
-  upper: MoneyDecoder,
-  runs: integer,
-  max_depth: integer,
-  seed: integer,
-  interval: array(number),
-});
-
-export type CaseEconomics = {
-  exposure: MoneyFigure;
-  expected_value: MoneyFigure;
-  review_minutes: number;
-  analyst_cost: MoneyFigure;
-  friction_cost: Money;
-  monte_carlo: MonteCarloInterval | null;
-  recovery_rate: number;
-};
-
-const CaseEconomicsDecoder: Decoder<CaseEconomics> = object('CaseEconomics', {
-  exposure: MoneyFigureDecoder,
-  expected_value: MoneyFigureDecoder,
-  review_minutes: number,
-  analyst_cost: MoneyFigureDecoder,
-  friction_cost: MoneyDecoder,
-  monte_carlo: nullable(MonteCarloIntervalDecoder),
-  recovery_rate: number,
-});
-
-export type CaseHeader = {
-  account_key: string;
-  run_id: string;
-  score: number;
-  band: Band;
-  calibration: CalibrationBin;
-  typology: Typology | null;
-  points: ScorecardPoints[];
-  reasons: ReasonCode[];
-  economics: CaseEconomics;
-  fusion: {
-    p_scorecard: number;
-    p_gbm: number;
-    p_fused: number;
-    coefficients: { input: string; weight: number }[];
-  } | null;
-  decided_on_superseded_run: boolean;
-  model_version: string | null;
-  feature_spec_hash: string | null;
-  scored_at: string;
-};
-
-const CaseHeaderDecoder: Decoder<CaseHeader> = object('CaseHeader', {
-  account_key: string,
-  run_id: string,
-  score: number,
-  band: BandDecoder,
-  calibration: CalibrationBinDecoder,
-  typology: nullable(TypologyDecoder),
-  points: array(ScorecardPointsDecoder),
-  reasons: array(ReasonCodeDecoder),
-  economics: CaseEconomicsDecoder,
-  fusion: nullable(
-    object('Fusion', {
-      p_scorecard: number,
-      p_gbm: number,
-      p_fused: number,
-      coefficients: array(object('Coefficient', { input: string, weight: number })),
-    }),
-  ),
-  decided_on_superseded_run: boolean,
-  model_version: nullable(string),
-  feature_spec_hash: nullable(string),
-  scored_at: TimestampDecoder,
-});
-
-export type EvidenceEvent = {
-  id: string;
-  ts_utc: string;
-  kind: 'transaction' | 'rule_hit' | 'window' | 'decision' | 'ingest';
-  title: string;
-  detail: string;
-  amount: Money | null;
-  rule_code: string | null;
-  typology: Typology | null;
-  txn_ids: string[];
-};
-
-const EvidenceEventDecoder: Decoder<EvidenceEvent> = object('EvidenceEvent', {
-  id: string,
-  ts_utc: TimestampDecoder,
-  kind: oneOf('EvidenceKind', 'transaction', 'rule_hit', 'window', 'decision', 'ingest'),
-  title: string,
-  detail: string,
-  amount: nullable(MoneyDecoder),
-  rule_code: nullable(string),
-  typology: nullable(TypologyDecoder),
-  txn_ids: array(string),
-});
-
-export type TransactionRow = {
-  txn_id: string;
-  ts_utc: string;
-  type: string;
-  channel: string;
-  amount: Money;
-  counterparty_key: string | null;
-  direction: 'in' | 'out';
-  src_balance_after: Money | null;
-  dst_balance_after: Money | null;
-  balance_delta: Money | null;
-  is_zero_value: boolean;
-  rule_codes: string[];
-};
-
-const TransactionRowDecoder: Decoder<TransactionRow> = object('TransactionRow', {
-  txn_id: string,
-  ts_utc: TimestampDecoder,
-  type: string,
-  channel: string,
-  amount: MoneyDecoder,
-  counterparty_key: nullable(string),
-  direction: oneOf('Direction', 'in', 'out'),
-  src_balance_after: nullable(MoneyDecoder),
-  dst_balance_after: nullable(MoneyDecoder),
-  balance_delta: nullable(MoneyDecoder),
-  is_zero_value: boolean,
-  rule_codes: array(string),
-});
-
-/** SHAP waterfall entry, persisted per row by P4b — the UI never computes one. */
-export type Contribution = {
-  feature: string;
-  label: string;
-  sentence: string;
-  value: number;
-  direction: 'increases' | 'decreases';
-  rank: number;
-  /** The cross-filter key: clicking this row filters the other panes to these ids. */
-  txn_ids: string[];
-  evidence_ids: string[];
-  source: 'shap' | 'scorecard_points';
-};
-
-const ContributionDecoder: Decoder<Contribution> = object('Contribution', {
-  feature: string,
-  label: string,
-  sentence: string,
-  value: number,
-  direction: oneOf('Direction', 'increases', 'decreases'),
-  rank: integer,
-  txn_ids: array(string),
-  evidence_ids: array(string),
-  source: oneOf('ContributionSource', 'shap', 'scorecard_points'),
-});
-
-export type RuleHit = {
-  rule_code: string;
-  typology: Typology;
-  name: string;
-  severity: number;
-  observed: string;
-  parameters: { key: string; value: string | number }[];
-  overlap_group: string | null;
-  counted_once: boolean;
-  txn_ids: string[];
-  first_hit: string;
-  last_hit: string;
-};
-
-const RuleHitDecoder: Decoder<RuleHit> = object('RuleHit', {
-  rule_code: string,
-  typology: TypologyDecoder,
-  name: string,
-  severity: number,
-  observed: string,
-  parameters: array(
-    object('Parameter', {
-      key: string,
-      value: scalarOrNumber,
-    }),
-  ),
-  overlap_group: nullable(string),
-  counted_once: boolean,
-  txn_ids: array(string),
-  first_hit: TimestampDecoder,
-  last_hit: TimestampDecoder,
-});
-
-/** The computed counterfactual: the score with the top contribution removed. */
-export type Counterfactual = {
-  feature: string;
-  label: string;
-  score_without: number;
-  band_without: Band | null;
-  expected_value_without: MoneyFigure;
-  statement: string;
-};
-
-const CounterfactualDecoder: Decoder<Counterfactual> = object('Counterfactual', {
-  feature: string,
-  label: string,
-  score_without: number,
-  band_without: nullable(BandDecoder),
-  expected_value_without: MoneyFigureDecoder,
-  statement: string,
-});
+/**
+ * `GET /api/cases/{case_id}` — `Envelope[CaseDetail]` (`apps/api/routers/cases.py:73-81`,
+ * the response model built at `:146-176`), `CaseDetail` in
+ * `apps/api/schemas/case.py:197-234`.
+ *
+ * THE SERVED SHAPE IS THE CONTRACT; THE WORKSPACE CONCEPTS ARE DERIVED FROM IT — the
+ * pattern section 4 establishes for the explorer, applied here. What follows decodes
+ * `CaseDetail` and every nested Pydantic model it references, field for field, and then
+ * derives the shape the page renders. The payload this section used to decode —
+ * `header{score, run_id, typology, points, reasons, decision_version, scored_at,
+ * feature_spec_hash, fusion}`, `contributions[].{label, sentence, source, evidence_ids}`,
+ * `evidence[].{amount, typology, txn_ids}`, `transactions[].{channel, rule_codes,
+ * balance_delta}`, `rule_hits[].{severity, overlap_group, first_hit}`,
+ * `counterfactual.{score_without, expected_value_without}` and a `narrative` block — is a
+ * client invention the route has never served, so `/cases/{id}` refused its own 200
+ * response and the centre of the demo never rendered. Where a served field has no UI
+ * equivalent it is dropped from the derived type, and where the UI wanted a figure the
+ * route does not send it is recorded in `apps/web/CONTRACT-GAPS.md`. Nothing is defaulted
+ * to zero, an empty string or the current time to make a branch render.
+ */
 
 /**
  * The four decision actions the API accepts — `DecisionAction` in
  * `apps/api/schemas/case.py:27`. There is no fifth: a client-side `revisit` reached
  * `DecisionCreate` as an unparseable literal and the whole write died at validation.
+ *
+ * Declared here, above every decoder that names them, because `object(...)` reads its
+ * member decoders at module-initialisation time: `DecisionRecordRow`'s decoder is built
+ * while this module is still evaluating, so a const declared further down the file would
+ * be in its temporal dead zone and the whole contract module would throw on import.
  */
 export const DecisionActionDecoder = oneOf('DecisionAction', 'escalate', 'dismiss', 'review', 'reverse');
 export type DecisionAction = 'escalate' | 'dismiss' | 'review' | 'reverse';
@@ -688,36 +518,650 @@ export type DecisionAction = 'escalate' | 'dismiss' | 'review' | 'reverse';
 export const FourEyesStateDecoder = oneOf('FourEyesState', 'not_required', 'pending', 'confirmed');
 export type FourEyesState = 'not_required' | 'pending' | 'confirmed';
 
+/** `ScorecardPointRow` — case.py:36-46, `from_attributes`. `reason_code` stores the
+ *  attribute key again rather than a sentence (`landing.py`, `SCORECARD_POINT_SOURCES`:
+ *  "the code a case page shows IS the attribute key"), and the human label stays in the
+ *  scoring artefact, so neither is a display name. */
+type ServedScorecardPointRow = {
+  attribute: string;
+  bin_label: string;
+  points: number;
+  woe: number;
+  reason_code: string;
+  population_share: number;
+  bad_rate: number;
+};
+
+const ServedScorecardPointRowDecoder: Decoder<ServedScorecardPointRow> = object('ScorecardPointRow', {
+  attribute: string,
+  bin_label: string,
+  points: integer,
+  woe: number,
+  reason_code: string,
+  population_share: number,
+  bad_rate: number,
+});
+
+/** `CalibrationBand` — case.py:48-115, mirrored against the shape as it stands NOW.
+ *
+ *  The block is one of two, and `kind` says which (`api.schemas.common.CalibrationKind`,
+ *  the two values of `CalibrationResult.confidence_label`, enforced on the row by the
+ *  `ck_score_calibration_kind` / pairing constraints added in
+ *  `apps/api/alembic/versions/0003_calibration_kind.py`):
+ *
+ *  * `calibrated_band` — `band`, `observed_rate` and `n` are all present, and the server's
+ *    own model validator refuses the block if any of the three is missing;
+ *  * `uncalibrated` — no rate, no band, no population, and a `note` in the fold's words
+ *    saying why calibration was refused.
+ *
+ *  So every field except `kind` decodes nullable, which is what the model declares, and
+ *  `kind` decodes as required: an answer that does not say which of the two it is has
+ *  broken the contract, and refusing it is the point. The client never turns an absent
+ *  rate into 0% — plan 03 §H requires the case to *state* the refusal, and DEV-024 names
+ *  the confusion this prevents ("0.00 over n=0" reading as a measured zero). */
+export const CalibrationKindDecoder = oneOf('CalibrationKind', 'calibrated_band', 'uncalibrated');
+export type CalibrationKind = 'calibrated_band' | 'uncalibrated';
+
+type ServedCalibrationBand = {
+  kind: CalibrationKind;
+  band: string | null;
+  observed_rate: number | null;
+  n: number | null;
+  note: string | null;
+};
+
+const ServedCalibrationBandDecoder: Decoder<ServedCalibrationBand> = object('CalibrationBand', {
+  kind: CalibrationKindDecoder,
+  band: nullable(string),
+  observed_rate: nullable(number),
+  n: nullable(integer),
+  note: nullable(string),
+});
+
+/** `MonteCarlo` — case.py:91-99. Percentiles, not a lower/upper pair: `p50` is served and
+ *  the client that invented `max_depth` never received one. */
+type ServedMonteCarlo = {
+  runs: number;
+  seed: number;
+  p05: Money;
+  p50: Money;
+  p95: Money;
+  interval: number[];
+};
+
+const ServedMonteCarloDecoder: Decoder<ServedMonteCarlo> = object('MonteCarlo', {
+  runs: integer,
+  seed: integer,
+  p05: MoneyDecoder,
+  p50: MoneyDecoder,
+  p95: MoneyDecoder,
+  interval: array(number),
+});
+
+/** `EconomicsBlock` — case.py:59-88. Every money field is a bare `Money`; the recovery
+ *  band arrives as rates (`list[float]`), never as money at each rate, so no band leg can
+ *  be rendered without the server pricing it first. */
+type ServedEconomicsBlock = {
+  exposure: Money;
+  expected_value: Money;
+  loss_avoided: Money;
+  analyst_minutes: number;
+  analyst_cost: Money;
+  friction_cost: Money;
+  recovery_rate: number;
+  recovery_sensitivity_band: number[];
+  assumptions: AssumptionLine[];
+  monte_carlo: ServedMonteCarlo | null;
+};
+
+const ServedEconomicsBlockDecoder: Decoder<ServedEconomicsBlock> = object('EconomicsBlock', {
+  exposure: MoneyDecoder,
+  expected_value: MoneyDecoder,
+  loss_avoided: MoneyDecoder,
+  analyst_minutes: number,
+  analyst_cost: MoneyDecoder,
+  friction_cost: MoneyDecoder,
+  recovery_rate: number,
+  recovery_sensitivity_band: array(number),
+  assumptions: array(AssumptionLineDecoder),
+  monte_carlo: nullable(ServedMonteCarloDecoder),
+});
+
+/** `EvidenceRow` — case.py:102-112. `kind` and `label` are stored strings, not a closed
+ *  set, and `detail` is a `dict[str, Any]` bag: the event's own payload, whose keys the
+ *  producer chooses per kind. */
+type ServedEvidenceRow = {
+  id: number;
+  occurred_at: string;
+  kind: string;
+  label: string;
+  txn_id: string | null;
+  rule_id: string | null;
+  object_key: string | null;
+  detail: Record<string, unknown>;
+};
+
+const ServedEvidenceRowDecoder: Decoder<ServedEvidenceRow> = object('EvidenceRow', {
+  id: integer,
+  occurred_at: TimestampDecoder,
+  kind: string,
+  label: string,
+  txn_id: nullable(string),
+  rule_id: nullable(string),
+  object_key: nullable(string),
+  detail: record(unknownDecoder),
+});
+
+/** `TransactionRow` — case.py:115-131. Balances are raw minor-unit integers with no
+ *  currency attached (`routers/cases.py:_transaction_row` forwards the stored column
+ *  untouched), so this client does not dress them in one. `event_date_local` is a stored
+ *  `date`, which JSON serialises as a calendar string. */
+type ServedTransactionRow = {
+  txn_id: string;
+  event_ts_utc: string;
+  local_hour: number;
+  event_date_local: string | null;
+  src_account_key: string | null;
+  dst_account_key: string | null;
+  amount: Money;
+  txn_type: string;
+  src_balance_before: number | null;
+  src_balance_after: number | null;
+  dst_balance_before: number | null;
+  dst_balance_after: number | null;
+  label_fraud: boolean | null;
+  label_typology: string | null;
+};
+
+const ServedTransactionRowDecoder: Decoder<ServedTransactionRow> = object('TransactionRow', {
+  txn_id: string,
+  event_ts_utc: TimestampDecoder,
+  local_hour: integer,
+  event_date_local: nullable(string),
+  src_account_key: nullable(string),
+  dst_account_key: nullable(string),
+  amount: MoneyDecoder,
+  txn_type: string,
+  src_balance_before: nullable(integer),
+  src_balance_after: nullable(integer),
+  dst_balance_before: nullable(integer),
+  dst_balance_after: nullable(integer),
+  label_fraud: nullable(boolean),
+  label_typology: nullable(string),
+});
+
+/** `RuleHitRow` — case.py:134-143. `observed` and `threshold` are numbers, not a
+ *  sentence, and `detail` is again a producer-chosen bag. */
+type ServedRuleHitRow = {
+  rule_id: string;
+  rule_name: string;
+  typology: string;
+  fired: boolean;
+  observed: number | null;
+  threshold: number | null;
+  detail: Record<string, unknown>;
+};
+
+const ServedRuleHitRowDecoder: Decoder<ServedRuleHitRow> = object('RuleHitRow', {
+  rule_id: string,
+  rule_name: string,
+  typology: string,
+  fired: boolean,
+  observed: nullable(number),
+  threshold: nullable(number),
+  detail: record(unknownDecoder),
+});
+
+/** `ShapRow` — case.py:146-153. The contribution the waterfall draws, with the ids of the
+ *  transactions that carry its evidence. There is no label and no sentence here: the
+ *  feature key IS the label the response offers. */
+type ServedShapRow = {
+  feature: string;
+  shap: number;
+  feature_value: number | null;
+  rank: number;
+  evidence_txn_ids: string[];
+};
+
+const ServedShapRowDecoder: Decoder<ServedShapRow> = object('ShapRow', {
+  feature: string,
+  shap: number,
+  feature_value: nullable(number),
+  rank: integer,
+  evidence_txn_ids: array(string),
+});
+
+/** `WatchlistEnrichment` — case.py:156-170. Advisory screening, structurally incapable of
+ *  being a decision, and it says so in two places. */
+type ServedWatchlistEnrichment = {
+  list_name: string;
+  list_version: string;
+  record_count: number;
+  hits: Record<string, unknown>[];
+  advisory_only: boolean;
+  note: string;
+};
+
+const ServedWatchlistEnrichmentDecoder: Decoder<ServedWatchlistEnrichment> = object('WatchlistEnrichment', {
+  list_name: string,
+  list_version: string,
+  record_count: integer,
+  hits: array(record(unknownDecoder)),
+  advisory_only: boolean,
+  note: string,
+});
+
+/** `DecisionRecordRow` — case.py:173-194. `prev_hash` is non-null on the server: the
+ *  genesis row carries a declared empty-chain hash rather than a missing one. */
+type ServedDecisionRecordRow = {
+  decision_id: string;
+  decision_seq: number;
+  chain_seq: number;
+  action: DecisionAction;
+  reason: string;
+  actor_id: string;
+  actor_roles: string[];
+  occurred_at: string;
+  exposure: Money;
+  four_eyes_required: boolean;
+  four_eyes_state: FourEyesState;
+  confirmed_by: string | null;
+  confirmed_at: string | null;
+  reversal_of_decision_id: string | null;
+  decided_on_superseded_run: boolean;
+  prev_hash: string;
+  row_hash: string;
+};
+
+const ServedDecisionRecordRowDecoder: Decoder<ServedDecisionRecordRow> = object('DecisionRecordRow', {
+  decision_id: string,
+  decision_seq: integer,
+  chain_seq: integer,
+  action: DecisionActionDecoder,
+  reason: string,
+  actor_id: string,
+  actor_roles: array(string),
+  occurred_at: TimestampDecoder,
+  exposure: MoneyDecoder,
+  four_eyes_required: boolean,
+  four_eyes_state: FourEyesStateDecoder,
+  confirmed_by: nullable(string),
+  confirmed_at: nullable(TimestampDecoder),
+  reversal_of_decision_id: nullable(string),
+  decided_on_superseded_run: boolean,
+  prev_hash: string,
+  row_hash: string,
+});
+
+/** The `reason_codes` bag. `CaseDetail.reason_codes` is `list[dict[str, Any]]`, and
+ *  `routers/alerts.py:_reasons` documents that the stored column exists in two shapes
+ *  across pipeline versions — a list of bare sentences and a list of `{code,label,points}`
+ *  maps — so the item is decoded as the union the producer actually issues. `points` is
+ *  null when the record carries none, never 0: zero points is a claim about the scorecard
+ *  and null is a claim about the record. */
+
+/** The WIRE form of one item — what a route sends and what a double must write. */
+export type ServedReasonCodeMapWire = {
+  code?: string;
+  reason_code?: string;
+  label?: string;
+  description?: string;
+  points?: number | null;
+};
+export type ServedReasonCodeWire = string | ServedReasonCodeMapWire;
+
+/** The normalised form the decoder produces, so `deriveCasePayload` never branches on
+ *  which pipeline version wrote the row. */
+type ServedReasonCode =
+  | { readonly shape: 'map'; readonly code: string; readonly label: string; readonly points: number | null }
+  | { readonly shape: 'sentence'; readonly text: string };
+
+const ServedReasonCodeDecoder: Decoder<ServedReasonCode> = {
+  kind: 'reason_code',
+  decode(value, path) {
+    if (typeof value === 'string') return { ok: true, value: { shape: 'sentence', text: value } };
+    if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+      return { ok: false, error: { path, message: 'expected a reason sentence or a reason map' } };
+    }
+    const row = value as Record<string, unknown>;
+    const rawCode = row.code ?? row.reason_code;
+    const rawLabel = row.label ?? row.description;
+    const rawPoints = row.points;
+    if (typeof rawPoints === 'number' && !Number.isFinite(rawPoints)) {
+      return { ok: false, error: { path: `${path}.points`, message: 'expected a finite number' } };
+    }
+    return {
+      ok: true,
+      value: {
+        shape: 'map',
+        code: typeof rawCode === 'string' ? rawCode : 'unspecified',
+        label: typeof rawLabel === 'string' ? rawLabel : '',
+        points: typeof rawPoints === 'number' ? rawPoints : null,
+      },
+    };
+  },
+};
+
+/** One candidate change from `routers/cases.py:counterfactual` (:507-599) — arithmetic
+ *  over stored integer points and stored band boundaries, never a second model call. */
+const ServedCounterfactualChangeDecoder = object('cheapest_change', {
+  attribute: string,
+  from_bin: string,
+  to_bin: string,
+  points_delta: integer,
+  resulting_points: integer,
+  resulting_band: BandDecoder,
+  resulting_action: string,
+});
+export type ServedCounterfactualChange = typeof ServedCounterfactualChangeDecoder extends Decoder<infer T> ? T : never;
+
+/** The WIRE form of the `counterfactual` bag. The route sends seven keys when a band-crossing
+ *  change exists and four when none does (`possible`, `current_band`, `total_points`, `note`
+ *  — `routers/cases.py:578-586`), so everything else is genuinely absent on the wire rather
+ *  than null. A double must be able to write the shape the route writes, which is why the
+ *  optional-ness lives here and not in the decoded type. */
+export type ServedCounterfactualWire = {
+  possible: boolean;
+  current_band: Band;
+  total_points: number;
+  note?: string | null;
+  current_action?: string | null;
+  basis?: string | null;
+  cheapest_change?: ServedCounterfactualChange | null;
+  alternatives?: ServedCounterfactualChange[];
+};
+
+const ServedCounterfactualDecoder = object('counterfactual', {
+  possible: boolean,
+  current_band: BandDecoder,
+  current_action: nullable(string),
+  total_points: integer,
+  note: nullable(string),
+  basis: nullable(string),
+  cheapest_change: nullable(ServedCounterfactualChangeDecoder),
+  // Nullable because the impossible-shape response omits the key outright; the derivation
+  // reads an omitted list as "no alternatives were served", never as an empty claim.
+  alternatives: nullable(array(ServedCounterfactualChangeDecoder)),
+});
+type ServedCounterfactual = typeof ServedCounterfactualDecoder extends Decoder<infer T> ? T : never;
+
+/** `CaseStatus` — case.py:228 with the literal at `catalog.py:28`. */
+export const CaseStatusDecoder = oneOf('CaseStatus', 'open', 'pending_four_eyes', 'decided', 'reversed');
+export type CaseStatus = 'open' | 'pending_four_eyes' | 'decided' | 'reversed';
+
+/** `CaseDetail` — case.py:197-234, all twenty-eight declared fields. */
+export type ServedCaseDetail = {
+  case_id: string;
+  pinned_run_id: string;
+  run_state: string;
+  superseded: boolean;
+  account_key: string;
+  band: Band;
+  fused_score: number;
+  scorecard_points_total: number;
+  scorecard_points: ServedScorecardPointRow[];
+  calibration: ServedCalibrationBand;
+  predicted_typology: string | null;
+  model_version: string;
+  reason_codes: ServedReasonCode[];
+  rule_ids: string[];
+  economics: ServedEconomicsBlock;
+  evidence: ServedEvidenceRow[];
+  transactions: ServedTransactionRow[];
+  transaction_total: number;
+  shap: ServedShapRow[];
+  rule_hits: ServedRuleHitRow[];
+  watchlist: ServedWatchlistEnrichment | null;
+  decision_history: ServedDecisionRecordRow[];
+  case_version: number;
+  status: CaseStatus;
+  rank_under_active_policy: number | null;
+  counterfactual: ServedCounterfactual | null;
+};
+
+/** `CaseDetail` as the WIRE sends it, for the fixture double in `src/fixtures/`.
+ *
+ *  Two fields differ from the decoded shape, and only because the decoder normalises them:
+ *  `reason_codes` arrives as bare sentences or `{code,label,points}` maps depending on the
+ *  pipeline version that wrote the row, and `counterfactual` arrives with different key sets
+ *  depending on whether a band-crossing change exists. A double typed against the DECODED
+ *  shape would have to pre-normalise its own bytes, which is precisely the agreement-with-
+ *  the-client this file exists to forbid. Everything else is identical. */
+export type ServedCaseDetailWire = Omit<ServedCaseDetail, 'reason_codes' | 'counterfactual'> & {
+  reason_codes: ServedReasonCodeWire[];
+  counterfactual: ServedCounterfactualWire | null;
+};
+
+export const ServedCaseDetailDecoder: Decoder<ServedCaseDetail> = object('CaseDetail', {
+  case_id: string,
+  pinned_run_id: string,
+  run_state: string,
+  superseded: boolean,
+  account_key: string,
+  band: BandDecoder,
+  fused_score: number,
+  scorecard_points_total: integer,
+  scorecard_points: array(ServedScorecardPointRowDecoder),
+  calibration: ServedCalibrationBandDecoder,
+  predicted_typology: nullable(string),
+  model_version: string,
+  reason_codes: array(ServedReasonCodeDecoder),
+  rule_ids: array(string),
+  economics: ServedEconomicsBlockDecoder,
+  evidence: array(ServedEvidenceRowDecoder),
+  transactions: array(ServedTransactionRowDecoder),
+  transaction_total: integer,
+  shap: array(ServedShapRowDecoder),
+  rule_hits: array(ServedRuleHitRowDecoder),
+  watchlist: nullable(ServedWatchlistEnrichmentDecoder),
+  decision_history: array(ServedDecisionRecordRowDecoder),
+  case_version: integer,
+  status: CaseStatusDecoder,
+  rank_under_active_policy: nullable(integer),
+  counterfactual: nullable(ServedCounterfactualDecoder),
+});
+
+/* ------------------------------------------- the workspace's own shapes --- */
+
+/** One scorecard point as the rail lists it. The invented `label` and `is_reason_code` are
+ *  gone: the row's own key is the only name the response offers for the attribute, and
+ *  whether an attribute was quoted as a reason is not a column the run stores per point. */
+export type ScorecardPoints = {
+  attribute: string;
+  bin: string;
+  points: number;
+  woe: number;
+  population_share: number;
+  bad_rate: number;
+};
+
+/** The stored Monte Carlo draw. `lower`/`upper` are `p05`/`p95` under the names the
+ *  interval strip uses, and `centre` is the served `p50` — a value the previous shape
+ *  dropped rather than one it lacked. `max_depth` is not on the wire (CONTRACT-GAPS). */
+export type MonteCarloInterval = {
+  lower: Money;
+  centre: Money;
+  upper: Money;
+  runs: number;
+  seed: number;
+  interval: number[];
+};
+
+/** `MoneyFigure` from a bare served `Money`. `band` stays null because the response sends
+ *  the recovery band as rates, not as money priced at each rate; putting a money figure
+ *  behind those rates would be arithmetic this client has no licence to run. */
+function moneyAsFigure(value: Money, rates: number[]): MoneyFigure {
+  return { value, band: null, band_rates: rates };
+}
+
+export type CaseEconomics = {
+  exposure: MoneyFigure;
+  expected_value: MoneyFigure;
+  loss_avoided: MoneyFigure;
+  review_minutes: number;
+  analyst_cost: MoneyFigure;
+  friction_cost: Money;
+  monte_carlo: MonteCarloInterval | null;
+  recovery_rate: number;
+  recovery_sensitivity_band: number[];
+  assumptions: AssumptionLine[];
+};
+
+/** Confidence for the case header, as a labelled state rather than as a number that may
+ *  not have been measured. `state` is the served `kind`, verbatim: the response says which
+ *  of the two readings this is, so the client never has to infer it from a null. */
+export type CaseCalibration = {
+  state: CalibrationKind;
+  /** Null for an uncalibrated block — there is no band the rate was measured over. */
+  band: string | null;
+  observed_rate: number | null;
+  n: number | null;
+  /** The run's own words for why calibration was refused; null when it was not refused. */
+  reason: string | null;
+};
+
+export type CaseHeader = {
+  case_id: string;
+  account_key: string;
+  /** `pinned_run_id`: the run this case's evidence was read from, not the newest one. */
+  run_id: string;
+  run_state: string;
+  superseded: boolean;
+  score: number;
+  scorecard_points_total: number;
+  band: Band;
+  calibration: CaseCalibration;
+  /** Served as a free string. `typologyMetaOf` reads it, and the header prints the served
+   *  id whether or not it is one of the twelve this product has glyphs for. */
+  typology: string | null;
+  model_version: string;
+  rule_ids: string[];
+  status: CaseStatus;
+  rank_under_active_policy: number | null;
+  points: ScorecardPoints[];
+  reasons: string[];
+  economics: CaseEconomics;
+  watchlist: WatchlistEnrichment | null;
+};
+
+/** `WatchlistEnrichment`, carried through so the rail can state that screening happened
+ *  and that it decided nothing. `hits` stays the served bag: its keys belong to the
+ *  screening source, and this client does not guess at them. */
+export type WatchlistEnrichment = {
+  list_name: string;
+  list_version: string;
+  record_count: number;
+  hits: Record<string, unknown>[];
+  advisory_only: boolean;
+  note: string;
+};
+
+export type EvidenceEvent = {
+  id: string;
+  ts_utc: string;
+  /** The stored kind string, not a five-member set the response never declares. */
+  kind: string;
+  title: string;
+  /** The served `detail` bag rendered as `key value` pairs. Formatting, not composition:
+   *  every token in it is a served scalar, and an empty bag says it is empty rather than
+   *  rendering as a blank cell. */
+  detail: string;
+  txn_id: string | null;
+  rule_id: string | null;
+  object_key: string | null;
+};
+
+export type TransactionRow = {
+  txn_id: string;
+  ts_utc: string;
+  local_hour: number;
+  event_date_local: string | null;
+  type: string;
+  amount: Money;
+  src_account_key: string | null;
+  dst_account_key: string | null;
+  /** The endpoint that is not this case's account, when exactly one of the two is. */
+  counterparty_key: string | null;
+  /** `in` when this account is the destination, `out` when it is the source. Null states
+   *  that neither endpoint is the case's account — which the route's own merge of the two
+   *  side-filtered queries makes reachable, and a fabricated direction would hide. */
+  direction: 'in' | 'out' | null;
+  is_zero_value: boolean;
+  label_fraud: boolean | null;
+  label_typology: string | null;
+};
+
+/** One persisted SHAP contribution. `label`, `sentence`, `evidence_ids` and `source` were
+ *  client inventions; `direction` is the sign of the served value, which is what the
+ *  waterfall's increasing/decreasing split means. */
+export type Contribution = {
+  feature: string;
+  value: number;
+  feature_value: number | null;
+  direction: 'increases' | 'decreases';
+  rank: number;
+  /** The cross-filter key: clicking this row filters the other panes to these ids. */
+  txn_ids: string[];
+};
+
+export type RuleHit = {
+  rule_code: string;
+  rule_name: string;
+  typology: string;
+  fired: boolean;
+  observed: number | null;
+  threshold: number | null;
+  /** The served `detail` bag, scalar entries only, in key order. */
+  parameters: { key: string; value: string | number | boolean }[];
+};
+
+/** The cheapest single stored-bin change that crosses a band line, as the route computes
+ *  it. Note what it is measured in: integer scorecard POINTS, not a probability. The
+ *  shape this client used to decode — `score_without` printed to three decimals beside a
+ *  band badge, and an `expected_value_without` money figure — asked a points total to read
+ * * as a score and asked for a re-priced EV the route never recomputed. */
+export type CounterfactualChange = {
+  attribute: string;
+  from_bin: string;
+  to_bin: string;
+  points_delta: number;
+  resulting_points: number;
+  resulting_band: Band;
+  resulting_action: string;
+};
+
+export type Counterfactual = {
+  possible: boolean;
+  current_band: Band;
+  current_action: string | null;
+  total_points: number;
+  change: CounterfactualChange | null;
+  alternatives: CounterfactualChange[];
+  /** The route's own words: the `note` when no single change moves the band, the `basis`
+   *  when one does. Null only when the response carried neither. */
+  statement: string | null;
+};
+
 /** One append-only decision, with its chain position. */
 export type Decision = {
   seq: number;
   decision: DecisionAction;
   reason: string;
   actor: string;
-  role: string;
+  /** `actor_roles` — a reviewer can hold several, so it stays a list rather than being
+   *  collapsed into one word by a client that has to pick. */
+  roles: string[];
   recorded_at: string;
   hash: string;
   prev_hash: string | null;
-  reversible_of: number | null;
+  /** `reversal_of_decision_id`: a decision id, not a sequence number. */
+  reversible_of: string | null;
   four_eyes_required: boolean;
-  superseded_run: boolean;
+  four_eyes_state: FourEyesState;
+  decided_on_superseded_run: boolean;
   /** Local-only: true while the write is in flight and unconfirmed by the server. */
   pending?: boolean | undefined;
 };
-
-const DecisionDecoder: Decoder<Decision> = object('Decision', {
-  seq: integer,
-  decision: DecisionActionDecoder,
-  reason: string,
-  actor: string,
-  role: string,
-  recorded_at: TimestampDecoder,
-  hash: string,
-  prev_hash: nullable(string),
-  reversible_of: nullable(integer),
-  four_eyes_required: boolean,
-  superseded_run: boolean,
-});
 
 export type CasePayload = {
   header: CaseHeader;
@@ -729,26 +1173,237 @@ export type CasePayload = {
   decisions: Decision[];
   /** Optimistic-concurrency token for the next write (plan §13: a stale token is a 409). */
   decision_version: number;
-  narrative: { text: string; source: 'llm' | 'template'; degraded: boolean } | null;
+  /** `transaction_total` is the count matching the filter before the route's own
+   *  `TRANSACTION_CAP` (`routers/cases.py:59`) truncated the list, so the table can say how
+   *  many rows it is not showing rather than implying the window was quiet. */
+  transaction_total: number;
 };
 
-export const CasePayloadDecoder: Decoder<CasePayload> = object('CasePayload', {
-  header: CaseHeaderDecoder,
-  evidence: array(EvidenceEventDecoder),
-  transactions: array(TransactionRowDecoder),
-  contributions: array(ContributionDecoder),
-  rule_hits: array(RuleHitDecoder),
-  counterfactual: nullable(CounterfactualDecoder),
-  decisions: array(DecisionDecoder),
-  decision_version: integer,
-  narrative: nullable(
-    object('Narrative', {
-      text: string,
-      source: oneOf('NarrativeSource', 'llm', 'template'),
-      degraded: boolean,
-    }),
-  ),
-});
+/* ------------------------------------------------------------- derivation -- */
+
+/** The served `detail` bag rendered for one line: scalar entries as `key value`, in the
+ *  key order the JSON arrived in. Nested values are skipped rather than stringified as
+ *  `[object Object]`, and an empty bag is named as empty. */
+function renderBag(bag: Record<string, unknown>): string {
+  const parts: string[] = [];
+  for (const key of Object.keys(bag)) {
+    const value = bag[key];
+    if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
+      parts.push(`${key} ${String(value)}`);
+    }
+  }
+  return parts.length > 0 ? parts.join(' · ') : 'no detail stored on this event';
+}
+
+/** The served bag's scalar entries as pairs, for the rule-hit parameter list. */
+function scalarEntries(bag: Record<string, unknown>): { key: string; value: string | number | boolean }[] {
+  return Object.keys(bag)
+    .filter((key) => {
+      const value = bag[key];
+      return typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean';
+    })
+    .map((key) => ({ key, value: bag[key] as string | number | boolean }));
+}
+
+/** `CalibrationBand` → the header's confidence block. Every value passes through under its
+ *  served name; the only thing added is that `state` is the served `kind`. Nothing is
+ *  defaulted: an uncalibrated block arrives with a null rate, a null band and a null
+ *  population, and it is rendered as a refusal, not as a measurement of zero. */
+function deriveCalibration(served: ServedCalibrationBand): CaseCalibration {
+  return {
+    state: served.kind,
+    band: served.band,
+    observed_rate: served.observed_rate,
+    n: served.n,
+    reason: served.note,
+  };
+}
+
+/** Which side of the transfer is the counterparty. The route assembled this row from the
+ *  `src_account_key` / `dst_account_key` queries it ran for this exact account
+ *  (`routers/cases.py:_transactions`), so naming the other endpoint is the same read it
+ *  already made — not a guess from a column the client has to interpret. */
+function deriveCounterparty(served: ServedTransactionRow, accountKey: string): string | null {
+  const isSource = served.src_account_key === accountKey;
+  const isDestination = served.dst_account_key === accountKey;
+  if (isSource && !isDestination) return served.dst_account_key;
+  if (isDestination && !isSource) return served.src_account_key;
+  // Both sides this account (a self-transfer) or neither: no counterparty to name, and no
+  // direction to claim.
+  return isSource && isDestination ? null : (served.dst_account_key ?? served.src_account_key ?? null);
+}
+
+function deriveDirection(served: ServedTransactionRow, accountKey: string): 'in' | 'out' | null {
+  const isSource = served.src_account_key === accountKey;
+  const isDestination = served.dst_account_key === accountKey;
+  if (isDestination && !isSource) return 'in';
+  if (isSource && !isDestination) return 'out';
+  return null;
+}
+
+/** The whole derivation, in one pure place so the unit test can drive it directly. */
+export function deriveCasePayload(served: ServedCaseDetail): CasePayload {
+  const economics = served.economics;
+  return {
+    header: {
+      case_id: served.case_id,
+      account_key: served.account_key,
+      run_id: served.pinned_run_id,
+      run_state: served.run_state,
+      superseded: served.superseded,
+      score: served.fused_score,
+      scorecard_points_total: served.scorecard_points_total,
+      band: served.band,
+      calibration: deriveCalibration(served.calibration),
+      typology: served.predicted_typology,
+      model_version: served.model_version,
+      rule_ids: served.rule_ids,
+      status: served.status,
+      rank_under_active_policy: served.rank_under_active_policy,
+      points: served.scorecard_points.map(
+        (row): ScorecardPoints => ({
+          attribute: row.attribute,
+          bin: row.bin_label,
+          points: row.points,
+          woe: row.woe,
+          population_share: row.population_share,
+          bad_rate: row.bad_rate,
+        }),
+      ),
+      // The served reason bag, in the served order. A `{code,label,points}` map prints its
+      // label and, when the record carries one, its signed points; a bare sentence prints
+      // as the sentence it is. Nothing is looked up, inferred or padded.
+      reasons: served.reason_codes.map((code) =>
+        code.shape === 'sentence'
+          ? code.text
+          : code.points === null
+            ? `${code.label.length > 0 ? code.label : code.code}`
+            : `${code.label.length > 0 ? code.label : code.code} (${String(code.points)} points)`,
+      ),
+      economics: {
+        exposure: moneyAsFigure(economics.exposure, economics.recovery_sensitivity_band),
+        expected_value: moneyAsFigure(economics.expected_value, economics.recovery_sensitivity_band),
+        loss_avoided: moneyAsFigure(economics.loss_avoided, economics.recovery_sensitivity_band),
+        review_minutes: economics.analyst_minutes,
+        analyst_cost: moneyAsFigure(economics.analyst_cost, economics.recovery_sensitivity_band),
+        friction_cost: economics.friction_cost,
+        recovery_rate: economics.recovery_rate,
+        recovery_sensitivity_band: economics.recovery_sensitivity_band,
+        assumptions: economics.assumptions,
+        monte_carlo:
+          economics.monte_carlo === null
+            ? null
+            : {
+                lower: economics.monte_carlo.p05,
+                centre: economics.monte_carlo.p50,
+                upper: economics.monte_carlo.p95,
+                runs: economics.monte_carlo.runs,
+                seed: economics.monte_carlo.seed,
+                interval: economics.monte_carlo.interval,
+              },
+      },
+      watchlist:
+        served.watchlist === null
+          ? null
+          : {
+              list_name: served.watchlist.list_name,
+              list_version: served.watchlist.list_version,
+              record_count: served.watchlist.record_count,
+              hits: served.watchlist.hits,
+              advisory_only: served.watchlist.advisory_only,
+              note: served.watchlist.note,
+            },
+    },
+    evidence: served.evidence.map(
+      (row): EvidenceEvent => ({
+        // The served id is an integer; the DOM needs a key, and `String` of a served value
+        // is that key rather than a composed one.
+        id: String(row.id),
+        ts_utc: row.occurred_at,
+        kind: row.kind,
+        title: row.label,
+        detail: renderBag(row.detail),
+        txn_id: row.txn_id,
+        rule_id: row.rule_id,
+        object_key: row.object_key,
+      }),
+    ),
+    transactions: served.transactions.map(
+      (row): TransactionRow => ({
+        txn_id: row.txn_id,
+        ts_utc: row.event_ts_utc,
+        local_hour: row.local_hour,
+        event_date_local: row.event_date_local,
+        type: row.txn_type,
+        amount: row.amount,
+        src_account_key: row.src_account_key,
+        dst_account_key: row.dst_account_key,
+        counterparty_key: deriveCounterparty(row, served.account_key),
+        direction: deriveDirection(row, served.account_key),
+        is_zero_value: row.amount.minor === 0,
+        label_fraud: row.label_fraud,
+        label_typology: row.label_typology,
+      }),
+    ),
+    contributions: served.shap.map(
+      (row): Contribution => ({
+        feature: row.feature,
+        value: row.shap,
+        feature_value: row.feature_value,
+        direction: row.shap < 0 ? 'decreases' : 'increases',
+        rank: row.rank,
+        txn_ids: row.evidence_txn_ids,
+      }),
+    ),
+    rule_hits: served.rule_hits.map(
+      (row): RuleHit => ({
+        rule_code: row.rule_id,
+        rule_name: row.rule_name,
+        typology: row.typology,
+        fired: row.fired,
+        observed: row.observed,
+        threshold: row.threshold,
+        parameters: scalarEntries(row.detail),
+      }),
+    ),
+    counterfactual:
+      served.counterfactual === null
+        ? null
+        : {
+            possible: served.counterfactual.possible,
+            current_band: served.counterfactual.current_band,
+            current_action: served.counterfactual.current_action,
+            total_points: served.counterfactual.total_points,
+            change: served.counterfactual.cheapest_change === null ? null : served.counterfactual.cheapest_change,
+            alternatives: served.counterfactual.alternatives ?? [],
+            statement: served.counterfactual.note ?? served.counterfactual.basis ?? null,
+          },
+    decisions: served.decision_history.map(
+      (row): Decision => ({
+        seq: row.decision_seq,
+        decision: row.action,
+        reason: row.reason,
+        actor: row.actor_id,
+        roles: row.actor_roles,
+        recorded_at: row.occurred_at,
+        hash: row.row_hash,
+        prev_hash: row.prev_hash,
+        reversible_of: row.reversal_of_decision_id,
+        four_eyes_required: row.four_eyes_required,
+        four_eyes_state: row.four_eyes_state,
+        decided_on_superseded_run: row.decided_on_superseded_run,
+      }),
+    ),
+    decision_version: served.case_version,
+    transaction_total: served.transaction_total,
+  };
+}
+
+export const CasePayloadDecoder: Decoder<CasePayload> = mapDecode(
+  ServedCaseDetailDecoder,
+  deriveCasePayload,
+  'CasePayload',
+);
 
 /**
  * The write body, field for field from `DecisionCreate` in
@@ -816,32 +1471,151 @@ export type FourEyesConfirmBody = { expected_version: number; confirmation_note:
 
 /* ============================================================ 4. network */
 
-export type GraphNode = {
-  key: string;
+/**
+ * `GET /api/graph/subgraph` — `NetworkSubgraph` in `apps/api/schemas/catalog.py:283-302`,
+ * built by `apps/api/routers/graph.py:220-302`.
+ *
+ * THE SERVED SHAPE IS THE CONTRACT; THE UI CONCEPTS ARE DERIVED FROM IT. The decoder
+ * below accepts exactly the field names the response model declares and nothing else,
+ * and the three things the explorer shows that the route does not send — per-node hop
+ * distance, the scrubber's edge-formation buckets, the overlay counts — are computed in
+ * `lib/network/derive.ts` from those served bytes. Each derivation is the same
+ * computation the server already runs on the same edge set, and where the server has a
+ * concept at all: an absent flag counts zero and the chip that would use it renders
+ * disabled and says why, rather than offering a toggle that selects nothing.
+ *
+ * Nothing here carries a field the model does not declare. The types this section used
+ * to decode — `key`, `is_cycle_member` as a served boolean, `typology`, `is_reversal`,
+ * `high_velocity`, `edges_by_bucket`, `window{from,to}`, `cap`, and an
+ * `overlays{...}` object on the wire — are client inventions, and the invented fields
+ * are gone from `GraphEdge` rather than kept as branches that can never fire.
+ */
+
+/** `NetworkNode` — catalog.py:238-249. `id` is an account key, never a raw identifier
+ *  (03 §D), and `flags` is a `list[str]` of the flag names `_node_flags` wrote. */
+export type ServedNetworkNode = {
+  id: string;
+  label: string;
   band: Band | null;
   exposure: Money | null;
   degree: number;
+  community_id: number | null;
+  is_seed: boolean;
+  is_rail: boolean;
+  flags: string[];
+};
+
+const ServedNetworkNodeDecoder: Decoder<ServedNetworkNode> = object('NetworkNode', {
+  id: string,
+  label: string,
+  band: nullable(BandDecoder),
+  exposure: nullable(MoneyDecoder),
+  degree: integer,
+  community_id: nullable(integer),
+  is_seed: boolean,
+  is_rail: boolean,
+  flags: array(string),
+});
+
+/** `NetworkEdge` — catalog.py:252-261. There is no edge id on the wire: `(run_id, src,
+ *  dst)` is unique per `uq_graph_edge`, so the explorer's element key is composed from
+ *  the two served endpoints. `txn_count`, not `count`; `first_ts`/`last_ts`, not
+ *  `ts_first`/`ts_last`; `flags` is `["self_pair"]` or nothing today. */
+export type ServedNetworkEdge = {
+  source: string;
+  target: string;
+  total: Money;
+  txn_count: number;
+  first_ts: string;
+  last_ts: string;
+  flags: string[];
+};
+
+const ServedNetworkEdgeDecoder: Decoder<ServedNetworkEdge> = object('NetworkEdge', {
+  source: string,
+  target: string,
+  total: MoneyDecoder,
+  txn_count: integer,
+  first_ts: TimestampDecoder,
+  last_ts: TimestampDecoder,
+  flags: array(string),
+});
+
+/** `CommunityMetaNode` — catalog.py:264-283. `member_count` is the community's stored
+ *  true size, which is what a meta-node's label has to carry; `total` is nullable
+ *  because an unpriced community is served as null rather than as zero. */
+export type ServedCommunityMetaNode = {
   community_id: number;
-  node_type: 'account' | 'rail' | 'external' | 'meta';
+  member_count: number;
+  total: Money | null;
+  representative_account_key: string;
+};
+
+const ServedCommunityMetaNodeDecoder: Decoder<ServedCommunityMetaNode> = object('CommunityMetaNode', {
+  community_id: integer,
+  member_count: integer,
+  total: nullable(MoneyDecoder),
+  representative_account_key: string,
+});
+
+export type ServedNetworkSubgraph = {
+  run_id: string;
+  seed_account_key: string;
+  hops: number;
+  nodes: ServedNetworkNode[];
+  edges: ServedNetworkEdge[];
+  collapsed_communities: ServedCommunityMetaNode[];
+  node_cap: number;
+  truncated: boolean;
+  truncation_reason: string | null;
+  window_start: string | null;
+  window_end: string | null;
+  counterparty_note: string | null;
+};
+
+const ServedNetworkSubgraphDecoder: Decoder<ServedNetworkSubgraph> = object('NetworkSubgraph', {
+  run_id: string,
+  seed_account_key: string,
+  hops: integer,
+  nodes: array(ServedNetworkNodeDecoder),
+  edges: array(ServedNetworkEdgeDecoder),
+  collapsed_communities: array(ServedCommunityMetaNodeDecoder),
+  node_cap: integer,
+  truncated: boolean,
+  truncation_reason: nullable(string),
+  window_start: nullable(TimestampDecoder),
+  window_end: nullable(TimestampDecoder),
+  counterparty_note: nullable(string),
+});
+
+/** The explorer's node, after derivation. `key`/`node_type`/`flagged`/`is_cycle_member`/
+ *  `hops`/`true_size` are the names the canvas and the rail read; every one of them is
+ *  computed above this line from a served field, and each is commented at its derivation.
+ *  There is no `'external'` member: the response model has no notion of an external
+ *  party, so the canvas has no rule for one either. */
+export type GraphNode = {
+  key: string;
+  label: string;
+  band: Band | null;
+  exposure: Money | null;
+  degree: number;
+  community_id: number | null;
+  is_seed: boolean;
+  is_rail: boolean;
+  /** Served, verbatim. */
+  flags: string[];
+  node_type: 'account' | 'rail' | 'meta';
   flagged: boolean;
   is_cycle_member: boolean;
-  hops: number;
+  /** Derived by BFS from `seed_account_key`; null when the walk found no path inside
+   *  the route's own four-hop ceiling. The UI has to say that, not print a sentinel. */
+  hops: number | null;
+  /** `member_count` of the collapsed community whose representative this node is. */
   true_size: number | null;
 };
 
-const GraphNodeDecoder: Decoder<GraphNode> = object('GraphNode', {
-  key: string,
-  band: nullable(BandDecoder),
-  exposure: nullable(MoneyDecoder),
-  degree: number,
-  community_id: integer,
-  node_type: oneOf('NodeType', 'account', 'rail', 'external', 'meta'),
-  flagged: boolean,
-  is_cycle_member: boolean,
-  hops: integer,
-  true_size: nullable(integer),
-});
-
+/** The explorer's edge: the served fields, renamed only where the wire name is awkward
+ *  in TS (`txn_count` → `count`), plus `id` composed from the served endpoints. */
 export type GraphEdge = {
   id: string;
   source: string;
@@ -850,59 +1624,106 @@ export type GraphEdge = {
   ts_last: string;
   count: number;
   total: Money;
-  typology: Typology | null;
-  is_reversal: boolean;
-  high_velocity: boolean;
+  flags: string[];
+  /** A self-transfer, `A -> A`. The one edge flag the pipeline writes. */
+  self_pair: boolean;
 };
 
-const GraphEdgeDecoder: Decoder<GraphEdge> = object('GraphEdge', {
-  id: string,
-  source: string,
-  target: string,
-  ts_first: TimestampDecoder,
-  ts_last: TimestampDecoder,
-  count: number,
-  total: MoneyDecoder,
-  typology: nullable(TypologyDecoder),
-  is_reversal: boolean,
-  high_velocity: boolean,
-});
-
 export type Subgraph = {
+  run_id: string;
+  seed_account_key: string;
   nodes: GraphNode[];
   edges: GraphEdge[];
   truncated: boolean;
+  truncation_reason: string | null;
+  /** `node_cap`, the server-side ceiling the response names. */
   cap: number;
-  collapsed_communities: { community_id: number; true_size: number }[];
-  window: { from: string; to: string };
+  collapsed_communities: ServedCommunityMetaNode[];
+  /** Both bounds are nullable on the wire (`window_start`/`window_end`), and an absent
+   *  bound is an unbounded window: the UI says so rather than printing an epoch. */
+  window: { from: string | null; to: string | null };
+  /** The route's own sentence for an account with no counterparties in the window
+   *  (`counterparty_note`, catalog.py:296-301) — quoted by the empty state rather than
+   *  paraphrased, because the window and the radius that produced it are server facts. */
+  counterparty_note: string | null;
+  /** How many edges the bucket list leaves out because they carry no parseable
+   *  `first_ts`. Zero for a payload the server can build, but it is stated rather than
+   *  assumed away, because the scrubber's replay silently omits them. */
+  unbucketed_edges: number;
+  /** Client-derived from the served `first_ts` values. Drives the time scrubber. */
+  edges_by_bucket: EdgeBucket[];
   hops: number;
-  edges_by_bucket: { bucket: string; edges: number }[];
-  overlays: {
-    cycles: number;
-    high_velocity_hops: number;
-    fan_stars: number;
-    dense_communities: number;
-    flagged: number;
-  };
+  /** Client-derived counts of the nodes that carry each flag. */
+  overlays: OverlayCounts;
 };
 
-export const SubgraphDecoder: Decoder<Subgraph> = object('Subgraph', {
-  nodes: array(GraphNodeDecoder),
-  edges: array(GraphEdgeDecoder),
-  truncated: boolean,
-  cap: integer,
-  collapsed_communities: array(object('Collapsed', { community_id: integer, true_size: integer })),
-  window: object('Window', { from: TimestampDecoder, to: TimestampDecoder }),
-  hops: integer,
-  edges_by_bucket: array(object('Bucket', { bucket: TimestampDecoder, edges: integer })),
-  overlays: object('Overlays', {
-    cycles: integer,
-    high_velocity_hops: integer,
-    fan_stars: integer,
-    dense_communities: integer,
-    flagged: integer,
-  }),
-});
+/** The whole derivation, in one pure place so the unit test can drive it directly. */
+function deriveSubgraph(served: ServedNetworkSubgraph): Subgraph {
+  const depths = hopDepths(served.seed_account_key, served.edges);
+  /* A meta-node is identified the way the response identifies it: its key is a
+     collapsed community's `representative_account_key`. `is_rail` wins over it because
+     the rail flag is stored per edge endpoint and is the stronger statement about the
+     node, and the graph layer's collapse policy never collapses the seed's own
+     community, so the two never compete in practice. */
+  const sizeByRepresentative = new Map(
+    served.collapsed_communities.map((entry) => [entry.representative_account_key, entry.member_count]),
+  );
+  const nodes = served.nodes.map((node): GraphNode => {
+    const trueSize = sizeByRepresentative.get(node.id) ?? null;
+    return {
+      key: node.id,
+      label: node.label,
+      band: node.band,
+      exposure: node.exposure,
+      degree: node.degree,
+      community_id: node.community_id,
+      is_seed: node.is_seed,
+      is_rail: node.is_rail,
+      flags: node.flags,
+      node_type: node.is_rail ? 'rail' : trueSize !== null ? 'meta' : 'account',
+      // `_node_flags` adds "flagged" for a D or E band, and "cycle" only if an edge
+      // touching this account carried it — which the pipeline does not write today.
+      flagged: node.flags.includes(FLAG_FLAGGED),
+      is_cycle_member: node.flags.includes(FLAG_CYCLE),
+      hops: depths.get(node.id) ?? null,
+      true_size: trueSize,
+    };
+  });
+  const edges = served.edges.map(
+    (edge): GraphEdge => ({
+      // Composed from the two served endpoints; `(run_id, src, dst)` is unique per
+      // uq_graph_edge, so this is an identity and not a fabricated field.
+      id: `${edge.source}->${edge.target}`,
+      source: edge.source,
+      target: edge.target,
+      ts_first: edge.first_ts,
+      ts_last: edge.last_ts,
+      count: edge.txn_count,
+      total: edge.total,
+      flags: edge.flags,
+      self_pair: edge.flags.includes(FLAG_SELF_PAIR),
+    }),
+  );
+  const bucketed = bucketEdges(edges);
+  return {
+    run_id: served.run_id,
+    seed_account_key: served.seed_account_key,
+    nodes,
+    edges,
+    truncated: served.truncated,
+    truncation_reason: served.truncation_reason,
+    cap: served.node_cap,
+    collapsed_communities: served.collapsed_communities,
+    window: { from: served.window_start, to: served.window_end },
+    counterparty_note: served.counterparty_note,
+    unbucketed_edges: bucketed.unbucketed,
+    edges_by_bucket: bucketed.buckets,
+    hops: served.hops,
+    overlays: overlayCounts(nodes),
+  };
+}
+
+export const SubgraphDecoder: Decoder<Subgraph> = mapDecode(ServedNetworkSubgraphDecoder, deriveSubgraph, 'Subgraph');
 
 /* =========================================================== 5. scorecard */
 
@@ -1151,176 +1972,446 @@ export const PolicyDefaultsDecoder: Decoder<PolicyDefaults> = object('PolicyDefa
 
 /* ============================================== 7. model / backtest / valid */
 
-export type DatasetCard = {
-  name: string;
-  url: string;
-  licence: string;
-  licence_note: string;
-  citation: string;
-  retrieved_at: string;
-  files: { filename: string; sha256: string; rows: number; bytes: number }[];
-  rows: number;
-  period: { from: string; to: string };
-  class_balance: { label: string; count: number; rate: number }[];
-  splits: { name: string; from: string; to: string; positives: number }[];
-  label_definition: string;
-  label_limits: string[];
-  sampling_rule: string | null;
-  known_biases: string[];
+/**
+ * `GET /api/meta/dataset` — `DatasetMeta` in `apps/api/schemas/catalog.py:77-91`, built
+ * by `apps/api/routers/meta.py:130-160` out of `config/sources.yaml`.
+ *
+ * The card is per-source, not one object: two corpora, each with its own licence,
+ * obligation, citation, files and label caveat, plus the sources the project declared
+ * and refused, and the measurements with the command that produced each one. The client
+ * used to decode a single-source card (`name / url / licence / rows / period /
+ * class_balance / splits`), none of which the route has ever sent, so `/model`'s dataset
+ * pane could only ever refuse. `row_count` and `size_bytes` are nullable on the wire —
+ * a file the run never counted is served as null, and the pane says so rather than
+ * printing 0 rows.
+ */
+export type DatasetFileCard = {
+  file_name: string;
+  sha256: string;
+  size_bytes: number | null;
+  row_count: number | null;
+  verified_at: string | null;
 };
-
-export const DatasetCardDecoder: Decoder<DatasetCard> = object('DatasetCard', {
-  name: string,
-  url: string,
-  licence: string,
-  licence_note: string,
-  citation: string,
-  retrieved_at: TimestampDecoder,
-  files: array(object('FileEntry', { filename: string, sha256: string, rows: integer, bytes: integer })),
-  rows: integer,
-  period: object('Period', { from: TimestampDecoder, to: TimestampDecoder }),
-  class_balance: array(object('Balance', { label: string, count: integer, rate: number })),
-  splits: array(object('Split', { name: string, from: TimestampDecoder, to: TimestampDecoder, positives: integer })),
-  label_definition: string,
-  label_limits: array(string),
-  sampling_rule: nullable(string),
-  known_biases: array(string),
+const DatasetFileCardDecoder: Decoder<DatasetFileCard> = object('DatasetFileCard', {
+  file_name: string,
+  sha256: string,
+  size_bytes: nullable(integer),
+  row_count: nullable(integer),
+  verified_at: nullable(TimestampDecoder),
 });
 
-export type Validation = {
-  corpora: { key: string; label: string; note: string }[];
-  folds: {
-    index: number;
-    train_from: string;
-    train_to: string;
-    embargo_days: number;
-    test_from: string;
-    test_to: string;
-    positives: number;
-    skipped_reason: string | null;
-  }[];
-  optimised_on: string;
-  entity_disjoint_note: string;
-  baseline_table: {
-    corpus: string;
-    variant: string;
-    pr_auc: number;
-    pr_auc_ci: number[];
-    precision_at_budget: number;
-    recall_at_budget: number;
-    net_benefit: MoneyFigure;
-    benefit_per_analyst_hour: MoneyFigure;
-    is_final: boolean;
-  }[];
-  pr_curve: { corpus: string; recall: number; precision: number }[];
-  operating_point: { corpus: string; recall: number; precision: number; budget_label: string };
-  reliability: { bin: string; predicted: number; observed: number; n: number }[];
-  brier: number;
-  calibration_floor: { min_positives: number; refused: boolean; method: string };
-  confusion: { tp: number; fp: number; fn: number; tn: number; budget_label: string; precision_undefined: boolean };
-  ablation: {
-    variant: string;
-    question: string;
-    pr_auc: number;
-    ci: number[];
-    net_benefit: MoneyFigure;
-    corpus: string;
-  }[];
-  shap_importance: { feature: string; label: string; mean_abs: number }[];
-  typology_recall: { typology: Typology; rule_code: string; recall: number; support: number }[];
-  fairness: { dimension: string; bucket: string; false_positive_rate: number; n: number }[];
-  perturbations: { name: string; magnitude: number; measure: string; result: number; note: string }[];
-  drawdown: { policy: string; value: Money; zero_because: string | null }[];
-  risk_adjusted: { value: number; formula: string; not_sharpe_because: string };
-  seeds: { count: number; mean: number; sd: number; metric: string };
-  configurations_evaluated: number;
-  test_touched_at: string | null;
-  limitations: string[];
-  degraded_dependencies: { name: string; fallback: string }[];
+export type DatasetSourceCard = {
+  source_id: string;
+  name: string;
+  role: string;
+  module: string | null;
+  source_url: string;
+  retrieval: string;
+  /** `license`, American-spelled on the wire (`DatasetSourceCard.license`). */
+  license: string;
+  license_obligation: string;
+  citation: string;
+  description: string;
+  label_caveat: string;
+  known_biases: string[];
+  synthetic_fields: string[];
+  ingest_allowed: boolean;
+  retrieved_at: string | null;
+  files: DatasetFileCard[];
+};
+const DatasetSourceCardDecoder: Decoder<DatasetSourceCard> = object('DatasetSourceCard', {
+  source_id: string,
+  name: string,
+  role: string,
+  module: nullable(string),
+  source_url: string,
+  retrieval: string,
+  license: string,
+  license_obligation: string,
+  citation: string,
+  description: string,
+  label_caveat: string,
+  known_biases: array(string),
+  synthetic_fields: array(string),
+  ingest_allowed: boolean,
+  retrieved_at: nullable(string),
+  files: array(DatasetFileCardDecoder),
+});
+
+/** `MeasurementCard` — catalog.py:64-74: a number about the corpus plus the command
+ *  that measured it. A statistic with no command is not served, so the client never has
+ *  to decide what to do without one. */
+export type MeasurementCard = {
+  scope: string;
+  name: string;
+  value: number;
+  unit: string | null;
+  command: string;
+  measured_at: string;
+};
+const MeasurementCardDecoder: Decoder<MeasurementCard> = object('MeasurementCard', {
+  scope: string,
+  name: string,
+  value: number,
+  unit: nullable(string),
+  command: string,
+  measured_at: TimestampDecoder,
+});
+
+export type RefusedSource = { source_id: string; name: string; reason: string; status: string };
+const RefusedSourceDecoder: Decoder<RefusedSource> = object('RefusedSource', {
+  source_id: string,
+  name: string,
+  reason: string,
+  status: string,
+});
+
+export type DatasetCard = {
+  sources: DatasetSourceCard[];
+  refused_sources: RefusedSource[];
+  measurements: MeasurementCard[];
+  /** `config/pipeline.yaml`'s `sampling` section, verbatim. Typed as a scalar bag
+   *  because the model types it `dict[str, Any]`: the route forwards the file, so the
+   *  client may read what is there but may not require a key the config may drop.
+   *  Booleans are admitted because YAML has them and the bag does not forbid them. */
+  sampling: Record<string, string | number | boolean>;
+  deidentification: {
+    account_key: Record<string, string | number | boolean>;
+    raw_identifier_policy: Record<string, string>;
+    note: string;
+  };
+  disclaimer: string;
 };
 
-export const ValidationDecoder: Decoder<Validation> = object('Validation', {
-  corpora: array(object('Corpus', { key: string, label: string, note: string })),
-  folds: array(
-    object('Fold', {
-      index: integer,
-      train_from: TimestampDecoder,
-      train_to: TimestampDecoder,
-      embargo_days: number,
-      test_from: TimestampDecoder,
-      test_to: TimestampDecoder,
-      positives: integer,
-      skipped_reason: nullable(string),
-    }),
-  ),
-  optimised_on: string,
-  entity_disjoint_note: string,
-  baseline_table: array(
-    object('BaselineRow', {
-      corpus: string,
-      variant: string,
-      pr_auc: number,
-      pr_auc_ci: array(number),
-      precision_at_budget: number,
-      recall_at_budget: number,
-      net_benefit: MoneyFigureDecoder,
-      benefit_per_analyst_hour: MoneyFigureDecoder,
-      is_final: boolean,
-    }),
-  ),
-  pr_curve: array(object('PrPoint', { corpus: string, recall: number, precision: number })),
-  operating_point: object('OperatingPoint', {
-    corpus: string,
-    recall: number,
-    precision: number,
-    budget_label: string,
+export const DatasetCardDecoder: Decoder<DatasetCard> = object('DatasetMeta', {
+  sources: array(DatasetSourceCardDecoder),
+  refused_sources: array(RefusedSourceDecoder),
+  measurements: array(MeasurementCardDecoder),
+  sampling: record(scalarInBag),
+  deidentification: object('Deidentification', {
+    account_key: record(scalarInBag),
+    raw_identifier_policy: record(string),
+    note: string,
   }),
-  reliability: array(object('ReliabilityBin', { bin: string, predicted: number, observed: number, n: integer })),
+  disclaimer: string,
+});
+
+/**
+ * `GET /api/validation` — `ValidationBundle` in `apps/api/schemas/validation.py:231-254`,
+ * built by `apps/api/routers/validation.py:128-174`.
+ *
+ * THE BUNDLE IS THE CONTRACT. This section used to decode fourteen names the route has
+ * never sent (`baseline_table`, `pr_curve`, `operating_point`, `reliability`, `brier`,
+ * `calibration_floor`, `shap_importance`, `drawdown`, `risk_adjusted`, `seeds`,
+ * `configurations_evaluated`, `test_touched_at`, `degraded_dependencies`,
+ * `entity_disjoint_note`), so `/api/validation` answered 200 with a body the decoder
+ * refused and every one of `/model`'s thirteen panes sat in its skeleton forever. What
+ * follows mirrors the Pydantic models field for field; the panes render what is served
+ * and name, in `apps/web/CONTRACT-GAPS.md`, the UI concepts the server does not serve.
+ *
+ * Three of the served nulls are the point of the shapes, so they stay nullable:
+ * `ConfusionMatrixView.budget` (a matrix at an unnamed budget is not at a budget),
+ * `FoldRow.precision_at_budget` with `precision_undefined` and `precision_note` (an
+ * undefined statistic is never 0 or 1), and `CurveSeries.note` (a one-point series is
+ * explained rather than plotted as a trend).
+ */
+
+/** `FoldRow` — validation.py:43-89. One expanding-window walk-forward fold. */
+export type ValidationFold = {
+  fold_index: number;
+  corpus: string;
+  train_start: string;
+  train_end: string;
+  embargo_days: number;
+  embargo_end: string;
+  test_start: string;
+  test_end: string;
+  n_train: number;
+  n_test: number;
+  pr_auc: number;
+  auroc: number;
+  brier: number;
+  precision_at_budget: number | null;
+  recall_at_budget: number | null;
+  precision_undefined: boolean;
+  precision_note: string | null;
+  alerts: number;
+  captured_value: Money;
+  cost: Money;
+  net_benefit: Money;
+  max_drawdown: Money;
+  zero_drawdown_note: string | null;
+  var95: Money;
+  es975: Money;
+  monte_carlo_runs: number;
+  monte_carlo_seed: number;
+  entity_disjoint: boolean;
+  test_fold_touched_at: string | null;
+};
+
+const ValidationFoldDecoder: Decoder<ValidationFold> = object('FoldRow', {
+  fold_index: integer,
+  corpus: string,
+  train_start: TimestampDecoder,
+  train_end: TimestampDecoder,
+  embargo_days: number,
+  embargo_end: TimestampDecoder,
+  test_start: TimestampDecoder,
+  test_end: TimestampDecoder,
+  n_train: integer,
+  n_test: integer,
+  pr_auc: number,
+  auroc: number,
   brier: number,
-  calibration_floor: object('CalibrationFloor', {
-    min_positives: number,
-    refused: boolean,
-    method: string,
-  }),
-  confusion: object('Confusion', {
-    tp: integer,
-    fp: integer,
-    fn: integer,
-    tn: integer,
-    budget_label: string,
-    precision_undefined: boolean,
-  }),
-  ablation: array(
-    object('AblationRow', {
-      variant: string,
-      question: string,
-      pr_auc: number,
-      ci: array(number),
-      net_benefit: MoneyFigureDecoder,
-      corpus: string,
-    }),
-  ),
-  shap_importance: array(object('ShapImportance', { feature: string, label: string, mean_abs: number })),
-  typology_recall: array(
-    object('TypologyRecall', { typology: TypologyDecoder, rule_code: string, recall: number, support: integer }),
-  ),
-  fairness: array(
-    object('FairnessBucket', { dimension: string, bucket: string, false_positive_rate: number, n: integer }),
-  ),
-  perturbations: array(
-    object('Perturbation', { name: string, magnitude: number, measure: string, result: number, note: string }),
-  ),
-  drawdown: array(object('Drawdown', { policy: string, value: MoneyDecoder, zero_because: nullable(string) })),
-  risk_adjusted: object('RiskAdjusted', {
-    value: number,
-    formula: string,
-    not_sharpe_because: string,
-  }),
-  seeds: object('Seeds', { count: integer, mean: number, sd: number, metric: string }),
-  configurations_evaluated: integer,
-  test_touched_at: nullable(TimestampDecoder),
+  precision_at_budget: nullable(number),
+  recall_at_budget: nullable(number),
+  precision_undefined: boolean,
+  precision_note: nullable(string),
+  alerts: integer,
+  captured_value: MoneyDecoder,
+  cost: MoneyDecoder,
+  net_benefit: MoneyDecoder,
+  max_drawdown: MoneyDecoder,
+  zero_drawdown_note: nullable(string),
+  var95: MoneyDecoder,
+  es975: MoneyDecoder,
+  monte_carlo_runs: integer,
+  monte_carlo_seed: integer,
+  entity_disjoint: boolean,
+  test_fold_touched_at: nullable(TimestampDecoder),
+});
+
+/** `AblationRowView` — validation.py:92-124. The CI arrives as its two bounds plus the
+ *  method and the resample count, never as a `number[]` whose length is guessed. */
+export type AblationRow = {
+  variant: string;
+  question: string;
+  corpus: string;
+  pr_auc: number;
+  net_benefit: Money;
+  ci_low: number;
+  ci_high: number;
+  ci_method: string;
+  n_resamples: number;
+  seed: number;
+  is_leakage_control: boolean;
+  is_graph_thesis: boolean;
+  is_pricing_thesis: boolean;
+};
+
+const AblationRowDecoder: Decoder<AblationRow> = object('AblationRowView', {
+  variant: string,
+  question: string,
+  corpus: string,
+  pr_auc: number,
+  net_benefit: MoneyDecoder,
+  ci_low: number,
+  ci_high: number,
+  ci_method: string,
+  n_resamples: integer,
+  seed: integer,
+  is_leakage_control: boolean,
+  is_graph_thesis: boolean,
+  is_pricing_thesis: boolean,
+});
+
+/** `CurveFamily` — validation.py:34-40, the five families the route will name. */
+export const CurveFamilyDecoder = oneOf(
+  'CurveFamily',
+  'reliability',
+  'pr_curve',
+  'shap_global',
+  'typology_recall',
+  'per_typology_precision',
+);
+export type CurveFamily = 'reliability' | 'pr_curve' | 'shap_global' | 'typology_recall' | 'per_typology_precision';
+
+/** `CurveDatum` — validation.py:127-135. */
+export type CurveDatum = {
+  point_index: number;
+  x: number;
+  y: number;
+  n: number | null;
+  label: string | null;
+  operating_point: boolean;
+};
+const CurveDatumDecoder: Decoder<CurveDatum> = object('CurveDatum', {
+  point_index: integer,
+  x: number,
+  y: number,
+  n: nullable(integer),
+  label: nullable(string),
+  operating_point: boolean,
+});
+
+/** `CurveSeries` — validation.py:138-154, with the axis meanings the page prints. */
+export type CurveSeries = {
+  family: CurveFamily;
+  x_label: string;
+  y_label: string;
+  points: CurveDatum[];
+  currency: string | null;
+  operating_threshold: number | null;
+  note: string | null;
+};
+const CurveSeriesDecoder: Decoder<CurveSeries> = object('CurveSeries', {
+  family: CurveFamilyDecoder,
+  x_label: string,
+  y_label: string,
+  points: array(CurveDatumDecoder),
+  currency: nullable(string),
+  operating_threshold: nullable(number),
+  note: nullable(string),
+});
+
+/** `ConfusionMatrixView` — validation.py:157-182. `budget` is nullable by design and
+ *  `null` has its own sentence in the pane. */
+export type ConfusionCell = { label: string; prediction: string; n: number };
+const ConfusionCellDecoder: Decoder<ConfusionCell> = object('ConfusionCellView', {
+  label: string,
+  prediction: string,
+  n: integer,
+});
+export type ConfusionMatrix = { cells: ConfusionCell[]; budget: number | null; basis: string };
+const ConfusionMatrixDecoder: Decoder<ConfusionMatrix> = object('ConfusionMatrixView', {
+  cells: array(ConfusionCellDecoder),
+  budget: nullable(integer),
+  basis: string,
+});
+
+/** `FairnessAxisView` / `FairnessRowView` — validation.py:185-206. */
+export type FairnessRow = { bucket: string; fp_rate: number; fn_rate: number | null; n: number };
+const FairnessRowDecoder: Decoder<FairnessRow> = object('FairnessRowView', {
+  bucket: string,
+  fp_rate: number,
+  fn_rate: nullable(number),
+  n: integer,
+});
+export type FairnessAxis = { axis: string; axis_rationale: string; rows: FairnessRow[] };
+const FairnessAxisDecoder: Decoder<FairnessAxis> = object('FairnessAxisView', {
+  axis: string,
+  axis_rationale: string,
+  rows: array(FairnessRowDecoder),
+});
+
+/** `PerturbationRowView` — validation.py:209-217. */
+export type PerturbationRow = {
+  kind: string;
+  magnitude: number;
+  result: number;
+  unit: string;
+  note: string;
+  seed: number;
+};
+const PerturbationRowDecoder: Decoder<PerturbationRow> = object('PerturbationRowView', {
+  kind: string,
+  magnitude: number,
+  result: number,
+  unit: string,
+  note: string,
+  seed: integer,
+});
+
+/** `ValidationMetricView` — validation.py:220-228. Both `metrics` and `typology_recall`
+ *  in the bundle are lists of these. */
+export type ValidationMetric = {
+  name: string;
+  value: number;
+  unit: string | null;
+  corpus: string;
+  note: string | null;
+  n: number | null;
+};
+export const ValidationMetricDecoder: Decoder<ValidationMetric> = object('ValidationMetricView', {
+  name: string,
+  value: number,
+  unit: nullable(string),
+  corpus: string,
+  note: nullable(string),
+  n: nullable(integer),
+});
+
+/** `ValidationBundle.overfitting`, as `routers/validation.py:_overfitting` (:412-424)
+ *  builds it: the `caveat` and the `keys` glossary are always present, the three metric
+ *  numbers only when the run stored the metric. An absent number is null here and the
+ *  pane says "not stored" rather than showing 0 configurations tried. */
+export type Overfitting = {
+  configurations_evaluated: number | null;
+  test_fold_touched_once: number | null;
+  selection_on_validation: number | null;
+  caveat: string;
+  keys: Record<string, string>;
+};
+const OverfittingDecoder: Decoder<Overfitting> = object('overfitting', {
+  configurations_evaluated: nullable(number),
+  test_fold_touched_once: nullable(number),
+  selection_on_validation: nullable(number),
+  caveat: string,
+  keys: record(string),
+});
+
+/** `ValidationBundle.label_quality`, as `_label_quality` (:427-447) builds it: one
+ *  entry per stored label metric, plus a `note` that is always present. The metric names
+ *  are the dynamic keys, so they decode into a list and keep the name they arrived under
+ *  rather than being dropped for not being in a fixed field map. */
+export type LabelQualityEntry = { name: string; value: number; meaning: string; corpus: string };
+export type LabelQuality = { entries: LabelQualityEntry[]; note: string };
+const LabelQualityEntryDecoder: Decoder<{ value: number; meaning: string; corpus: string }> = object(
+  'LabelQualityEntry',
+  { value: number, meaning: string, corpus: string },
+);
+const LabelQualityDecoder: Decoder<LabelQuality> = {
+  kind: 'label_quality',
+  decode(value, path) {
+    if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+      return { ok: false, error: { path, message: `expected label_quality object, got ${String(typeof value)}` } };
+    }
+    const record = value as Record<string, unknown>;
+    const note = string.decode(record.note, `${path}.note`);
+    if (!note.ok) return note;
+    const entries: LabelQualityEntry[] = [];
+    for (const key of Object.keys(record)) {
+      if (key === 'note') continue;
+      const entry = LabelQualityEntryDecoder.decode(record[key], `${path}.${key}`);
+      if (!entry.ok) return entry;
+      entries.push({ name: key, ...entry.value });
+    }
+    return { ok: true, value: { entries, note: note.value } };
+  },
+};
+
+export type Validation = {
+  run_id: string;
+  corpora: string[];
+  folds: ValidationFold[];
+  ablation: AblationRow[];
+  curves: CurveSeries[];
+  confusion: ConfusionMatrix | null;
+  fairness: FairnessAxis[];
+  perturbations: PerturbationRow[];
+  metrics: ValidationMetric[];
+  typology_recall: ValidationMetric[];
+  overfitting: Overfitting;
+  label_quality: LabelQuality;
+  limitations: string[];
+  assumptions: AssumptionLine[];
+};
+
+export const ValidationDecoder: Decoder<Validation> = object('ValidationBundle', {
+  run_id: string,
+  corpora: array(string),
+  folds: array(ValidationFoldDecoder),
+  ablation: array(AblationRowDecoder),
+  curves: array(CurveSeriesDecoder),
+  confusion: nullable(ConfusionMatrixDecoder),
+  fairness: array(FairnessAxisDecoder),
+  perturbations: array(PerturbationRowDecoder),
+  metrics: array(ValidationMetricDecoder),
+  typology_recall: array(ValidationMetricDecoder),
+  overfitting: OverfittingDecoder,
+  label_quality: LabelQualityDecoder,
   limitations: array(string),
-  degraded_dependencies: array(object('DegradedDep', { name: string, fallback: string })),
+  assumptions: array(AssumptionLineDecoder),
 });
 
 /* ==================================================== SSE: the stage ledger */
@@ -1412,8 +2503,12 @@ export const SEAMS: { route: string; note: string }[] = [
   {
     route: 'GET /api/cases/{case_id} (26-char ULID)',
     note:
-      'P8a-3 workspace; the server answers this route with CaseDetail, whose field names are ' +
-      "not the client CasePayload decoder's — the read side of the workspace is still unreconciled",
+      'P8a-3 workspace; reconciled. Decodes CaseDetail and every nested model it names, ' +
+      'then derives the payload the page renders in deriveCasePayload (the same ' +
+      'mapDecode pattern section 4 establishes for the explorer). The fields the route has ' +
+      'never served — narrative, SHAP labels, evidence amounts, per-transaction rule codes, ' +
+      'fusion coefficients, monte-carlo depth, counterfactual EV — are in CONTRACT-GAPS.md ' +
+      'rather than defaulted here',
   },
   {
     route: 'POST /api/cases/{case_id}/decisions + POST /api/decisions/{decision_id}/confirm',
@@ -1421,7 +2516,13 @@ export const SEAMS: { route: string; note: string }[] = [
       'P8a-3 writes; body is DecisionCreate, receipt is DecisionWriteResult, and a 409 carries ' +
       'expected_version/current_version/current for the merge view (all three mirrored, not invented)',
   },
-  { route: 'GET /api/graph/subgraph', note: 'P8b-4 explorer; edges_by_bucket feeds the time scrubber' },
+  {
+    route: 'GET /api/graph/subgraph',
+    note:
+      'P8b-4 explorer; decodes NetworkSubgraph verbatim, then derives hopDepths / ' +
+      'edges-by-UTC-day / overlay counts in lib/network/derive.ts (the route computes ' +
+      '_hop_depths internally and does not emit it)',
+  },
   {
     route: 'GET /api/scorecard + /drift + /disagreement',
     note: 'P8b-5 studio; scaling constants and the formula string',

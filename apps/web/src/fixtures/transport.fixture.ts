@@ -6,14 +6,14 @@
    response it produces carries `provenance: 'fixture:developer-contract'`, which
    the app shell prints as a banner: a fixture can be seen, never mistaken. */
 
-import type { AlertPage, CasePayload, DecisionAction } from '../lib/api/contract';
+import type { AlertPage, DecisionAction, ServedCaseDetailWire } from '../lib/api/contract';
 import type { TransportRequest, TransportResponse } from '../lib/api/transport';
 import { alertPage, largeAlertPage } from './alerts.fixture';
 import { CASES, CASE_ID_BY_ACCOUNT_KEY } from './case.fixture';
 import { envelope } from './common.fixture';
 import { dashboard } from './dashboard.fixture';
 import { stressSubgraph, traversedSubgraph } from './graph.fixture';
-import { datasetCard, datasetCardPaysim, runtime, stageEvents, validation } from './meta.fixture';
+import { datasetCard, runtime, stageEvents, validation } from './meta.fixture';
 import { type AllocateParams, allocate, policyDefaults } from './policy.fixture';
 import { disagreement, disagreementEmpty, drift, scorecard } from './scorecard.fixture';
 
@@ -119,7 +119,9 @@ export function send(request: TransportRequest): Promise<TransportResponse> {
   if (route === '/api/dashboard') return Promise.resolve(json(200, envelope(dashboard)));
   if (route === '/api/meta/run') return Promise.resolve(json(200, envelope(runtime)));
   if (route === '/api/meta/dataset') {
-    return Promise.resolve(json(200, envelope(params.get('corpus') === 'paysim' ? datasetCardPaysim : datasetCard)));
+    // One card, both sources: `DatasetMeta.sources` is a list, so the corpus is a property
+    // of the row the pane draws, not of which response the route picks.
+    return Promise.resolve(json(200, envelope(datasetCard)));
   }
   if (route === '/api/validation') return Promise.resolve(json(200, envelope(validation)));
   if (route === '/api/scorecard') return Promise.resolve(json(200, envelope(scorecard)));
@@ -201,8 +203,10 @@ const FOUR_EYES_THRESHOLD_MINOR = 50_000_000;
 /** A case opens at `version=1` and every write bumps it (apps/api/decisions.py:174,
  *  :342), so the fixture's `decision_version` mirrors the stored token. */
 
-/** case_id → the same fixture record the account-key deep links resolve to. */
-const CASES_BY_ID: Record<string, CasePayload> = {};
+/** case_id → the same fixture record the account-key deep links resolve to. The record is
+ *  the SERVED `CaseDetail`: the double answers with the bytes the route answers with, and
+ *  the client's decoder derives the workspace shape from them. */
+const CASES_BY_ID: Record<string, ServedCaseDetailWire> = {};
 for (const [accountKey, caseId] of Object.entries(CASE_ID_BY_ACCOUNT_KEY)) {
   const record = CASES[accountKey];
   if (record !== undefined) CASES_BY_ID[caseId] = record;
@@ -210,20 +214,19 @@ for (const [accountKey, caseId] of Object.entries(CASE_ID_BY_ACCOUNT_KEY)) {
 
 /** decision_id → the case it was written on, so the confirm route finds its row the way
  *  the server looks one up (`routers/decisions.py:97-128`) rather than guessing at one. */
-const CASE_BY_DECISION_ID = new Map<string, CasePayload>();
+const CASE_BY_DECISION_ID = new Map<string, ServedCaseDetailWire>();
 
-function caseIdOf(record: CasePayload): string {
-  const entry = Object.entries(CASE_ID_BY_ACCOUNT_KEY).find(([key]) => CASES[key] === record);
-  return entry?.[1] ?? '';
+function caseIdOf(record: ServedCaseDetailWire): string {
+  return record.case_id;
 }
 
-function decisionIdFor(record: CasePayload, seq: number): string {
+function decisionIdFor(record: ServedCaseDetailWire, seq: number): string {
   return `01J4Z7D${caseIdOf(record).slice(6, 15)}S${String(seq).padStart(10, '0')}`.slice(0, 64);
 }
 
 /** Look a fixture case up by `case_id`, or — for the queue's still-unreconciled
  *  `case_href`, which carries an account key — by account key. Null for anything else. */
-function caseRecord(rawSegment: string): CasePayload | null {
+function caseRecord(rawSegment: string): ServedCaseDetailWire | null {
   const key = decodeURIComponent(rawSegment);
   if (key.length === CASE_ID_LENGTH) return CASES_BY_ID[key] ?? null;
   return CASES[key] ?? null;
@@ -321,15 +324,15 @@ function decide(route: string, body: unknown): TransportResponse {
       expectedVersion,
     );
   }
-  if (expectedVersion !== record.decision_version) {
+  if (expectedVersion !== record.case_version) {
     return problem(
       409,
       'Case changed since you loaded it',
-      `case ${caseId} is at version ${String(record.decision_version)}; this write expected ${String(expectedVersion)}`,
+      `case ${caseId} is at version ${String(record.case_version)}; this write expected ${String(expectedVersion)}`,
       RUN,
       {
         expected_version: expectedVersion,
-        current_version: record.decision_version,
+        current_version: record.case_version,
         current: storedDecision(record),
       },
     );
@@ -339,19 +342,19 @@ function decide(route: string, body: unknown): TransportResponse {
 
 /** The winning row, in exactly the shape `apps/api/decisions.py:803-813` embeds in the
  *  409: the merge view is built from these fields and nothing else. */
-function storedDecision(record: CasePayload): Record<string, unknown> | null {
-  const last = record.decisions.at(-1);
+function storedDecision(record: ServedCaseDetailWire): Record<string, unknown> | null {
+  const last = record.decision_history.at(-1);
   if (last === undefined) return null;
   return {
-    decision_id: decisionIdFor(record, last.seq),
-    decision_seq: last.seq,
-    action: last.decision,
+    decision_id: last.decision_id,
+    decision_seq: last.decision_seq,
+    action: last.action,
     reason: last.reason,
-    actor_id: last.actor,
-    occurred_at: last.recorded_at,
-    row_hash: last.hash,
-    four_eyes_state: last.four_eyes_required ? 'pending' : 'not_required',
-    status: 'open',
+    actor_id: last.actor_id,
+    occurred_at: last.occurred_at,
+    row_hash: last.row_hash,
+    four_eyes_state: last.four_eyes_state,
+    status: record.status,
   };
 }
 
@@ -378,59 +381,81 @@ function confirmFourEyes(route: string, body: unknown): TransportResponse {
       note,
     );
   }
-  if (typeof expectedVersion !== 'number' || expectedVersion !== record.decision_version) {
+  if (typeof expectedVersion !== 'number' || expectedVersion !== record.case_version) {
     return problem(
       409,
       'Case changed since you loaded it',
-      `the case moved to version ${String(record.decision_version)}`,
+      `the case moved to version ${String(record.case_version)}`,
       RUN,
       {
         expected_version: expectedVersion,
-        current_version: record.decision_version,
+        current_version: record.case_version,
         current: storedDecision(record),
       },
     );
   }
-  const last = record.decisions.at(-1);
+  const last = record.decision_history.at(-1);
+  // The confirm write flips the stored row rather than appending a second one, which is
+  // what `routers/decisions.py:91-128` does: the decision is already chained, and the
+  // second reviewer's signature queues its outbox row.
+  if (last !== undefined) {
+    last.four_eyes_state = 'confirmed';
+    last.confirmed_by = 'reviewer.nabirye';
+    last.confirmed_at = new Date(Date.UTC(2026, 8, 25, 10, 0, 0)).toISOString();
+  }
   return json(
     200,
     envelope({
       case_id: caseIdOf(record),
       decision_id: decisionId,
-      decision_seq: last?.seq ?? 0,
-      chain_seq: last?.seq ?? 0,
-      row_hash: last?.hash ?? 'genesis',
+      decision_seq: last?.decision_seq ?? 0,
+      chain_seq: last?.chain_seq ?? 0,
+      row_hash: last?.row_hash ?? 'genesis',
       four_eyes_required: true,
       four_eyes_state: 'confirmed',
       outbox_queued: true,
-      case_version: record.decision_version,
+      case_version: record.case_version,
       decided_on_superseded_run: false,
-      audit_seq: last?.seq ?? 0,
+      audit_seq: last?.chain_seq ?? 0,
       occurred_at: new Date(Date.UTC(2026, 8, 25, 10, 0, 0)).toISOString(),
     }),
   );
 }
 
-function appendDecision(record: CasePayload, caseId: string, action: string, reason: string): TransportResponse {
-  const seq = record.decisions.length + 1;
-  const prev = record.decisions.at(-1)?.hash ?? null;
-  const hash = `${seq.toString(16).repeat(4)}${(prev ?? 'genesis').slice(0, 60)}`;
-  const fourEyes = record.header.economics.exposure.value.minor > FOUR_EYES_THRESHOLD_MINOR;
+function appendDecision(
+  record: ServedCaseDetailWire,
+  caseId: string,
+  action: string,
+  reason: string,
+): TransportResponse {
+  const seq = record.decision_history.length + 1;
+  const prevHash = record.decision_history.at(-1)?.row_hash ?? '0'.repeat(64);
+  const hash = `${seq.toString(16).repeat(4)}${prevHash.slice(0, 60)}`;
+  // `four_eyes.threshold_exposure_minor` in config/economics.yaml, compared strictly
+  // against the stored economics row the case is priced from.
+  const fourEyes = record.economics.exposure.minor > FOUR_EYES_THRESHOLD_MINOR;
   const decisionId = decisionIdFor(record, seq);
-  record.decisions.push({
-    seq,
-    decision: action as DecisionAction,
+  const occurredAt = new Date(Date.UTC(2026, 8, 25, 9, 12, seq)).toISOString();
+  record.decision_history.push({
+    decision_id: decisionId,
+    decision_seq: seq,
+    chain_seq: seq,
+    action: action as DecisionAction,
     reason,
-    actor: 'analyst.okello',
-    role: 'analyst',
-    recorded_at: new Date(Date.UTC(2026, 8, 25, 9, 12, seq)).toISOString(),
-    hash,
-    prev_hash: prev,
-    reversible_of: null,
+    actor_id: 'analyst.okello',
+    actor_roles: ['analyst'],
+    occurred_at: occurredAt,
+    exposure: record.economics.exposure,
     four_eyes_required: fourEyes,
-    superseded_run: false,
+    four_eyes_state: fourEyes ? 'pending' : 'not_required',
+    confirmed_by: null,
+    confirmed_at: null,
+    reversal_of_decision_id: null,
+    decided_on_superseded_run: false,
+    prev_hash: prevHash,
+    row_hash: hash,
   });
-  record.decision_version += 1;
+  record.case_version += 1;
   CASE_BY_DECISION_ID.set(decisionId, record);
   return json(
     200,
@@ -443,10 +468,10 @@ function appendDecision(record: CasePayload, caseId: string, action: string, rea
       four_eyes_required: fourEyes,
       four_eyes_state: fourEyes ? 'pending' : 'not_required',
       outbox_queued: !fourEyes,
-      case_version: record.decision_version,
+      case_version: record.case_version,
       decided_on_superseded_run: false,
       audit_seq: seq,
-      occurred_at: new Date(Date.UTC(2026, 8, 25, 9, 12, seq)).toISOString(),
+      occurred_at: occurredAt,
     }),
   );
 }

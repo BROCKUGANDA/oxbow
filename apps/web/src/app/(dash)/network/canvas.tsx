@@ -17,6 +17,14 @@
    Node size encodes exposure, colour encodes band, BORDER encodes community. The
    third channel exists because a hue-only grouping is unreadable in greyscale and for
    colour-blind analysts, which is the same argument the band ramp makes in DESIGN.md §6.
+
+   WHAT THE CANVAS MAY ENCODE. Only fields the subgraph response carries, plus the
+   overlays derived from its `flags` lists. The rules this file used to keep for
+   `typology`, `is_reversal` and `high_velocity` are gone, because `NetworkEdge`
+   (apps/api/schemas/catalog.py:252-261) has never had those fields: three style rules
+   and one overlay branch that could not fire are worse than no rules, since they make
+   the legend promise an encoding the payload cannot deliver. The one edge flag that IS
+   served — `self_pair`, a self-transfer — is what the dashed edge now encodes.
    ============================================================================= */
 
 'use client';
@@ -38,13 +46,31 @@ import {
   bandMeterSegments,
   tokens,
 } from '@/design/tokens';
-import type { GraphEdge, GraphNode, Typology } from '@/lib/api/contract';
+import type { GraphEdge, GraphNode } from '@/lib/api/contract';
 import { canvasColour, resolveFontStack } from '@/lib/colour';
 import { count } from '@/lib/format/money';
+import {
+  FLAG_CYCLE,
+  FLAG_DENSE_COMMUNITY,
+  FLAG_FAN_IN,
+  FLAG_FAN_OUT,
+  FLAG_FLAGGED,
+  FLAG_HIGH_VELOCITY,
+} from '@/lib/network/derive';
 
 cytoscape.use(fcose);
 
 type Overlay = 'cycles' | 'velocity' | 'fans' | 'communities' | 'flagged';
+
+/** Which node flags each overlay selects, in the same order the explorer's chips list
+ *  them. A node carries a flag only if `_node_flags` wrote it (graph.py:336-352). */
+const OVERLAY_FLAGS: Record<Overlay, readonly string[]> = {
+  cycles: [FLAG_CYCLE],
+  velocity: [FLAG_HIGH_VELOCITY],
+  fans: [FLAG_FAN_IN, FLAG_FAN_OUT],
+  communities: [FLAG_DENSE_COMMUNITY],
+  flagged: [FLAG_FLAGGED],
+};
 
 /** How many accounts the outline lists before it says it stopped. A 1,500-row listbox
  *  is not more accessible than a canvas; it is a different wall. The header count stays
@@ -82,21 +108,6 @@ const BAND_RGB = Object.fromEntries(
   ]),
 ) as Record<keyof typeof BAND_COLOURS, string>;
 
-const TYPOLOGY_EDGE_COLOUR: Record<string, string> = {
-  R1: canvasColour(TYPOGRAPHY_COLOURS.TYPO_R1_PASS_THROUGH),
-  R2: canvasColour(TYPOGRAPHY_COLOURS.TYPO_R2_FAN_IN),
-  R3: canvasColour(TYPOGRAPHY_COLOURS.TYPO_R3_FAN_OUT),
-  R4: canvasColour(TYPOGRAPHY_COLOURS.TYPO_R4_CYCLE),
-  R5: canvasColour(TYPOGRAPHY_COLOURS.TYPO_R5_STRUCTURING),
-  R6: canvasColour(TYPOGRAPHY_COLOURS.TYPO_R6_VELOCITY_SPIKE),
-  R7: canvasColour(TYPOGRAPHY_COLOURS.TYPO_R7_DORMANT_WAKE),
-  R8: canvasColour(TYPOGRAPHY_COLOURS.TYPO_R8_ODD_HOUR_SHIFT),
-  R9: canvasColour(TYPOGRAPHY_COLOURS.TYPO_R9_AMOUNT_REGIME_SHIFT),
-  R10: canvasColour(TYPOGRAPHY_COLOURS.TYPO_R10_FAST_CASH_OUT),
-  R11: canvasColour(TYPOGRAPHY_COLOURS.TYPO_R11_COUNTERPARTY_SURGE),
-  R12: canvasColour(TYPOGRAPHY_COLOURS.TYPO_R12_CHAIN),
-};
-
 const EVIDENCE_COLOUR = canvasColour(EVIDENCE);
 const INK_COLOUR = canvasColour(INK);
 const RAIL_STROKE_COLOUR = canvasColour(tokens.colours.state_running);
@@ -104,7 +115,14 @@ const RAIL_STROKE_COLOUR = canvasColour(tokens.colours.state_running);
  *  has to look like that. `state_pending` is the token that already means "no verdict
  *  yet" everywhere else in the product. */
 const UNBANDED_COLOUR = canvasColour(tokens.colours.state_pending);
-/** The untypologed edge stroke: the faint-ink token, named once. */
+/** `community_id` is nullable on the wire (`NetworkNode.community_id: int | None`), and
+ *  an account the run never placed in a community has no stroke to cycle into. It is
+ *  drawn with the hairline-strong token, which already means "structure, unstated"
+ *  everywhere else — not with a ninth hue and not with community 0's colour, either of
+ *  which would read as a cluster the response never claimed. */
+const NO_COMMUNITY_STROKE = canvasColour(tokens.colours.hairline_strong);
+/** The edge stroke: the faint-ink token, named once. Every drawn edge gets the same
+ *  colour because the response carries no per-edge typology to colour by. */
 const INK_FAINT_EDGE = canvasColour(INK_FAINT);
 
 /** Exposure drives radius. The rank is mapped to a fixed pixel range so a single
@@ -152,10 +170,6 @@ function styles(monoStack: string): cytoscape.StylesheetJson {
       } as cytoscape.Css.Node,
     },
     {
-      selector: 'node[type="external"]',
-      style: { 'background-opacity': 0.4, 'border-style': 'dashed' } as cytoscape.Css.Node,
-    },
-    {
       selector: 'node[type="meta"]',
       style: { shape: 'hexagon', 'font-size': '11px', color: INK_COLOUR } as cytoscape.Css.Node,
     },
@@ -171,15 +185,16 @@ function styles(monoStack: string): cytoscape.StylesheetJson {
       } as cytoscape.Css.Edge,
     },
     {
-      selector: 'edge[typology = "R4"]',
-      style: {
-        'line-color': TYPOLOGY_EDGE_COLOUR.R4,
-        'line-style': 'solid',
-      } as cytoscape.Css.Edge,
-    },
-    {
-      selector: 'edge[reversal = "yes"]',
-      style: { 'line-style': 'dotted', 'target-arrow-shape': 'none' } as cytoscape.Css.Edge,
+      /* A self-transfer: `source` and `target` are the same account, and the run flagged
+         the pair rather than dropping it. Dashed and arrowless because an arrow between
+         an account and itself describes no onward flow — the edge is the account moving
+         money with itself, which is why the pipeline excludes it from cycle and fan
+         scoring while keeping it in the picture. This is the only per-edge style rule
+         the served `flags` list can drive; the three it used to keep
+         (`typology = "R4"`, `reversal = "yes"`, `velocity`) named fields the response
+         model has never declared. */
+      selector: 'edge[self_pair = "yes"]',
+      style: { 'line-style': 'dashed', 'target-arrow-shape': 'none' } as cytoscape.Css.Edge,
     },
     {
       selector: '.highlight',
@@ -218,11 +233,11 @@ function elements(nodes: readonly GraphNode[], edges: readonly GraphEdge[]): Ele
       type: node.node_type,
       size: radiusFor(node.exposure?.minor ?? 0, maxExposure),
       colour: node.band === null ? UNBANDED_COLOUR : BAND_RGB[node.band],
-      group: COMMUNITY_STROKES[node.community_id % COMMUNITY_STROKES.length] as string,
+      group:
+        node.community_id === null
+          ? NO_COMMUNITY_STROKE
+          : (COMMUNITY_STROKES[node.community_id % COMMUNITY_STROKES.length] as string),
       stroke: node.band === null ? 1 : bandMeterSegments(node.band),
-      flagged: node.flagged,
-      cycle: node.is_cycle_member,
-      degree: node.degree,
     },
   }));
 
@@ -234,33 +249,31 @@ function elements(nodes: readonly GraphNode[], edges: readonly GraphEdge[]): Ele
         id: edge.id,
         source: edge.source,
         target: edge.target,
+        /* Width is the stored transaction count on the pair, compressed: an edge that
+           moved 4,000 transactions must not be four thousand times the hairline of one
+           that moved one, and the log is the same convention the queue uses for volume. */
         width: Math.min(1 + Math.log2(Math.max(edge.count, 1)), 6),
-        colour: typologyColour(edge.typology),
-        typology: edge.typology ?? 'none',
-        reversal: edge.is_reversal ? 'yes' : 'no',
-        velocity: edge.high_velocity,
+        colour: INK_FAINT_EDGE,
+        self_pair: edge.self_pair ? 'yes' : 'no',
       },
     });
   }
   return out;
 }
 
-/** Edge colour by typology, read off the generated token map, already converted to the
- *  grammar Cytoscape parses. */
-function typologyColour(typology: Typology | null): string {
-  if (typology === null) return INK_FAINT_EDGE;
-  return TYPOLOGY_EDGE_COLOUR[typology] ?? INK_FAINT_EDGE;
-}
-
 /**
  * The node's on-canvas label: the band letter, then the account. A meta-node carries
  * its TRUE size instead, because the whole point of a collapsed community is that the
- * drawn node is not one account (plan §7).
+ * drawn node is not one account (plan §7). A meta-node whose `member_count` the response
+ * did not carry is impossible by construction — `node_type` is derived from that very
+ * field — so no zero stands in for it here.
  */
 function nodeLabel(node: GraphNode): string {
-  if (node.node_type === 'meta') return `${node.key} · ${String(node.true_size ?? 0)}`;
+  if (node.node_type === 'meta') {
+    return node.true_size === null ? node.key : `${node.key} · ${count(node.true_size)}`;
+  }
   const band = node.band ?? '—';
-  return `${band} ${node.key.replace('ACC-', '')}`;
+  return `${band} ${node.label.replace('ACC-', '')}`;
 }
 
 export function GraphCanvas({ nodes, edges, overlays, selected, onSelect, truncated }: GraphCanvasProps): ReactElement {
@@ -337,24 +350,23 @@ export function GraphCanvas({ nodes, edges, overlays, selected, onSelect, trunca
     if (cy === null) return;
     cy.batch(() => {
       cy.elements().removeClass('faded highlight');
-      const focus =
-        overlays.length === 0
-          ? null
-          : cy.nodes().filter((node) => {
-              const data = node.data();
-              if (overlays.includes('cycles')) return Boolean(data.cycle);
-              if (overlays.includes('flagged')) return Boolean(data.flagged);
-              if (overlays.includes('fans')) return Number(data.degree) > 8;
-              return false;
-            });
-      if (focus !== null && focus.length > 0) {
+      /* One rule per chip, and the rule is the flag the chip's count was derived from.
+         The fan overlay used to select on `degree > 8` and the velocity overlay used to
+         select on an edge field the response never carried: both highlighted members the
+         run had not flagged, which is an invention on a screen whose claim is traceability.
+         A chip whose flag is absent is disabled at the call site, so it never arrives in
+         `overlays` and cannot fade the canvas while selecting nothing. */
+      const focusKeys = new Set(
+        nodes
+          .filter((node) =>
+            overlays.some((overlay) => OVERLAY_FLAGS[overlay].some((flag) => node.flags.includes(flag))),
+          )
+          .map((node) => node.key),
+      );
+      if (overlays.length > 0 && focusKeys.size > 0) {
+        const focus = cy.nodes().filter((node) => focusKeys.has(String(node.id())));
         focus.addClass('highlight');
         cy.elements().not(focus).not('edge').addClass('faded');
-      }
-      if (overlays.includes('velocity')) {
-        cy.edges()
-          .filter((edge) => Boolean(edge.data('velocity')))
-          .addClass('highlight');
       }
       if (selected !== null) {
         const node = cy.getElementById(selected);
@@ -487,9 +499,12 @@ export function GraphCanvas({ nodes, edges, overlays, selected, onSelect, trunca
               )}
               <span style={{ minWidth: '7.5em' }}>{node.key}</span>
               <span style={{ color: 'var(--color-ink-faint)' }}>
-                {node.node_type} · {count(node.degree)} degree · community {String(node.community_id)}
+                {node.node_type} · {count(node.degree)} degree ·{' '}
+                {node.community_id === null ? 'no community stored' : `community ${String(node.community_id)}`} ·{' '}
+                {node.hops === null ? 'beyond the four-hop ceiling' : `${String(node.hops)} hop(s) from the seed`}
                 {node.flagged ? ' · flagged' : ''}
                 {node.is_cycle_member ? ' · cycle member' : ''}
+                {node.true_size === null ? '' : ` · ${count(node.true_size)} accounts collapsed here`}
               </span>
             </li>
           ))}

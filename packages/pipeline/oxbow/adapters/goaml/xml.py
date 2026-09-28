@@ -28,7 +28,7 @@ from collections.abc import Mapping, Sequence
 from datetime import datetime
 from typing import Any, Final
 
-from oxbow.ports.case_sink import CaseBundle, iso_z
+from oxbow.ports.case_sink import CALIBRATED_BAND, CalibrationReading, CaseBundle, iso_z
 from oxbow.ports.report import ReportSubmission
 
 GOAML_NAMESPACE: Final = "urn:oasis:names:tc:goaml-1-1"
@@ -161,6 +161,25 @@ def _report_bucket(parent: ET.Element, row: Mapping[str, Any], *, currency: str)
         _money(element, tag, minor, currency)
 
 
+def _confidence_clause(calibration: CalibrationReading) -> str:
+    """The confidence sentence of a narrative, in words for either state.
+
+    A GOAML narrative is the text a financial institution files, so the sentence has to
+    survive both shapes of the stored pairing without inventing a number. Formatting an
+    uncalibrated reading with ``:.4f`` raises ``TypeError`` on ``None`` — the render dies
+    on the way out — and defaulting it would print "observed rate 0.0000 over n=None"
+    into a document that leaves the building, which is the fabricated zero at the worst
+    possible place. The words are the pipeline's own (``confidence_label``'s
+    ``uncalibrated`` state), and the fold's reason travels with them.
+    """
+    if calibration.kind == CALIBRATED_BAND:
+        return f"observed rate {calibration.observed_rate:.4f} over n={calibration.n}"
+    # The note is the fold's own sentence and it already opens with "probabilities are
+    # uncalibrated", because that phrase is the pipeline's vocabulary rather than this
+    # renderer's; restating it here would print it twice in a filed document.
+    return f"confidence: {calibration.note}"
+
+
 def render_case_bundle(bundle: CaseBundle, transactions: Sequence[Mapping[str, Any]] = ()) -> bytes:
     """A GOAML 1.1 draft report for one decided case.
 
@@ -195,8 +214,8 @@ def render_case_bundle(bundle: CaseBundle, transactions: Sequence[Mapping[str, A
     narrative = _el(activity, "NarrativeText")
     narrative.text = (
         f"Action: {bundle.decision.action}. Reason as recorded by the reviewer: "
-        f"{bundle.decision.reason} Band {bundle.score.band}; observed rate "
-        f"{bundle.score.calibration.observed_rate:.4f} over n={bundle.score.calibration.n}; "
+        f"{bundle.decision.reason} Band {bundle.score.band}; "
+        f"{_confidence_clause(bundle.score.calibration)}; "
         f"model version {bundle.score.model_version}. "
         f"Recovery rate assumption {bundle.economics.recovery_rate}. "
         f"{ADVISORY_NOTE}"

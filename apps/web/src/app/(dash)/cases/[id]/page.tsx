@@ -42,7 +42,7 @@ import { useOptimistic } from 'react';
 
 import { Pane } from '@/components/Pane';
 import { Waterfall, type WaterfallRow } from '@/components/charts/charts';
-import { TYPOLOGY_META, glyphFor } from '@/components/typology';
+import { typologyMetaOf } from '@/components/typology';
 import { BandBadge } from '@/components/ui/BandBadge';
 import { MoneyFigure } from '@/components/ui/MoneyFigure';
 import { AccountChip, Timestamp } from '@/components/ui/provenance';
@@ -116,6 +116,7 @@ function CaseRouteSkeleton(): ReactElement {
         id="score"
         title="Score"
         operation="Loading the score header"
+        resolved={false}
         skeleton={{ columns: [{ key: 'score', width: '100%' }], rows: 5 }}
       >
         <span />
@@ -124,6 +125,7 @@ function CaseRouteSkeleton(): ReactElement {
         id="evidence"
         title="Evidence"
         operation="Loading the evidence pane"
+        resolved={false}
         skeleton={{ columns: [{ key: 'row', width: '100%' }], rows: 9, rowHeight: 36 }}
       >
         <span />
@@ -132,6 +134,7 @@ function CaseRouteSkeleton(): ReactElement {
         id="decision"
         title="Decision"
         operation="Loading the decision rail"
+        resolved={false}
         skeleton={{ columns: [{ key: 'rail', width: '100%' }], rows: 4 }}
       >
         <span />
@@ -175,13 +178,14 @@ function CaseWorkspace(): ReactElement {
       decision: draft.decision,
       reason: draft.reason,
       actor: '',
-      role: '',
+      roles: [],
       recorded_at: '',
       hash: 'pending',
       prev_hash: current.at(-1)?.hash ?? null,
       reversible_of: null,
       four_eyes_required: false,
-      superseded_run: false,
+      four_eyes_state: 'not_required',
+      decided_on_superseded_run: false,
       pending: true,
     },
   ]);
@@ -209,10 +213,13 @@ function CaseWorkspace(): ReactElement {
   const timeZone = runtime.data?.deployment_timezone ?? null;
 
   const txnSet = filter === null ? null : new Set(filter.txnIds);
+  /* The cross-filter joins on the served `evidence_event.txn_id`: one event names one
+     transaction, so the SHAP row's `evidence_txn_ids` filter is a straight membership test
+     on a served column rather than a similarity guess made in the browser. */
   const evidence =
     filter === null
       ? payload.evidence
-      : payload.evidence.filter((event) => event.txn_ids.some((id) => txnSet?.has(id) ?? false));
+      : payload.evidence.filter((event) => event.txn_id !== null && (txnSet?.has(event.txn_id) ?? false));
   const transactions =
     filter === null ? payload.transactions : payload.transactions.filter((txn) => txnSet?.has(txn.txn_id) ?? false);
 
@@ -288,6 +295,7 @@ function CaseWorkspace(): ReactElement {
           title="Score"
           operation="Loading the score header"
           meta={caseResource.meta}
+          resolved={caseResource.data !== null}
           skeleton={{ columns: [{ key: 'score', width: '100%' }], rows: 5 }}
         >
           <ScoreHeader payload={payload} />
@@ -298,6 +306,7 @@ function CaseWorkspace(): ReactElement {
           title="Scorecard points"
           operation="Loading the points table"
           meta={caseResource.meta}
+          resolved={caseResource.data !== null}
           skeleton={{
             columns: [
               { key: 'attr', width: '62%' },
@@ -314,6 +323,7 @@ function CaseWorkspace(): ReactElement {
           title="Economics"
           operation="Loading the economics block"
           meta={caseResource.meta}
+          resolved={caseResource.data !== null}
           skeleton={{ columns: [{ key: 'e', width: '100%' }], rows: 4 }}
         >
           <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
@@ -340,8 +350,19 @@ function CaseWorkspace(): ReactElement {
               {compactFromMinor(
                 payload.header.economics.friction_cost.minor,
                 payload.header.economics.friction_cost.decimals,
-              )}
+              )}{' '}
+              {payload.header.economics.friction_cost.currency}
             </p>
+            {/* The recovery band the response prices these figures at. Served as rates, not
+                as money at each rate, so the rates are printed and no money is composed from
+                them here — that arithmetic belongs to the economics layer. */}
+            {payload.header.economics.recovery_sensitivity_band.length > 0 ? (
+              <p className="u-num" style={{ ...T_MICRO, color: 'var(--color-ink-faint)', margin: 0 }}>
+                sensitivity at r ={' '}
+                {payload.header.economics.recovery_sensitivity_band.map((rate) => rate.toFixed(2)).join(' / ')} ·
+                assumed recovery rate {payload.header.economics.recovery_rate.toFixed(2)}
+              </p>
+            ) : null}
             <MonteCarlo payload={payload} />
           </div>
         </Pane>
@@ -354,6 +375,7 @@ function CaseWorkspace(): ReactElement {
           title={filter === null ? 'Evidence' : `Evidence · filtered by ${filter.feature}`}
           operation="Loading the evidence pane"
           meta={caseResource.meta}
+          resolved={caseResource.data !== null}
           actions={
             filter !== null ? (
               <button type="button" onClick={() => setFilter(null)} style={CONTROL}>
@@ -371,18 +393,24 @@ function CaseWorkspace(): ReactElement {
           {tab === 'transactions' ? (
             <Transactions payload={payload} transactions={transactions} timeZone={timeZone} />
           ) : null}
-          {tab === 'rules' ? <RuleHits payload={payload} timeZone={timeZone} /> : null}
-          {tab === 'counterfactual' ? <CounterfactualPanel payload={payload} assumptions={assumptions} /> : null}
+          {tab === 'rules' ? <RuleHits payload={payload} /> : null}
+          {tab === 'counterfactual' ? <CounterfactualPanel payload={payload} /> : null}
         </Pane>
 
+        {/* Not a narrative: `CaseDetail` has no narrative field, and the prose pane that
+            used to sit here refused its own response. What the run DOES store about why
+            this account ranks where it does is `reason_codes`, so that is what is printed,
+            verbatim, with the count of rules that fired beside it. The gap the narrative
+            was filling is recorded in apps/web/CONTRACT-GAPS.md. */}
         <Pane
-          id="narrative"
-          title="Case narrative"
-          operation="Loading the narrative"
+          id="reasons"
+          title="Reason codes"
+          operation="Reading the stored reason codes"
           meta={caseResource.meta}
-          skeleton={{ columns: [{ key: 'n', width: '100%' }], rows: 2 }}
+          resolved={caseResource.data !== null}
+          skeleton={{ columns: [{ key: 'r', width: '100%' }], rows: 2 }}
         >
-          <Narrative payload={payload} />
+          <ReasonCodes payload={payload} />
         </Pane>
       </div>
 
@@ -392,6 +420,7 @@ function CaseWorkspace(): ReactElement {
           payload={payload}
           assumptions={assumptions}
           meta={caseResource.meta}
+          resolved={caseResource.data !== null}
           onDecide={submit}
           failure={writeFailure}
           pending={writing || write.pending || confirming || confirm.pending}
@@ -411,6 +440,7 @@ function CaseWorkspace(): ReactElement {
           title="Decision history"
           operation="Loading the decision log"
           meta={caseResource.meta}
+          resolved={caseResource.data !== null}
           skeleton={{ columns: [{ key: 'hash', width: '100%' }], rows: Math.max(optimistic.length, 2) }}
         >
           <DecisionHistory decisions={optimistic} timeZone={timeZone} />
@@ -442,6 +472,7 @@ function CaseSkeleton({
         title="Score"
         operation="Loading the score header"
         failure={resource.failure}
+        resolved={resource.data !== null}
         pending={resource.isPending}
         onRetry={() => void resource.refetch()}
         attempt={resource.attempts}
@@ -457,6 +488,7 @@ function CaseSkeleton({
         title="Evidence"
         operation="Loading the evidence pane"
         failure={resource.failure}
+        resolved={resource.data !== null}
         pending={resource.isPending}
         onRetry={() => void resource.refetch()}
         attempt={resource.attempts}
@@ -470,6 +502,7 @@ function CaseSkeleton({
         title="Decision"
         operation="Loading the decision rail"
         failure={resource.failure}
+        resolved={resource.data !== null}
         pending={resource.isPending}
         onRetry={() => void resource.refetch()}
         attempt={resource.attempts}
@@ -485,6 +518,8 @@ function CaseSkeleton({
 /* --------------------------------------------------------------- pieces --- */
 
 function ScoreHeader({ payload }: { payload: CasePayload }): ReactElement {
+  const { calibration } = payload.header;
+  const typology = typologyMetaOf(payload.header.typology);
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
@@ -493,6 +528,9 @@ function ScoreHeader({ payload }: { payload: CasePayload }): ReactElement {
           href={`/network?account=${encodeURIComponent(payload.header.account_key)}`}
         />
         <BandBadge band={payload.header.band} />
+        <span style={{ ...T_MICRO, color: 'var(--color-ink-muted)' }} data-case-status={payload.header.status}>
+          {payload.header.status.replace(/_/g, ' ')}
+        </span>
       </div>
       <p
         className="u-num"
@@ -500,40 +538,94 @@ function ScoreHeader({ payload }: { payload: CasePayload }): ReactElement {
       >
         {payload.header.score.toFixed(3)}
       </p>
-      <p style={{ ...T_LABEL, color: 'var(--color-ink-muted)', maxWidth: '40ch' }}>
-        calibrated probability · observed rate in this band{' '}
-        <strong className="u-num" style={{ color: 'var(--color-ink)' }}>
-          {(payload.header.calibration.observed_rate * 100).toFixed(0)}%
-        </strong>{' '}
-        · n={count(payload.header.calibration.n)}
+      <p style={{ ...T_MICRO, color: 'var(--color-ink-faint)', margin: 0 }}>
+        fused probability · scorecard points {count(payload.header.scorecard_points_total)}
       </p>
+      {/* Confidence is a state the response names, not a number the client guesses at.
+          `calibrated_band` carries its rate and its population; `uncalibrated` carries
+          neither and says why in the fold's own words. Printing 0% for the second would
+          turn "never measured" into a measurement, which is the confusion DEV-024 exists
+          to prevent. */}
+      {calibration.state === 'calibrated_band' ? (
+        <p style={{ ...T_LABEL, color: 'var(--color-ink-muted)', maxWidth: '40ch' }}>
+          calibrated band · observed rate in band{' '}
+          {calibration.observed_rate !== null ? (
+            <strong className="u-num" style={{ color: 'var(--color-ink)' }}>
+              {(calibration.observed_rate * 100).toFixed(0)}%
+            </strong>
+          ) : (
+            /* Unreachable against the server's own model validator, which refuses a
+               `calibrated_band` with no rate — but the client types the field nullable, and
+               the fallback that keeps it honest is to say the rate is absent rather than to
+               print a zero that was never measured. */
+            <strong style={{ color: 'var(--color-state-failed)' }}>not stored</strong>
+          )}
+          {calibration.n !== null ? ` · n=${count(calibration.n)}` : ' · population not stored'}
+          {calibration.band !== null ? ` · band ${calibration.band}` : ''}
+        </p>
+      ) : (
+        <p style={{ ...T_LABEL, color: 'var(--color-state-running)', maxWidth: '40ch' }} data-uncalibrated>
+          uncalibrated — the probability above is not a measured rate for this band
+          {calibration.reason !== null ? `: ${calibration.reason}` : ''}
+        </p>
+      )}
       {payload.header.typology !== null ? (
         <p style={{ ...T_MICRO, color: 'var(--color-ink-muted)' }}>
-          <Icon
-            name={glyphFor(payload.header.typology)}
-            size={13}
-            title={TYPOLOGY_META[payload.header.typology].name}
-          />{' '}
-          {TYPOLOGY_META[payload.header.typology].name} — {TYPOLOGY_META[payload.header.typology].reads}
+          {typology !== undefined ? (
+            <>
+              <Icon name={typology.glyph} size={13} title={typology.name} /> {typology.name} — {typology.reads} ·{' '}
+            </>
+          ) : null}
+          predicted typology <code style={T_MONO}>{payload.header.typology}</code>
         </p>
       ) : null}
       <p style={{ ...T_MICRO, color: 'var(--color-ink-faint)' }}>
-        run <code style={T_MONO}>{payload.header.run_id}</code> · model {payload.header.model_version ?? 'unrecorded'} ·
-        feature spec {payload.header.feature_spec_hash ?? 'unrecorded'} ·{' '}
-        {payload.header.decided_on_superseded_run
-          ? 'decided on a superseded run, stamped as such in the audit row'
-          : 'scored on the current run'}
+        run <code style={T_MONO}>{payload.header.run_id}</code> ({payload.header.run_state}) · model{' '}
+        {payload.header.model_version} ·{' '}
+        {payload.header.rank_under_active_policy === null
+          ? 'no rank under the active policy'
+          : `rank ${count(payload.header.rank_under_active_policy)} under the active policy`}
       </p>
-      {payload.header.fusion !== null ? (
-        <p
-          style={{ ...T_MICRO, color: 'var(--color-ink-muted)' }}
-          title="the fusion meta-learner prints its own coefficients"
-        >
-          fused from scorecard {payload.header.fusion.p_scorecard.toFixed(3)} and GBM{' '}
-          {payload.header.fusion.p_gbm.toFixed(3)}; weights{' '}
-          {payload.header.fusion.coefficients.map((entry) => `${entry.input} ${entry.weight.toFixed(2)}`).join(', ')}
+      <p style={{ ...T_MICRO, color: payload.header.superseded ? 'var(--color-band-d)' : 'var(--color-ink-faint)' }}>
+        {payload.header.superseded
+          ? 'a later run has replaced the pinned one — the evidence below is the pinned run’s, and deciding anyway is stamped into the audit row'
+          : 'this is the current complete run'}
+      </p>
+      {payload.header.watchlist !== null ? (
+        <p style={{ ...T_MICRO, color: 'var(--color-ink-muted)' }} data-watchlist-advisory>
+          screened against {payload.header.watchlist.list_name} v{payload.header.watchlist.list_version}:{' '}
+          {count(payload.header.watchlist.hits.length)} hits over {count(payload.header.watchlist.record_count)} records
+          · advisory only, never a decision
         </p>
       ) : null}
+    </div>
+  );
+}
+
+/** The stored reason codes, in the stored order, as the response sent them. The pane names
+ *  the rules that fired beside them because `rule_ids` is served and no sentence joins the
+ *  two — composing one here would be the client authoring the adverse-action reason. */
+function ReasonCodes({ payload }: { payload: CasePayload }): ReactElement {
+  const { reasons, rule_ids: ruleIds } = payload.header;
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+      {reasons.length === 0 ? (
+        <p style={{ ...T_LABEL, color: 'var(--color-ink-muted)', maxWidth: '72ch' }}>
+          This run stored no reason codes for the account. The points table and the SHAP waterfall say what the score is
+          built from; nothing here has been written in place of a reason nobody recorded.
+        </p>
+      ) : (
+        <ul style={{ listStyle: 'none', margin: 0, padding: 0 }}>
+          {reasons.map((text) => (
+            <li key={text} style={{ padding: '3px 0', ...HAIRLINE_BOTTOM, ...T_LABEL, color: 'var(--color-ink)' }}>
+              {text}
+            </li>
+          ))}
+        </ul>
+      )}
+      <p style={{ ...T_MICRO, color: 'var(--color-ink-faint)' }}>
+        rules recorded for the scored row: {ruleIds.length === 0 ? 'none' : ruleIds.join(', ')}
+      </p>
     </div>
   );
 }
@@ -558,14 +650,20 @@ function PointsTable({
             <>
               <span>
                 <span
-                  style={{ ...T_LABEL, color: 'var(--color-ink)', display: 'block', ...ELLIPSIS }}
-                  title={point.label}
+                  style={{
+                    ...T_MONO,
+                    fontSize: 'var(--text-label)',
+                    color: 'var(--color-ink)',
+                    display: 'block',
+                    ...ELLIPSIS,
+                  }}
+                  title={point.bin}
                 >
-                  {point.label}
+                  {point.attribute}
                 </span>
                 <span style={{ ...T_MICRO, color: 'var(--color-ink-faint)' }}>
                   bin {point.bin} · {(point.population_share * 100).toFixed(1)}% of population · bad rate{' '}
-                  {(point.bad_rate * 100).toFixed(1)}%
+                  {(point.bad_rate * 100).toFixed(1)}% · WOE {point.woe.toFixed(3)}
                 </span>
               </span>
               <span
@@ -616,8 +714,10 @@ function PointsTable({
         })}
       </ol>
       <p style={{ ...T_MICRO, color: 'var(--color-ink-faint)', marginTop: 8 }}>
-        Whole-number points per bin, summing to the score above: the column adds up by hand, which is the point of a
-        scorecard.
+        Whole-number points per bin, summing to {count(payload.header.scorecard_points_total)} — the scorecard's own
+        total, which `scorecard_points_total` serves. The number at the top of this column is the fused
+        <em> probability</em>, not that total: two different quantities, and the rail says which is which rather than
+        implying one adds up to the other.
       </p>
     </>
   );
@@ -652,8 +752,10 @@ function MonteCarlo({ payload }: { payload: CasePayload }): ReactElement {
         {compactFromMinor(interval.upper.minor, interval.upper.decimals)} {interval.upper.currency}
       </p>
       <p style={{ ...T_MICRO, color: 'var(--color-ink-faint)', marginTop: 4 }}>
-        90% interval · {count(interval.runs)} seeded propagation runs at depth {String(interval.max_depth)}, seed{' '}
-        {String(interval.seed)}. Each outgoing edge transmits with probability proportional to its value share.
+        5th–95th percentile of the stored draw · median{' '}
+        {compactFromMinor(interval.centre.minor, interval.centre.decimals)} · {count(interval.runs)} runs, seed{' '}
+        {String(interval.seed)}. The propagation depth the draw used is not a column of the economics row, so it is not
+        claimed here (see apps/web/CONTRACT-GAPS.md).
       </p>
     </div>
   );
@@ -707,7 +809,7 @@ function WhyPanel({
   onFilter: (next: { feature: string; txnIds: readonly string[] } | null) => void;
 }): ReactElement {
   const rows: WaterfallRow[] = payload.contributions.map((contribution) => ({
-    label: contribution.label,
+    label: contribution.feature,
     value: contribution.value,
     direction: contribution.direction,
     selected: filter?.feature === contribution.feature,
@@ -725,9 +827,9 @@ function WhyPanel({
   return (
     <div>
       <p style={{ ...T_MICRO, color: 'var(--color-ink-faint)', maxWidth: '72ch' }}>
-        {payload.contributions.length > 0 && payload.contributions[0]?.source === 'shap'
-          ? 'TreeExplainer values persisted with the scored row — this panel computes nothing on request. Selecting a contribution filters the timeline and the transaction table to the transactions that caused it.'
-          : 'SHAP is unavailable because this row fell through a degenerate tree, so the waterfall below is the scorecard’s own point contributions, labelled as such.'}
+        {payload.contributions.length > 0
+          ? 'TreeExplainer values persisted with the scored row (`shap_contribution`, read by routers/cases.py) — this panel computes nothing on request. The bar is the served value, its direction is that value’s sign, and selecting it filters the timeline and the transaction table to the transaction ids the same row names.'
+          : 'This run stored no SHAP contribution rows for the account, so there is no waterfall to draw. The points table is the account’s own explanation; nothing has been substituted for the missing attributions.'}
       </p>
       <Waterfall
         rows={rows}
@@ -770,7 +872,7 @@ function Timeline({
           key={event.id}
           style={{
             display: 'grid',
-            gridTemplateColumns: '170px minmax(0,1fr) 130px',
+            gridTemplateColumns: '170px minmax(0,1fr)',
             gap: 8,
             padding: '6px 0',
             ...HAIRLINE_BOTTOM,
@@ -779,14 +881,17 @@ function Timeline({
           <Timestamp iso={event.ts_utc} timeZone={timeZone} />
           <span style={{ minWidth: 0 }}>
             <span style={{ ...T_LABEL, color: 'var(--color-ink)', display: 'block', ...ELLIPSIS }} title={event.title}>
-              {event.typology !== null ? <Icon name={glyphFor(event.typology)} size={13} /> : null} {event.title}
+              {event.title}
             </span>
-            <span style={{ ...T_MICRO, color: 'var(--color-ink-faint)' }}>{event.detail}</span>
-          </span>
-          <span className="u-num" style={{ ...T_LABEL, textAlign: 'right', color: 'var(--color-ink-muted)' }}>
-            {event.amount === null
-              ? '—'
-              : `${compactFromMinor(event.amount.minor, event.amount.decimals)} ${event.amount.currency}`}
+            {/* The served `kind` and the served key, not a rendering of the client's guess at
+                them: an evidence row names its own transaction, rule or object, and which of
+                the three it names is on the response. */}
+            <span style={{ ...T_MICRO, color: 'var(--color-ink-faint)' }}>
+              {event.kind} · {event.detail}
+              {event.txn_id !== null ? ` · txn ${event.txn_id}` : ''}
+              {event.rule_id !== null ? ` · rule ${event.rule_id}` : ''}
+              {event.object_key !== null ? ` · ${event.object_key}` : ''}
+            </span>
           </span>
         </li>
       ))}
@@ -812,7 +917,7 @@ function Transactions({
       <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 'var(--text-label)' }}>
         <thead>
           <tr>
-            {['transaction', 'when', 'type', 'counterparty', 'amount', 'rules'].map((heading) => (
+            {['transaction', 'when', 'type', 'counterparty', 'amount'].map((heading) => (
               <th
                 key={heading}
                 style={{
@@ -836,12 +941,22 @@ function Transactions({
               </td>
               <td style={{ padding: '4px 6px', ...HAIRLINE_BOTTOM }}>
                 <Timestamp iso={txn.ts_utc} timeZone={timeZone} />
+                <span style={{ ...T_MICRO, color: 'var(--color-ink-faint)' }}>
+                  {' '}
+                  · local hour {String(txn.local_hour)}
+                  {txn.event_date_local !== null ? ` · ${txn.event_date_local}` : ''}
+                </span>
               </td>
               <td style={{ padding: '4px 6px', ...HAIRLINE_BOTTOM, color: 'var(--color-ink-muted)' }}>
-                {txn.type} · {txn.direction}
+                {txn.type} ·{' '}
+                {txn.direction === null
+                  ? 'neither endpoint is this account'
+                  : txn.direction === 'in'
+                    ? 'inbound'
+                    : 'outbound'}
               </td>
               <td style={{ padding: '4px 6px', ...HAIRLINE_BOTTOM, ...T_MONO, fontSize: 'var(--text-micro)' }}>
-                {txn.counterparty_key ?? 'external'}
+                {txn.counterparty_key ?? 'none — both endpoints are this account'}
               </td>
               <td
                 className="u-num"
@@ -855,18 +970,24 @@ function Transactions({
                 {compactFromMinor(txn.amount.minor, txn.amount.decimals)} {txn.amount.currency}
                 {txn.is_zero_value ? ' · zero value, kept and flagged' : ''}
               </td>
-              <td style={{ padding: '4px 6px', ...HAIRLINE_BOTTOM, color: 'var(--color-ink-muted)' }}>
-                {txn.rule_codes.join(', ') || '—'}
-              </td>
             </tr>
           ))}
         </tbody>
       </table>
+      {/* The table shows the page the route returned, and `transaction_total` is the count
+          before its own TRANSACTION_CAP truncated it — so a short list says it is short
+          rather than implying the window was quiet. */}
+      {payload.transactions.length < payload.transaction_total ? (
+        <p style={{ ...T_MICRO, color: 'var(--color-ink-faint)', marginTop: 6 }} data-transaction-truncated>
+          {count(payload.transactions.length)} of {count(payload.transaction_total)} transactions for this case are
+          shown; the rest are behind the transaction route’s own paging.
+        </p>
+      ) : null}
     </div>
   );
 }
 
-function RuleHits({ payload, timeZone }: { payload: CasePayload; timeZone: string | null }): ReactElement {
+function RuleHits({ payload }: { payload: CasePayload }): ReactElement {
   if (payload.rule_hits.length === 0) {
     return (
       <p style={{ ...T_LABEL, color: 'var(--color-ink-muted)', maxWidth: '72ch' }}>
@@ -877,99 +998,120 @@ function RuleHits({ payload, timeZone }: { payload: CasePayload; timeZone: strin
   }
   return (
     <ul style={{ listStyle: 'none', margin: 0, padding: 0, display: 'flex', flexDirection: 'column', gap: 8 }}>
-      {payload.rule_hits.map((hit) => (
-        <li key={hit.rule_code} data-rule-hit={hit.rule_code} style={{ ...PANEL_SUNKEN, padding: 10 }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-            <Icon name={glyphFor(hit.typology)} size={16} title={TYPOLOGY_META[hit.typology].name} />
-            <strong style={{ ...T_LABEL, color: 'var(--color-ink)', fontWeight: 600 }}>
-              {hit.rule_code} {hit.name}
-            </strong>
-            <span className="u-num" style={{ ...T_MICRO, color: 'var(--color-ink-muted)' }}>
-              severity {(hit.severity * 100).toFixed(0)} of 100
-            </span>
-            {hit.overlap_group !== null ? (
-              <span
-                style={{ ...T_MICRO, color: 'var(--color-ink-faint)' }}
-                title="overlapping rules are grouped; the score counts the group once"
-              >
-                overlap group {hit.overlap_group} · {hit.counted_once ? 'counted once' : 'counts again'}
-              </span>
-            ) : null}
-          </div>
-          <p style={{ ...T_LABEL, color: 'var(--color-ink-muted)', margin: '4px 0' }}>{hit.observed}</p>
-          <p
-            style={{ ...T_MICRO, color: 'var(--color-ink-faint)' }}
-            title="thresholds are config/rules.yaml values, fitted on the training window"
+      {payload.rule_hits.map((hit) => {
+        const typology = typologyMetaOf(hit.typology);
+        return (
+          <li
+            key={hit.rule_code}
+            data-rule-hit={hit.rule_code}
+            style={{ ...PANEL_SUNKEN, padding: 10, opacity: hit.fired ? 1 : 0.72 }}
           >
-            parameters {hit.parameters.map((entry) => `${entry.key}=${String(entry.value)}`).join(' · ')} · first{' '}
-            <Timestamp iso={hit.first_hit} timeZone={timeZone} /> · last{' '}
-            <Timestamp iso={hit.last_hit} timeZone={timeZone} />
-          </p>
-        </li>
-      ))}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+              {typology !== undefined ? <Icon name={typology.glyph} size={16} title={typology.name} /> : null}
+              <strong style={{ ...T_LABEL, color: 'var(--color-ink)', fontWeight: 600 }}>
+                {hit.rule_code} {hit.rule_name}
+              </strong>
+              {/* `fired` is the stored flag; a rule evaluated and not met is a different fact
+                  from a rule that was never run, and the row says which. */}
+              <span style={{ ...T_MICRO, color: hit.fired ? 'var(--color-band-e)' : 'var(--color-ink-faint)' }}>
+                {hit.fired ? 'fired' : 'evaluated, not met'}
+              </span>
+              {typology !== undefined ? (
+                <span style={{ ...T_MICRO, color: 'var(--color-ink-muted)' }}>{typology.name}</span>
+              ) : (
+                <span style={{ ...T_MICRO, color: 'var(--color-ink-faint)' }}>typology {hit.typology}</span>
+              )}
+            </div>
+            {/* `observed` and `threshold` are served as numbers, so the line prints two numbers
+                and names them; the sentence the client used to render whole was never on the
+                wire. Either half may be null, and null says so rather than reading as zero. */}
+            <p style={{ ...T_LABEL, color: 'var(--color-ink-muted)', margin: '4px 0' }}>
+              observed{' '}
+              <span className="u-num" style={T_MONO}>
+                {hit.observed === null ? 'not stored' : hit.observed.toFixed(4)}
+              </span>{' '}
+              against threshold{' '}
+              <span className="u-num" style={T_MONO}>
+                {hit.threshold === null ? 'not stored' : hit.threshold.toFixed(4)}
+              </span>
+            </p>
+            {hit.parameters.length > 0 ? (
+              <p
+                style={{ ...T_MICRO, color: 'var(--color-ink-faint)' }}
+                title="the rule_hit detail bag, stored by the run for this row"
+              >
+                {hit.parameters.map((entry) => `${entry.key}=${String(entry.value)}`).join(' · ')}
+              </p>
+            ) : null}
+          </li>
+        );
+      })}
     </ul>
   );
 }
 
-function CounterfactualPanel({
-  payload,
-  assumptions,
-}: { payload: CasePayload; assumptions: readonly AssumptionLine[] }): ReactElement {
+function CounterfactualPanel({ payload }: { payload: CasePayload }): ReactElement {
   const counterfactual = payload.counterfactual;
   if (counterfactual === null) {
     return (
       <p style={{ ...T_LABEL, color: 'var(--color-ink-muted)', maxWidth: '72ch' }}>
-        No counterfactual is computed for this case: the server reports that no single contribution is large enough that
-        removing it changes the band. That is a finding about how this score is built, not a missing panel.
+        No counterfactual is recorded for this case. The route computes one only when the run stored both a scorecard
+        for the account and its band boundaries, and it sends null when it did not — so this is an absent measurement,
+        not a finding that nothing would have changed.
       </p>
     );
   }
+  const change = counterfactual.change;
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-      <p style={T_BODY}>{counterfactual.statement}</p>
+      <p style={T_BODY}>
+        {change === null
+          ? (counterfactual.statement ??
+            `No single stored bin change moves this account out of band ${counterfactual.current_band}.`)
+          : `Cheapest single change in the fitted scorecard: move ${change.attribute} from bin ${change.from_bin} to ${change.to_bin}.`}
+      </p>
       <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', alignItems: 'flex-start' }}>
         <p style={{ ...T_LABEL, margin: 0 }}>
-          score without{' '}
-          <span className="u-num" style={{ ...T_MONO, color: 'var(--color-ink)' }}>
-            {counterfactual.score_without.toFixed(3)}
-          </span>
-          {counterfactual.band_without !== null ? (
-            <>
-              {' · '}
-              <BandBadge band={counterfactual.band_without} describe={false} />
-            </>
-          ) : null}
+          {change === null ? 'band stays ' : 'band becomes '}
+          <BandBadge band={change === null ? counterfactual.current_band : change.resulting_band} describe={false} />
         </p>
-        <MoneyFigure
-          figure={counterfactual.expected_value_without}
-          assumptions={assumptions}
-          label="Expected value without it"
-          compact
-        />
+        {change !== null ? (
+          <p className="u-num" style={{ ...T_LABEL, margin: 0 }}>
+            {count(counterfactual.total_points)} points{' '}
+            {change.points_delta >= 0 ? `+${String(change.points_delta)}` : String(change.points_delta)} →{' '}
+            {count(change.resulting_points)} · action “{change.resulting_action}”
+          </p>
+        ) : null}
       </div>
+      {counterfactual.alternatives.length > 0 ? (
+        <ul style={{ listStyle: 'none', margin: 0, padding: 0 }}>
+          {counterfactual.alternatives.map((entry) => (
+            <li
+              key={`${entry.attribute}-${entry.to_bin}`}
+              style={{ display: 'flex', justifyContent: 'space-between', gap: 8, padding: '3px 0', ...HAIRLINE_BOTTOM }}
+            >
+              <span style={{ ...T_MONO, fontSize: 'var(--text-micro)', color: 'var(--color-ink-muted)' }}>
+                {entry.attribute}: {entry.from_bin} → {entry.to_bin}
+              </span>
+              <span className="u-num" style={{ ...T_MICRO, color: 'var(--color-ink-faint)' }}>
+                {entry.points_delta >= 0 ? `+${String(entry.points_delta)}` : String(entry.points_delta)} points → band{' '}
+                {entry.resulting_band}
+              </span>
+            </li>
+          ))}
+        </ul>
+      ) : null}
       <p style={{ ...T_MICRO, color: 'var(--color-ink-faint)' }}>
-        Computed by the server on the same feature matrix as the score. This client re-derives nothing.
+        {counterfactual.statement !== null && change !== null ? counterfactual.statement : ''}
+        {counterfactual.statement === null && change !== null
+          ? 'Computed by the server on the stored scorecard points, the stored bins and the stored band boundaries. This client re-derives nothing.'
+          : ''}
       </p>
-    </div>
-  );
-}
-
-function Narrative({ payload }: { payload: CasePayload }): ReactElement {
-  if (payload.narrative === null) {
-    return (
-      <p style={{ ...T_LABEL, color: 'var(--color-ink-muted)', maxWidth: '72ch' }}>
-        No narrative is recorded for this case, and nothing has been written in its place.
-      </p>
-    );
-  }
-  return (
-    <div>
-      <p style={T_BODY}>{payload.narrative.text}</p>
-      <p style={{ ...T_MICRO, color: 'var(--color-ink-faint)', marginTop: 6 }}>
-        source: {payload.narrative.source === 'template' ? 'deterministic template' : 'summariser'} ·{' '}
-        {payload.narrative.degraded
-          ? 'the summariser port is unavailable on this deployment, so this is the labelled fallback rather than no text'
-          : 'generated for this run'}
+      {/* What is NOT here, and why: the quantities this panel used to print. */}
+      <p style={{ ...T_MICRO, color: 'var(--color-ink-faint)' }}>
+        The route answers in integer scorecard points. It does not re-price the expected value of the counterfactual
+        account, and it does not return a probability for it — both were rendered here as though it had
+        (apps/web/CONTRACT-GAPS.md).
       </p>
     </div>
   );
@@ -979,6 +1121,7 @@ function DecisionRail({
   payload,
   assumptions,
   meta,
+  resolved,
   onDecide,
   failure,
   pending,
@@ -999,6 +1142,9 @@ function DecisionRail({
    *  no meta and a skeleton renders the skeleton — so the rail never rendered its own
    *  children and the decision form was absent from the DOM on a fully-loaded case. */
   meta: ListMeta | null;
+  /** Settled-ness, from the query that owns the route. The rail is the one pane on this
+   *  page that must never wait on `meta`: it holds the form the analyst signs with. */
+  resolved: boolean;
   onDecide: (decision: DecisionAction) => Promise<void>;
   failure: ApiFailure | null;
   pending: boolean;
@@ -1032,6 +1178,10 @@ function DecisionRail({
       title="Decision"
       operation="Recording the decision"
       meta={meta}
+      /* Settled-ness comes from the caller's query, not from `meta`: the rail holds the
+         form the analyst signs with, and a pane that read provenance for liveness hid it
+         behind a skeleton while the case was fully loaded. */
+      resolved={resolved}
       skeleton={{ columns: [{ key: 'rail', width: '100%' }], rows: 4 }}
     >
       <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
@@ -1245,7 +1395,8 @@ function DecisionHistory({ decisions, timeZone }: { decisions: Decision[]; timeZ
                     not answered yet, so nothing is printed in their place. */}
                 {decision.pending === true ? null : (
                   <span className="u-num" style={{ ...T_MICRO, color: 'var(--color-ink-faint)' }}>
-                    #{count(decision.seq)} · {decision.actor} ({decision.role})
+                    #{count(decision.seq)} · {decision.actor}
+                    {decision.roles.length > 0 ? ` (${decision.roles.join(', ')})` : ''}
                   </span>
                 )}
                 {decision.pending === true ? (
@@ -1254,7 +1405,12 @@ function DecisionHistory({ decisions, timeZone }: { decisions: Decision[]; timeZ
                   </span>
                 ) : null}
                 {decision.four_eyes_required ? (
-                  <span style={{ ...T_MICRO, color: 'var(--color-ink-muted)' }}>four-eyes required</span>
+                  <span style={{ ...T_MICRO, color: 'var(--color-ink-muted)' }}>
+                    four-eyes required · {decision.four_eyes_state.replace(/_/g, ' ')}
+                  </span>
+                ) : null}
+                {decision.decided_on_superseded_run ? (
+                  <span style={{ ...T_MICRO, color: 'var(--color-band-d)' }}>written on a superseded run</span>
                 ) : null}
               </div>
               <p style={{ ...T_LABEL, color: 'var(--color-ink-muted)', margin: '4px 0', whiteSpace: 'pre-wrap' }}>
@@ -1277,7 +1433,7 @@ function DecisionHistory({ decisions, timeZone }: { decisions: Decision[]; timeZ
                 </code>
                 {decision.reversible_of !== null ? (
                   <span style={{ ...T_MICRO, color: 'var(--color-ink-faint)' }}>
-                    reverses #{String(decision.reversible_of)}
+                    reverses decision <code style={{ ...T_MONO, fontSize: '0.625rem' }}>{decision.reversible_of}</code>
                   </span>
                 ) : null}
               </div>

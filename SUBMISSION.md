@@ -4,117 +4,263 @@ Global Innovation Build Challenge V2 · **Track 02 — Applied (Medical Technolo
 Deadline 1 October 2026. Six required components. This file is the source for the ones that
 are text; the ones that need a human are marked and left blank rather than filled in.
 
+Judging is on this page, against four criteria. Each one is answered as its own section, in
+§01, with a claim a judge can check and the command that produces it. Every figure below is
+read out of an artifact on disk, not written from intent; the `provenance:` field in each
+card names which.
+
 ---
 
 ## 01 · Project description
 
-**What it is.** OXBOW is a directed financial-crime analytics tool for mobile-money
-networks: it scores accounts, explains every score twice, and then prices the review queue
-against the analyst capacity that actually exists.
+> **OXBOW is a risk-scoring and financial-crime system that is evaluated like a trading
+> strategy. Every alert has a price, every policy has a backtest, and every number has an
+> audit path.**
 
-**The problem it solves.** AML tooling in production ranks alerts by a risk score and then
-hands the list to a team with a fixed number of analyst-minutes per period. Two things go
-wrong. The ranking is usually a single model nobody can argue with, so a false positive
-costs an analyst an hour and a challenged decision has no defence. And the queue is treated
-as if it were infinite: the system reports what it *found*, never what the team could
-*afford to look at*, so "we chose not to review these 1,212 accounts, worth X" is nowhere on
-record.
+A transaction-monitoring desk flags payments one at a time, ranks them by a score nobody can
+argue with, and hands the list to a team with a fixed number of analyst-minutes. Two things go
+wrong at that handover. The ranking is a single model, so a false positive costs an analyst an
+hour and a challenged decision has no defence. And the queue is treated as infinite: the
+system reports what it *found*, never what the desk could *afford to look at*, so "we chose not
+to review these accounts, worth X" is nowhere on record.
 
-OXBOW's answer is three parts:
+OXBOW is built from public, historical, de-identified mobile-money data and answers the only
+question a risk manager actually asks: **if my team can review 200 accounts this week, which
+200, what does that save, and what am I leaving on the table?**
 
-1. **Two models that disagree in public.** A WOE scorecard whose points a human can
-   recalculate and contest, and a gradient-boosted model with per-account SHAP. Both are
-   shown side by side, with the disagreement itself as a work queue. A scorecard is not a
-   compromise on accuracy — it is the artifact a tribunal, a regulator or a defendant can
-   actually interrogate.
-2. **A graph layer that respects time.** Twelve typology rules run over a directed
-   multigraph where a cycle only counts if it is *time-respecting* — each hop must move
-   value forward and return to its origin inside the window. A two-hop round trip between
-   one account and itself is excluded on purpose: that is reinvestment, not a network.
-3. **Economics under a capacity constraint.** Every alert is priced by expected value
-   (recovered loss × probability, less review cost and friction), the queue is allocated
-   greedily and again by CP-SAT optimisation, and the difference between the two is shown in
-   money. The cut line is drawn explicitly, with the value sitting below it named.
+### 1A · Innovation & Impact
 
-**How it works under the hood.** Polars and DuckDB over Parquet; a canonical event schema
-(21 columns, 19 persisted) validated with Pandera, with anything that fails contract sent to
-a quarantine file rather than coerced. Money is `int64` minor units end to end and is only
-divided at render time — an AST gate (`scripts/no_float_money.py`, 158 files) fails the
-build if a float ever holds a currency amount. Features are computed per fold from data at
-that fold's cut, never once globally. Splits are five expanding walk-forward windows with a
-30-day embargo that is *asserted equal to the longest feature lookback*, purged on the
-outcome window, and shuffling is forbidden by the schema.
+**The novelty is not the classifier. It is that the review queue is treated as a portfolio.**
 
-Everything is reproducible from a seed and a salt: seed 1337, a total order of
-`(event_ts_utc, txn_id)`, content-hashed artifacts, and `make verify-determinism` which runs
-the pipeline twice and diffs the digests.
+Three things ship here that we did not find combined in a published prototype:
 
-The API is ports-and-adapters: the same read model serves Postgres and a read-only
-"null-file" warehouse, so the tool can be demonstrated with no database at all. Each analyst
-decision writes three rows in one transaction — the decision, a link in a SHA-256 hash
-chain, and an outbox row carrying the case bundle to a webhook. `make verify-audit` walks
-the chain and names the sequence number of the first broken link; a case packet re-walks it
-on export and refuses to render if it does not verify. Reversals are new rows, never edits.
+1. **Two models that disagree in public.** A weight-of-evidence scorecard whose whole-number
+   points sum exactly to the score — so a tribunal, a regulator or a defendant can add the
+   column up by hand — runs beside a gradient-boosted model with per-account SHAP. Both are
+   shown, both are reported, and the accounts where they diverge most are their own work
+   queue, because that is where model risk actually lives.
+2. **A graph layer that respects time.** Twelve typology rules run over a directed,
+   timestamped multigraph where a cycle only counts if it is *time-respecting* — every hop
+   moves value forward and the loop closes inside the window — and *value-retaining*. A
+   two-hop round trip from an account back to itself is excluded on purpose: that is
+   reinvestment, not a network.
+3. **An expected-value allocation under a hard capacity budget.** Every alert is priced,
+   `EV_i = p·E·r − c − (1−p)·f`, and the queue is allocated to analyst-minutes by greedy
+   density order *and* by exact CP-SAT, with the optimality gap reported in money.
 
-**The measurement that changed the architecture.** We pre-committed a pass condition for
-the graph thesis before writing any graph code: median counterparty degree > 2. PaySim —
-the standard, widely-cited fraud-detection simulator — has **median degree 1** and produced
-**zero** surviving time-respecting cycles in a 20,000-row sample. The recorded verdict is
-`STAR_SHAPED_TRIGGER_DAY4_FALLBACK`. Rather than quietly switching datasets, the pipeline
-kept its shape and split its assignment: tabular risk trains on PaySim, network detection
-runs on IBM-AML, which does have a graph (median degree 10 excluding self-loops, 173,735
-accounts above two counterparties, 0.1019 % laundering-labelled over 5,078,345 rows). PaySim
-is 6,362,620 canonical events over a 743-day window, ingested with 0 quarantined rows and 0
-silently coerced.
+**Measurable impact, on one real scored corpus, under one stated assumption set.**
+Five walk-forward folds over 79,998 scored account rows (base rate 0.135 %), each with a
+12,000-analyst-minute budget, priced from `config/economics.yaml` — which is illustrative and
+says so:
+
+| policy at the same capacity | accounts reviewed | analyst-minutes used | true / false positives | net benefit |
+| --- | --- | --- | --- | --- |
+| score threshold — what most desks actually do | 2,625 | 59,993 of 60,000 | 31 / 2,594 | **−UGX 61,991,618** |
+| expected value, greedy = exact CP-SAT | 1 | 120 | 1 / 0 | **+UGX 2,586,702** |
+
+At one capacity and one assumption file, pricing the queue rather than thresholding it is
+worth **UGX 64.58 million** across five folds — and the mechanism is the surprising part: the
+optimal policy spends **1 of the 200 available analyst-hours**, because at a 0.135 % base rate
+almost no alert clears its own review and friction cost. "Review less, deliberately, and say
+what you gave up" is the result, and the capacity cut line in the UI is that result made
+visible.
+
+**The same table contains the finding against us, printed rather than removed.** Expected
+shortfall at 97.5 % on the exposure *not* reviewed is UGX 16.03 M under the EV policy against
+UGX 8.52 M under the threshold policy: the policy that wins on the mean fattens the tail by
+UGX 7.50 M, because leaving the queue unread leaves value unexamined. A risk-adjusted benefit
+ratio and a tail comparison exist in this build precisely so that we cannot hide that, and a
+policy that beats another on average while losing on the tail is a policy a desk has to
+choose knowingly.
+
+**Impact is bounded by an assumption, and we say which one.** Every currency figure above is a
+function of a 0.35 recovery rate swept over 0.20 / 0.35 / 0.50, a 24-hour recovery window,
+UGX 150 per analyst-minute and UGX 25,000 of friction cost per wrongly-touched legitimate
+customer. No money figure appears anywhere in this product — UI, packet, report or slide —
+without that band printed beside it.
+
+### 1B · Technical Feasibility
+
+It runs, from one command, and what it produces is queryable.
+
+- **Ingest.** 6,362,620 PaySim canonical events across 64 batches, **0 quarantined and 0
+  silently coerced**, over a 743-day window (`2014-01-02 → 2016-01-14`), verified against a
+  recorded SHA-256. IBM-AML ingests through its own adapter: 5,078,345 transaction rows,
+  515,080 accounts, 647,939 directed edges excluding self-loops.
+- **Modelling.** 75 published features on a 79,998-row account-grain corpus with a recorded
+  feature-spec hash; five folds each fitted and scored end to end; SHAP persisted per scored
+  row so the UI never computes on request.
+- **Quant layer.** EV allocation in integer minor units, greedy against exact CP-SAT with a
+  measured optimality gap, Monte-Carlo downstream exposure at 50,000 seeded draws per fold,
+  VaR95 / ES97.5 on unreviewed exposure, a capacity sweep and a policy frontier.
+- **Serving.** FastAPI over Postgres behind eight **ports with working null adapters** — the
+  same read model serves a real warehouse and a disk-only one, so the tool can be
+  demonstrated with no external system at all. **43,046 scored accounts land from that run's
+  43,720 out-of-sample rows, and the fold's calibration-refusal reason lands beside each one** —
+  the landed count was zero until this week, and an empty queue is the failure mode this product
+  exists to avoid. Every outbound payload carries its own
+  assumptions, model version and disclaimer, so a consumer cannot receive an OXBOW number
+  without receiving what it depends on. Errors are RFC 9457 `problem+json` with a `run_id`.
+- **Interface.** Seven product screens plus a state gallery, on a design system with 12
+  hand-drawn typology glyphs on a 24 px grid at 1.75 px stroke — cycle, fan-in, fan-out,
+  pass-through, structuring, dormant-wake, hash-link, embargo and four more. These encode
+  typologies no icon library has. Measured, not asserted: axe 0 critical on all 10 sampled
+  routes, and layout-shift **0.000000** on both the alert queue and the case workspace.
+- **Integrity.** Money is `int64` minor units end to end and is divided only at render time; a
+  custom AST gate walks 161 files and fails the build if a float ever holds a currency amount
+  (measured: `no-float-money: OK (161 files scanned)`).
+  Every analyst decision writes three rows in one transaction: the decision, a link in a
+  SHA-256 hash chain, and an outbox row. `make verify-audit` walks the chain and names the
+  sequence number of the first broken link; a case packet re-walks it on export and refuses to
+  render if it does not verify. Reversals are new rows, never edits.
+- **Reproducibility.** Seed 1337 propagated to NumPy, LightGBM, Optuna, the Monte-Carlo engine
+  and the typology injector; a total order of `(event_ts_utc, txn_id)`; content-hashed
+  artifacts; `make verify-determinism` runs a stage twice and diffs the digests — measured at
+  **67 artifacts byte-identical** across two IBM ingests.
+
+What is *not* claimed: no live transaction is processed, no payment rail is connected, nothing
+trades, nothing screens against a sanctions list to make a decision, and no LLM sits anywhere
+in a scoring, ranking or decision path. Non-goals are refusals here, not preferences.
+
+### 1C · Rigor & Validation
+
+This is the section most hackathon ML projects skip, so it is where the design work went.
+
+- **The split is temporal, purged and embargoed.** Five expanding walk-forward windows with a
+  30-day embargo that is *asserted equal to the longest feature lookback in
+  `config/features.yaml`* — the two numbers disagreeing is a build failure, not a config
+  drift. Random shuffling is forbidden by the schema. The fold plan agrees with the corpus's
+  own fold column on **79,998 of 79,998 rows** (`agreement_share: 1.0`).
+- **The leakage gate is proven to bite, in both directions.** A deliberately leaking feature
+  added to a test fixture is caught. And the published backtest carries a control arm that
+  reads the label ahead of time: it scores **PR-AUC 1.0 against the best honest arm's 0.0591**,
+  which is the harness proving it can see cheating — not a model proving it is good.
+- **A headline metric chosen for the actual problem.** At a 0.135 % positive rate AUROC
+  inflates, so PR-AUC leads and AUROC is reported only for comparability, explicitly
+  de-emphasised. Best honest arm 0.0591 is 44× the base rate; alerts per 10k accounts,
+  precision at budget and Brier score accompany it.
+- **Seed stability is reported as a distribution, not as a lucky run.** PR-AUC over five seeds:
+  **mean 0.0347, sd 0.0213** — a spread wide enough to matter, published because the alternative
+  is quoting 0.0591 as if it were stable.
+- **Calibration was refused, and we honoured the refusal instead of the metric.** Isotonic
+  calibration has a floor of 50 validation positives; this slice's folds carried 14 and 6.
+  Rather than lower the floor to get a reliability curve, the probabilities ship labelled
+  **uncalibrated**, the queue prints the fold's own refusal reason, and every money figure
+  derived from them inherits the label. A miscalibrated probability multiplied by money is a
+  wrong currency figure, so this is not a caveat — it is the load-bearing limitation.
+- **Selection and testing are separated and timestamped.** Nine configurations evaluated;
+  selection on validation; `test_fold_touched_once: true` with a recorded instant; the
+  multiple-testing bias stated in the model card.
+- **Fairness and robustness checked even though no protected attribute exists** in either
+  corpus: false-positive rate by amount decile (6.43 % in the smallest-value bucket against
+  4.79 % mid-range — over-flagging small-value accounts is the realistic harm and it is named
+  as such), plus two perturbation controls: ±10 % amount shift leaves score rank correlation at
+  Spearman 0.99998, and a 10 % edge drop is reported with its own recall stability.
+- **Two corpora, reported separately, never averaged** into one headline number.
+- **A per-rule hit-rate report runs every time, and we publish the answer it gave us.** Each of
+  R1–R12 is checked against a floor and a one-third ceiling, because a rule that fires on
+  nothing is decoration and a rule that fires on everyone is a constant. On the scored PaySim
+  corpus, **eleven of the twelve typology rules fire on zero of 76,851 accounts** and are
+  excluded from scoring with that status recorded: `RAPID_PASS_THROUGH`, `FAN_IN`, `FAN_OUT`,
+  `CYCLE_MEMBER`, `STRUCTURING`, `VELOCITY_SPIKE`, `DORMANT_REACTIVATION`, `ODD_HOUR_SHIFT`,
+  `FAST_CASH_OUT`, `NEW_COUNTERPARTY_SURGE` and `CHAIN_MEMBER` are all `below_floor`, and only
+  `AMOUNT_REGIME_SHIFT` fires (170 accounts). That is not a surprise, it is the consequence of
+  the measurement above — PaySim is star-shaped, so a network rule has no network to fire on —
+  and the gate designed to shout about it did shout. The graph corpus where those typologies
+  are labelled is IBM-AML, and the named gap in this build is that the *scored* run is the one
+  corpus that cannot exercise the network layer. We are reporting that rather than shipping a
+  "12 typology rules" bullet with the hit counts left out.
+- **The ablation's own honesty is disclosed in the artifact.** The eight honest rows currently
+  share one fitted stack, so they separate the *allocation policy* — which is where the result
+  above lives — rather than the model class. That caveat is printed under the published table,
+  and the per-row channel scorer that fixes it landed on 2026-09-28 with the re-run still owed.
+  We would rather ship the disclosure than a table whose labels claim more than they measure.
+- **Twelve named limitations**, each with the measurement that shows it, written in the first
+  person, in `LIMITATIONS.md`.
+
+### 1D · Presentation
+
+- A **four-minute demo path** that a judge can walk unaided and that every screen deep-links:
+  currency KPI → alert queue with the capacity cut line → case workspace → network explorer →
+  a written, hash-chained decision → the exported packet → the policy simulator, ending on the
+  limitations and the named assumption. It is scripted beat by beat in §03 below and the
+  narration is generated from that same table, so the voice cannot drift from the words a
+  judge reads.
+- **Eight screenshots** of product screens, produced by a script rather than a camera, at
+  2× / 1440×900.
+- A **`/dev/states` gallery** holding every loading, empty and error state in the product on
+  one page, screenshot-tested and swept for accessibility. When a judge asks to see it fail,
+  the answer is a route.
+- **Attribution and disclaimers are structural, not decorative**: the research-prototype
+  disclaimer is asserted by a test to appear in the README, in the footer of every route and on
+  page one of every packet; the dataset card carries licence, share-alike obligation, citation,
+  retrieval date and per-file SHA-256; and every currency figure prints the config keys it is a
+  function of.
+- **Risk is never encoded by colour alone** — every band renders as its letter plus a
+  five-segment meter glyph, so the encoding survives a greyscale print of the packet and a
+  washed-out projector.
+
+### What the data actually is, and the measurement that changed the architecture
+
+We pre-committed a pass condition for the network thesis before writing any graph code:
+median counterparty degree > 2. PaySim — the standard, widely-cited fraud-detection simulator —
+has **median degree 1**, a sender-reuse ratio of 0.0015, and produced **zero** surviving
+time-respecting cycles in a 20,000-row sample. The recorded verdict is
+`STAR_SHAPED_TRIGGER_DAY4_FALLBACK`.
+
+Rather than quietly switching datasets, the pipeline kept its shape and split its assignment:
+tabular risk trains on PaySim, network detection runs on IBM-AML, which does have a graph
+(median degree 10 excluding self-loops, 173,735 accounts above two counterparties, 0.1019 %
+laundering-labelled), and which also ships **3,209 labelled transactions across 370 laundering
+attempts in 8 typologies** — so per-typology recall is measured against real annotations rather
+than asserted.
+
+PaySim's `isFraud` covers one narrow behaviour (an agent takes over an account and drains it)
+and `isFlaggedFraud` fires 16 times in 6.36 M rows, which is not a usable target. Metrics are
+reported per corpus and never averaged.
 
 **What we refuse to do.** Elliptic is CC BY-NC-ND, so it is cited as related work and never
-acquired, never ingested, never behind a feature or a figure — enforced by
-`ingest_allowed: false` in config, not by discipline. IEEE-CIS is unused. Every currency
-figure carries the assumptions it derives from, printed beside it, naming the keys in
-`config/economics.yaml`; a money figure without its assumption block is a rejection trigger
-in code review and a hard refusal in the renderer. Twelve named weaknesses are in
-LIMITATIONS.md with the measurement that shows each one.
+acquired, never ingested, never behind a feature or a figure — enforced by `ingest_allowed:
+false` in config, not by discipline. IEEE-CIS is unused. A source that is not declared in
+`config/sources.yaml` is refused by ingest.
 
-**Honest status.** The pipeline runs end to end and has produced a real scored corpus
-(79,998 account rows × 75 features, 108 positives). The headline model and economics cards
-now carry `provenance: real_corpus`: 9 variants from the walk-forward over the landed PaySim
-40k slice, with the fold plan agreeing with the corpus's own fold column on all 79,998 rows,
-and the deliberately leaking control row scoring PR-AUC 1.0 against the best honest arm's
-0.0591 — which is the harness proving it can see leakage, not a model proving it is good.
-Two things are not what the table's labels imply, and the cards say so beside it: every honest
-row runs the same fitted stack, so the ablation separates the allocation policy rather than
-the model class, and every fold refuses to calibrate because the slice holds fewer validation
-positives than `config/model.yaml`'s floor of 50 requires (DEV-024; a 500,000-event slice is
-running to answer that). The harness itself was verified first against
-hand-computed ground truth, and it still carries that labelled demonstration path. We
-would rather ship a card that says so than one that does not.
+### Honest status
+
+The pipeline runs end to end and has produced a real scored corpus and a real five-fold
+backtest, both at `provenance: real_corpus`, and the generated cards publish those numbers.
+Two things the table's labels do not yet measure are disclosed beside it: the honest ablation
+rows share one fitted stack, so they separate policy rather than model class; and no fold
+cleared the calibration floor, so the probabilities are labelled uncalibrated rather than being
+presented as measured. The harness was verified first against hand-computed ground truth and
+still carries that labelled demonstration path. We would rather ship cards that say so than
+cards that do not.
 
 ---
 
 ## 02 · Source code
 
-Public repository: **`<PASTE URL — see SUBMISSION-CHECKLIST.md, this needs `gh auth login`>`**
+Public repository: **`https://github.com/BROCKUGANDA/oxbow`**
 
-No CI workflows are included, by request. The repository is MIT-licensed for code; the
-datasets keep their own terms (PaySim CC BY-SA 4.0, IBM-AML CDLA-Sharing-1.0, both
-share-alike on derived data; Elliptic CC BY-NC-ND, cite-only) and are not redistributed —
-`make data` fetches them and verifies each against a recorded SHA-256.
+The repository is MIT-licensed for code; the datasets keep their own terms (PaySim CC BY-SA 4.0
+and IBM-AML CDLA-Sharing-1.0, both share-alike on derived data; Elliptic CC BY-NC-ND, cite-only)
+and are not redistributed — `make data` fetches them and verifies each against a recorded
+SHA-256.
 
-Measured rather than asserted: `git ls-files` returns nothing under `.github/` (an empty local
-`.github/workflows/` directory exists and is in no commit — git does not track empty directories,
-so a clone has no CI either), and `tests/unit/test_publication_preflight.py` holds the rest of it:
-license consistency across `pyproject.toml` and `package.json`, no developer home path in shipped
-code, no secret-shaped literal, the `RUN_SALT` value absent from every tracked file, `.env`
-untracked, no corpus bytes committed, and every `license:` in `config/sources.yaml` named in
-`LICENSE`.
+No CI workflows are included, deliberately. Measured rather than asserted: `git ls-files`
+returns nothing under `.github/` (an empty local `.github/workflows/` directory exists and is in
+no commit — git does not track empty directories, so a clone has no CI either), and
+`tests/unit/test_publication_preflight.py` holds the rest of the publication hygiene: licence
+consistency across `pyproject.toml` and `package.json`, no developer home path in shipped code,
+no secret-shaped literal, the `RUN_SALT` value absent from every tracked file, `.env` untracked,
+no corpus bytes committed, and every `license:` in `config/sources.yaml` named in `LICENSE`.
 
 ---
 
 ## 03 · Demo video — script and narration
 
-Target length **3:30** (limit 2–5 min). Capture at 1440×900, device scale 2, from the
-fixture/live app; narration is generated with the local TTS voice at a slightly slowed rate
-(see `SUBMISSION-CHECKLIST.md` for the exact commands).
+Target length **3:30** (limit 2–5 min). Capture at 1440×900, device scale 2, from the live app
+serving landed evidence; narration is generated with the local TTS voice at a slightly slowed
+rate (see `SUBMISSION-CHECKLIST.md` for the exact commands).
 
 | # | Beat | On screen | Narration (read as written) |
 |---|---|---|---|
@@ -129,6 +275,13 @@ fixture/live app; narration is generated with the local TTS voice at a slightly 
 **Required on-screen at all times:** the research-prototype disclaimer is in the footer of
 every route and on page one of every exported packet — asserted by
 `test_disclaimer_present_everywhere`.
+
+**If beat 6 draws a question, the answer is in the table:** the threshold policy lost
+sixty-two million in modelled benefit across five folds at full capacity, the expected-value
+policy made two and a half million by spending one of two hundred analyst hours — and the
+expected shortfall on what was left unreviewed got worse by seven and a half million, which is
+printed on the same page rather than cropped out of the screenshot. All three figures are in
+the same currency and the same scale, and the scale is the one `config/economics.yaml` names.
 
 ---
 

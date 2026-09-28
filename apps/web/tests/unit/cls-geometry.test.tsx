@@ -20,9 +20,11 @@ import { cleanupAll, mustFindAll, render } from '@/test/render';
 
 afterEach(cleanupAll);
 
-/** A meta that says "the query answered". `Pane` reads `meta === null` as pending, so an
- * omitted prop defaults to null and the resolved arm would have been measured as a
- * skeleton — which is the failure this file first reported as a product defect. */
+/** The meta block a list route answers with. It is provenance only: `Pane` decides
+ *  settled-ness from its required `resolved` prop, never from whether `meta` arrived. The
+ *  three states this test measures are therefore stated three times, and the `meta` below
+ *  is passed to the resolved pane for the reason a real page would — to render the run
+ *  chip — not to tell the pane it had answered. */
 const RESOLVED_META: ListMeta = {
   run_id: '01J4Z7M2QK9N7V1C4X6E8G0B2D',
   trace_id: '01J4Z7M2QK9N7V1C4X6E8G0B2E',
@@ -111,6 +113,10 @@ describe('pane reserved geometry across all three states', () => {
   }
 
   it('pending, resolved and failed occupy the same reserved box', () => {
+    /* The pending arm: the query has not answered, so the pane shows the matched-geometry
+       skeleton. `resolved={false}` is what says so now — a `meta` of null used to be
+       pressed into saying it, which is why a pane with no provenance slot but real
+       children rendered a skeleton over an answer. */
     const pending = render(
       <Pane
         id="scorecard-strip"
@@ -118,12 +124,16 @@ describe('pane reserved geometry across all three states', () => {
         operation="Loading the strip"
         skeleton={skeleton}
         reserveHeight={320}
+        resolved={false}
         meta={null}
       >
         <span />
       </Pane>,
     );
     expect(bodyOf(pending).style.minHeight).toBe('320px');
+    // The pending arm must actually be holding a skeleton, or this measures nothing: the
+    // whole claim is that the box the skeleton occupies is the box the answer occupies.
+    expect(pending.container.querySelector('[role="status"]')).not.toBeNull();
     pending.cleanup();
 
     const resolved = render(
@@ -133,6 +143,7 @@ describe('pane reserved geometry across all three states', () => {
         operation="Loading the strip"
         skeleton={skeleton}
         reserveHeight={320}
+        resolved={true}
         meta={RESOLVED_META}
       >
         <p>the answer</p>
@@ -140,8 +151,13 @@ describe('pane reserved geometry across all three states', () => {
     );
     expect(bodyOf(resolved).style.minHeight).toBe('320px');
     expect(bodyOf(resolved).textContent).toContain('the answer');
+    // Resolved means resolved: the skeleton is gone, not layered under the answer.
+    expect(resolved.container.querySelector('[role="status"]')).toBeNull();
     resolved.cleanup();
 
+    /* The failed arm is NOT resolved — nothing arrived that this pane may render — and the
+       point of this case is that a failure reserves the same box as an answer rather than
+       collapsing the region or stranding a skeleton. */
     const failed = render(
       <Pane
         id="scorecard-strip"
@@ -149,6 +165,7 @@ describe('pane reserved geometry across all three states', () => {
         operation="Loading the strip"
         skeleton={skeleton}
         reserveHeight={320}
+        resolved={false}
         failure={{
           kind: 'network',
           class: 'network',

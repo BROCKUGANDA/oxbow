@@ -19,10 +19,10 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from api.schemas.catalog import Band, CaseStatus
-from api.schemas.common import AssumptionLine, Money
+from api.schemas.common import AssumptionLine, CalibrationKind, Money
 
 DecisionAction = Literal["escalate", "dismiss", "review", "reverse"]
 
@@ -46,14 +46,82 @@ class ScorecardPointRow(BaseModel):
 
 
 class CalibrationBand(BaseModel):
-    """Confidence with its observed rate and its population, never either alone."""
+    """Confidence with its observed rate and its population, never either alone.
+
+    Two shapes, and the one that arrives is decided by ``kind``:
+
+    * ``calibrated_band`` — a rate measured over a named band, with the ``n`` that makes
+      the rate a measurement. ``note`` is absent: there is nothing to apologise for.
+    * ``uncalibrated`` — no rate, no band and no ``n``, and a ``note`` in the fold's own
+      words saying why calibration was refused. The score on the same card is real; the
+      confidence figure was never measured, and plan 03 §H requires the case to say so
+      rather than print a gap the reader has to interpret.
+
+    A half-populated object is refused here for the same reason
+    ``ck_score_calibration_pairing`` refuses the half-populated row in the table: the
+    reader of a signed case cannot tell "0.00 over n=0" from "not measured", and those
+    are different claims about the account.
+    """
 
     model_config = ConfigDict(extra="forbid")
 
-    band: str
-    observed_rate: float
-    n: int
+    kind: CalibrationKind
+    band: str | None = None
+    observed_rate: float | None = Field(
+        default=None,
+        description=(
+            "Observed rate over the calibration population, not this account's outcome. "
+            "Absent when the fold refused calibration."
+        ),
+    )
+    n: int | None = None
     note: str | None = None
+
+    @model_validator(mode="after")
+    def _calibration_shape(self) -> CalibrationBand:
+        if self.kind is CalibrationKind.calibrated_band:
+            missing = [
+                name
+                for name, value in (
+                    ("band", self.band),
+                    ("observed_rate", self.observed_rate),
+                    ("n", self.n),
+                )
+                if value is None
+            ]
+            if missing:
+                raise ValueError(
+                    f"kind='calibrated_band' but {missing} is absent; a confidence figure "
+                    "without its population is an adjective, and a signed case refuses one"
+                )
+            if self.n is not None and self.n <= 0:
+                raise ValueError(
+                    f"n={self.n} is not a population: a calibrated reading states a rate "
+                    "measured over something, and n=0 measures nothing"
+                )
+            if self.note is not None:
+                raise ValueError("a calibrated reading must not carry a refusal note")
+            return self
+        if self.note is None:
+            raise ValueError(
+                "kind='uncalibrated' requires note: the analyst signing this case is "
+                "entitled to know why no rate was measured"
+            )
+        present = [
+            name
+            for name, value in (
+                ("band", self.band),
+                ("observed_rate", self.observed_rate),
+                ("n", self.n),
+            )
+            if value is not None
+        ]
+        if present:
+            raise ValueError(
+                f"an uncalibrated reading may not carry {present}; the fold refused to "
+                "measure them and the case cannot present a refusal as a reading"
+            )
+        return self
 
 
 class EconomicsBlock(BaseModel):

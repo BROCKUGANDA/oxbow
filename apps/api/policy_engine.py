@@ -87,14 +87,24 @@ def stored_priced_rows(
             continue
         band = str(score["band"])
         exposure = Money(int(economic["exposure_minor"]), str(economic["currency"]))
+        # An uncalibrated row has no `calibrated_probability` to price on, and it still
+        # holds an account the queue has to position: `fused_score` is the number the run
+        # scored it with, and `landing` writes the calibrated probability FROM it, so on a
+        # calibrated row the two are the same figure and only the uncalibrated one takes
+        # the second branch. What the uncalibrated row must not take is a measured-looking
+        # confidence line, so its rate and population stay absent (DEV-024: pricing an
+        # uncalibrated alert is the documented position; calling it calibrated is not).
+        probability = score["calibrated_probability"]
+        if probability is None:
+            probability = score["fused_score"]
         priced.append(
             price_account(
                 account_score(
                     account_key=key,
                     band=band,
-                    p_calibrated=float(score["calibrated_probability"]),
-                    observed_rate=float(score["observed_rate"]),
-                    calibration_n=int(score["calibration_n"]),
+                    p_calibrated=float(probability),
+                    observed_rate=score["observed_rate"],
+                    calibration_n=score["calibration_n"],
                 ),
                 exposure,
                 assumptions,
@@ -108,10 +118,16 @@ def account_score(
     account_key: str,
     band: str,
     p_calibrated: float,
-    observed_rate: float,
-    calibration_n: int,
+    observed_rate: float | None,
+    calibration_n: int | None,
 ) -> CalibratedScore:
-    """The P5 ``CalibratedScore`` value object, built from stored columns only."""
+    """The P5 ``CalibratedScore`` value object, built from stored columns only.
+
+    ``observed_rate`` and ``calibration_n`` are passed through uncoerced, including as
+    the pair of ``None`` an uncalibrated row stores: ``ck_score_calibration_pairing``
+    guarantees they are absent together, and defaulting either one here would turn a
+    refused measurement into a measured zero.
+    """
     return CalibratedScore(
         account_key=account_key,
         p_calibrated=p_calibrated,

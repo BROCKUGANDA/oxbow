@@ -321,10 +321,9 @@ export const DECISION_RECORD_ROW_FIELDS = [
 ] as const;
 
 /** `NetworkNode` — schemas/catalog.py:238-249. Its account identifier is `id`, whose
- *  description says it *is* an account key (:241). The client's subgraph decoder reads
- *  `key`, which the API does not send, so the explorer's nodes fail their decoder and
- *  the pane refuses. Listed here as the server-side divergence it is; the client is not
- *  being bent to match a name that plan §12's doctrine says should be `account_key`. */
+ *  description says it *is* an account key (:241). `flags` is a `list[str]`, written by
+ *  `_node_flags` (routers/graph.py:336-352): the flags of the edges touching the account,
+ *  plus `dense_community` from the stored community density and `flagged` from a D/E band. */
 export const NETWORK_NODE_FIELDS = [
   'id',
   'label',
@@ -336,6 +335,197 @@ export const NETWORK_NODE_FIELDS = [
   'is_rail',
   'flags',
 ] as const;
+
+/** `NetworkEdge` — schemas/catalog.py:252-261. No edge id, no typology, no reversal flag,
+ *  no velocity flag: the response model has never declared those names. */
+export const NETWORK_EDGE_FIELDS = ['source', 'target', 'total', 'txn_count', 'first_ts', 'last_ts', 'flags'] as const;
+
+/** `CommunityMetaNode` — schemas/catalog.py:264-283. */
+export const COMMUNITY_META_NODE_FIELDS = [
+  'community_id',
+  'member_count',
+  'total',
+  'representative_account_key',
+] as const;
+
+/** `NetworkSubgraph` — schemas/catalog.py:283-302, twelve fields, `extra="forbid"`.
+ *  `window_start` / `window_end` / `truncation_reason` / `counterparty_note` are nullable. */
+export const NETWORK_SUBGRAPH_FIELDS = [
+  'run_id',
+  'seed_account_key',
+  'hops',
+  'nodes',
+  'edges',
+  'collapsed_communities',
+  'node_cap',
+  'truncated',
+  'truncation_reason',
+  'window_start',
+  'window_end',
+  'counterparty_note',
+] as const;
+
+export type ServerNetworkNode = {
+  id: string;
+  label: string;
+  band: string | null;
+  exposure: ServerMoney | null;
+  degree: number;
+  community_id: number | null;
+  is_seed: boolean;
+  is_rail: boolean;
+  flags: string[];
+};
+export function serverNetworkNode(overrides: Partial<ServerNetworkNode> = {}): ServerNetworkNode {
+  return {
+    // `label` is the account key itself (routers/graph.py:228, `label=key`).
+    id: 'ACC-7F2A19',
+    label: 'ACC-7F2A19',
+    band: 'E',
+    exposure: serverMoney(180_000_000),
+    degree: 6,
+    community_id: 3,
+    is_seed: false,
+    is_rail: false,
+    flags: ['flagged'],
+    ...overrides,
+  };
+}
+
+export type ServerNetworkEdge = {
+  source: string;
+  target: string;
+  total: ServerMoney;
+  txn_count: number;
+  first_ts: string;
+  last_ts: string;
+  flags: string[];
+};
+export function serverNetworkEdge(overrides: Partial<ServerNetworkEdge> = {}): ServerNetworkEdge {
+  return {
+    source: 'ACC-7F2A19',
+    target: 'ACC-00DORM',
+    total: serverMoney(42_000_000),
+    txn_count: 4,
+    first_ts: '2026-09-03T09:14:00Z',
+    last_ts: '2026-09-03T11:02:00Z',
+    // The only value the pipeline writes here today: `["self_pair"]` for a self-transfer
+    // and `[]` otherwise, at packages/pipeline/oxbow/adapters/warehouse/landing.py's
+    // edges frame. `cycle` is in the `NetworkFlag` literal and is not written.
+    flags: [],
+    ...overrides,
+  };
+}
+
+export type ServerCommunityMetaNode = {
+  community_id: number;
+  member_count: number;
+  total: ServerMoney | null;
+  representative_account_key: string;
+};
+export function serverCommunityMetaNode(overrides: Partial<ServerCommunityMetaNode> = {}): ServerCommunityMetaNode {
+  return {
+    community_id: 11,
+    // `member_count` is the community's stored size, never the count this traversal
+    // happened to reach (_meta_node, routers/graph.py:405-432).
+    member_count: 812,
+    total: serverMoney(9_400_000_000),
+    representative_account_key: 'ACC-C0LLAP5ED',
+    ...overrides,
+  };
+}
+
+export type ServerNetworkSubgraph = {
+  run_id: string;
+  seed_account_key: string;
+  hops: number;
+  nodes: ServerNetworkNode[];
+  edges: ServerNetworkEdge[];
+  collapsed_communities: ServerCommunityMetaNode[];
+  node_cap: number;
+  truncated: boolean;
+  truncation_reason: string | null;
+  window_start: string | null;
+  window_end: string | null;
+  counterparty_note: string | null;
+};
+
+/** A whole `NetworkSubgraph`, the way `routers/graph.py:275-302` builds one: a seed, two
+ *  one-hop accounts with the edges that reach them, one collapsed community whose
+ *  representative is drawn as a meta-node, a stored window, and the node cap the run was
+ *  configured with. `window_start`/`window_end` are non-null here because a bounded query
+ *  is the common case; the tests that need the unbounded variant override them with null
+ *  rather than this file inventing a date. */
+export function networkSubgraph(overrides: Partial<ServerNetworkSubgraph> = {}): ServerNetworkSubgraph {
+  const seed = serverNetworkNode({ id: 'ACC-7F2A19', label: 'ACC-7F2A19', is_seed: true, community_id: 3 });
+  const oneHop = serverNetworkNode({
+    id: 'ACC-00DORM',
+    label: 'ACC-00DORM',
+    band: 'D',
+    degree: 2,
+    community_id: 3,
+    flags: ['flagged', 'dense_community'],
+  });
+  const rail = serverNetworkNode({
+    id: 'ACC-R41L0G',
+    label: 'ACC-R41L0G',
+    band: null,
+    exposure: null,
+    degree: 41,
+    community_id: null,
+    is_rail: true,
+    flags: [],
+  });
+  const representative = serverNetworkNode({
+    id: 'ACC-C0LLAP5ED',
+    label: 'ACC-C0LLAP5ED',
+    band: null,
+    exposure: null,
+    degree: 812,
+    community_id: 11,
+    flags: ['dense_community'],
+  });
+  return {
+    run_id: SERVER_RUN_ID,
+    seed_account_key: 'ACC-7F2A19',
+    hops: 2,
+    nodes: [seed, oneHop, rail, representative],
+    edges: [
+      serverNetworkEdge({ source: 'ACC-7F2A19', target: 'ACC-00DORM', txn_count: 4 }),
+      serverNetworkEdge({
+        source: 'ACC-00DORM',
+        target: 'ACC-R41L0G',
+        txn_count: 11,
+        first_ts: '2026-09-04T06:30:00Z',
+        last_ts: '2026-09-04T06:31:00Z',
+      }),
+      serverNetworkEdge({
+        source: 'ACC-7F2A19',
+        target: 'ACC-C0LLAP5ED',
+        txn_count: 1,
+        first_ts: '2026-09-05T12:00:00Z',
+        last_ts: '2026-09-05T12:00:00Z',
+      }),
+      // The one edge flag that is ever written: a self-transfer on the seed itself.
+      serverNetworkEdge({
+        source: 'ACC-R41L0G',
+        target: 'ACC-R41L0G',
+        txn_count: 2,
+        first_ts: '2026-09-03T09:14:00Z',
+        last_ts: '2026-09-03T09:15:00Z',
+        flags: ['self_pair'],
+      }),
+    ],
+    collapsed_communities: [serverCommunityMetaNode({ representative_account_key: 'ACC-C0LLAP5ED' })],
+    node_cap: 1_500,
+    truncated: false,
+    truncation_reason: null,
+    window_start: '2026-09-01T00:00:00Z',
+    window_end: '2026-09-29T00:00:00Z',
+    counterparty_note: null,
+    ...overrides,
+  };
+}
 
 /* ------------------------------------------------------------- validation route */
 
@@ -386,6 +576,12 @@ export function foldRow(index: number): Record<string, unknown> {
     captured_value: serverMoney(1_820_000_000),
     cost: serverMoney(31_200_000),
     net_benefit: serverMoney(602_000_000),
+    // Required by `FoldRow` (apps/api/schemas/validation.py:108-109) as a non-null Money, so
+    // the double has to carry them: the tail of what was NOT reviewed is the figure plan §6.5
+    // says decides whether a policy that wins on the mean is actually the better policy, and a
+    // fold that rendered without it would hide the one number that can argue against the pick.
+    var95: serverMoney(1_021_974_734),
+    es975: serverMoney(1_602_515_847),
     max_drawdown: serverMoney(0),
     zero_drawdown_note: 'zero because the policy never lost money in these folds',
     monte_carlo_runs: 2_000,

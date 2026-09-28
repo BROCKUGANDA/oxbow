@@ -48,6 +48,13 @@ from oxbow.ports.warehouse import RunState, is_ulid
 # The alert queue's sortable columns, whitelisted rather than interpolated. An
 # unknown ``sort=`` is a 400 naming the allowed set; a silently ignored one would
 # page through a differently-ordered list than the client thinks it has.
+#
+# ``calibrated_probability`` stays sortable now that revision 0003 lets it be NULL,
+# because of where a NULL goes: `_alert_order_by` and `_sort_rows` both force
+# ``NULLS LAST`` in *either* direction, so an unmeasured probability sinks below every
+# measured one instead of rising to the top of a descending sort. Postgres' default for
+# ``DESC`` is NULLS FIRST, which would render "we could not measure this" as "most
+# urgent" — the silent-zero failure wearing its opposite face.
 SORTABLE_ALERT_COLUMNS: Final = frozenset(
     {
         "fused_score",
@@ -91,6 +98,8 @@ _ALERT_SELECT_COLUMNS: Final = (
     "run_id",
     "band",
     "fused_score",
+    "calibration_kind",
+    "calibration_note",
     "calibrated_probability",
     "observed_rate",
     "calibration_n",
@@ -616,6 +625,8 @@ class PostgresSource(WarehouseSource):
             score.c.run_id,
             score.c.band,
             score.c.fused_score,
+            score.c.calibration_kind,
+            score.c.calibration_note,
             score.c.calibrated_probability,
             score.c.observed_rate,
             score.c.calibration_n,
@@ -712,6 +723,8 @@ class PostgresSource(WarehouseSource):
             score.c.run_id,
             score.c.band,
             score.c.fused_score,
+            score.c.calibration_kind,
+            score.c.calibration_note,
             score.c.calibrated_probability,
             score.c.observed_rate,
             score.c.calibration_n,
@@ -1174,6 +1187,13 @@ class FileWarehouseSource(WarehouseSource):
                 "run_id": score["run_id"],
                 "band": score.get("band"),
                 "fused_score": score.get("fused_score"),
+                # Read with `.get`, not defaulted. A warehouse file written before
+                # revision 0003 carries neither key, and inventing `uncalibrated` for it
+                # would state a fact about the run that the run never recorded; the
+                # schema's own required-ness is what refuses the stale artifact, and the
+                # refusal names `calibration_kind` rather than silently relabelling it.
+                "calibration_kind": score.get("calibration_kind"),
+                "calibration_note": score.get("calibration_note"),
                 "calibrated_probability": score.get("calibrated_probability"),
                 "observed_rate": score.get("observed_rate"),
                 "calibration_n": score.get("calibration_n"),

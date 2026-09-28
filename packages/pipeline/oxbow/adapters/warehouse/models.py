@@ -335,15 +335,38 @@ class Account(Base):
 class Score(Base):
     """One account's stored score in one run. The API reads this and never derives.
 
-    ``calibration_n`` is the population behind ``observed_rate``. A confidence
-    figure without its ``n`` is an adjective, and plan §14 asks for both on the
-    case rail, so the column is not optional in the response either.
+    ``calibration_n`` is the population behind ``observed_rate``. A confidence figure
+    without its ``n`` is an adjective, so the two are stored together or not at all —
+    and ``ck_score_calibration_pairing`` makes "together or not at all" a fact about the
+    database rather than a habit of the writer.
+
+    The pairing, not the column, is the invariant. A fold whose calibration was refused
+    has a *real* score and no measured rate behind it, and plan 03 §H says what happens
+    then: "calibration is refused and the UI says probabilities are uncalibrated". So
+    ``calibration_kind`` carries the producer's own vocabulary (the ``kind`` field of
+    ``CalibrationResult.confidence_label``), and the four measurement columns are
+    nullable so an uncalibrated row can say "uncalibrated" without either inventing a
+    rate or losing the score. Dropping the row instead hid every scored account behind
+    an empty queue, which is the silent-zero failure 03 §A rule 2 forbids.
     """
 
     __tablename__ = "score"
     __table_args__ = (
         UniqueConstraint("run_id", "account_key", name="uq_score_run_key"),
         CheckConstraint("band IN ('A','B','C','D','E')", name="ck_score_band"),
+        CheckConstraint(
+            "calibration_kind IN ('calibrated_band', 'uncalibrated')",
+            name="ck_score_calibration_kind",
+        ),
+        CheckConstraint(
+            "(calibration_kind = 'calibrated_band' AND calibrated_probability IS NOT NULL "
+            "AND calibration_band IS NOT NULL AND observed_rate IS NOT NULL "
+            "AND calibration_n > 0 AND calibration_note IS NULL) "
+            "OR (calibration_kind = 'uncalibrated' AND calibrated_probability IS NULL "
+            "AND calibration_band IS NULL AND observed_rate IS NULL "
+            "AND calibration_n IS NULL AND calibration_note IS NOT NULL)",
+            name="ck_score_calibration_pairing",
+        ),
         Index("ix_score_run_band", "run_id", "band"),
         Index("ix_score_run_fused", "run_id", text("fused_score DESC")),
     )
@@ -357,10 +380,12 @@ class Score(Base):
     p_scorecard: Mapped[float | None] = mapped_column(Double)
     p_gbm: Mapped[float | None] = mapped_column(Double)
     anomaly_norm: Mapped[float | None] = mapped_column(Double)
-    calibrated_probability: Mapped[float] = mapped_column(Double, nullable=False)
-    calibration_band: Mapped[str] = mapped_column(String(8), nullable=False)
-    observed_rate: Mapped[float] = mapped_column(Double, nullable=False)
-    calibration_n: Mapped[int] = mapped_column(Integer, nullable=False)
+    calibration_kind: Mapped[str] = mapped_column(String(15), nullable=False)
+    calibrated_probability: Mapped[float | None] = mapped_column(Double)
+    calibration_band: Mapped[str | None] = mapped_column(String(8))
+    observed_rate: Mapped[float | None] = mapped_column(Double)
+    calibration_n: Mapped[int | None] = mapped_column(Integer)
+    calibration_note: Mapped[str | None] = mapped_column(Text)
     predicted_typology: Mapped[str | None] = mapped_column(String(64))
     reason_codes: Mapped[list[dict[str, Any]]] = mapped_column(JSONB, nullable=False)
     rule_ids: Mapped[list[str]] = mapped_column(JSONB, nullable=False)
