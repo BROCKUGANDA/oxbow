@@ -42,6 +42,7 @@ from oxbow.backtest.interfaces import (
     COL_ACCOUNT_KEY,
     COL_AS_OF_TS,
     AccountScore,
+    FoldError,
     RuleHit,
     ScoreResult,
 )
@@ -454,6 +455,22 @@ def _fold_column_agreement(corpus: pl.DataFrame, plan: Any) -> dict[str, Any]:
     }
 
 
+def _as_moment(value: object, *, where: str) -> datetime:
+    """One timestamp out of a polars reduction, or a refusal naming the column.
+
+    ``stamps.min()`` answers with a union over everything a polars column can hold, and this
+    window is then walked on: fold boundaries, the embargo comparison and the artifact's
+    ``corpus_window`` all come out of it. A corpus whose ``as_of_ts`` is not timestamps is a
+    contract break at the point it can still be named, not a plan built on ``b'2014-01-02'``.
+    """
+    if isinstance(value, datetime):
+        return value
+    raise FoldError(
+        f"{where}: the corpus's as-of column yielded {value!r} "
+        f"({type(value).__name__}), not a timestamp; fold boundaries cannot be resolved on it"
+    )
+
+
 def _resolve_fold_plan(
     timeline: pl.DataFrame,
     *,
@@ -476,7 +493,10 @@ def _resolve_fold_plan(
     from oxbow.backtest.splits import build_walk_forward  # the ONE splits module
 
     stamps = timeline.get_column(COL_AS_OF_TS)
-    own_window = (stamps.min(), stamps.max())
+    own_window = (
+        _as_moment(stamps.min(), where=f"{COL_AS_OF_TS} minimum"),
+        _as_moment(stamps.max(), where=f"{COL_AS_OF_TS} maximum"),
+    )
     corpus_window_plan = build_walk_forward(
         timeline, registry=registry, config_dir=repo / "config", ts_column=COL_AS_OF_TS
     )
