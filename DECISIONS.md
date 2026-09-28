@@ -1461,3 +1461,36 @@ Consequence for the documents: `SUBMISSION.md` §1A's threshold-versus-EV table 
 corpus exposure path and stays true, but until this lands the shipped product's queue contradicts
 it. A judge who reads the table then opens the queue would find the numbers disagreeing, which is
 the one thing this build's whole evidence contract exists to prevent.
+
+## DEV-033 — the honest scorer cannot complete an ablation on a corpus whose folds degrade, and it is right to refuse. **Open; the fix is a reporting change, never a borrow.**
+
+The 40k walk-forward re-run exited 0 and **wrote nothing**:
+
+```
+oxbow.models.scorer.ProfileUnavailableError: fold 2: profile 'gbm_no_graph' asks for
+'p_gbm_no_graph' and the fold did not publish it. Its scoring_mode is
+'scorecard_and_rules_only'
+wrote NOTHING under out/backtest/01M3MNTTED6Q2053KNC4137DFB: the fold chain raised
+```
+
+Folds 2 and 3 ran `scorecard_and_rules_only` because the GBM's own average-precision
+guard refused them (recorded in the score manifest), so no graph-free booster exists for
+those folds and the `gbm_no_graph` row has nothing honest to report. DEV-027 chose exactly
+this behaviour — *a missing channel raises instead of borrowing the full stack's number* —
+so the crash is the guard doing its job, not a regression.
+
+**Why the published table looked fine then:** `out/backtest/real40k/ablation_results.json`
+predates DEV-027 and was produced by the path that handed one `SharedFoldScores` to all
+eight honest rows. The new scorer cannot produce that table on this corpus at all. Which
+means the ablation's completeness and its honesty are currently in tension, and honesty is
+winning by aborting.
+
+**Rejected, decisively:** catching the error and filling those cells with the full stack's
+number, or with `None` rendered as zero. Either restores exactly the substitution DEV-027
+removed and would make the published ablation a lie again. **The fix that is acceptable:**
+let the fold chain complete, publish the rows a fold *can* support, and give the
+unsupported cells an explicit `unavailable: <reason>` that the ablation gate already knows
+how to refuse on — the shape `test_the_landed_40k_run_refuses...` and the eval's
+refusal-surfacing change already establish. Then `fold_windows`, `backtest_fold` and the
+re-run's curve points land, which is what `demo_seed --create` and the `/model` rigor
+fields have been waiting on since DEV-031.
