@@ -41,6 +41,17 @@ ADVISORY_NOTE: Final = (
 _SOURCE_SYSTEM: Final = "OXBOW"
 
 
+class GoamlMoneyError(ValueError):
+    """A transaction the document cannot state as money, named by its transaction id.
+
+    ISO 4217's ``XXX`` means "no currency", and a missing amount is not zero shillings. Both
+    defaults used to be invented here, which would put a fabricated figure in a regulator-facing
+    draft — the one error class the whole no-implicit-FX rule (DEV-005) exists to stop. The
+    canonical contract declares both fields non-nullable, so reaching this is a boundary failure
+    and 03 §A rule 1 wants it loud.
+    """
+
+
 def _el(parent: ET.Element, tag: str, text: str | None = None, **attrs: str) -> ET.Element:
     element = ET.SubElement(parent, f"{{{GOAML_NAMESPACE}}}{tag}", dict(attrs))
     if text is not None:
@@ -72,10 +83,23 @@ def _msg_header(root: ET.Element, *, doc_id: str, doc_type: str, created_at: dat
 
 
 def _transaction(element: ET.Element, txn: Mapping[str, Any]) -> None:
-    _el(element, "TransactionId", str(txn.get("txn_id", "")))
-    amount = int(txn.get("amount_minor", 0))
-    currency = str(txn.get("currency", "XXX"))
-    _money(element, "TransactionAmount", amount, currency)
+    txn_id = str(txn.get("txn_id", ""))
+    _el(element, "TransactionId", txn_id)
+    minor = txn.get("amount_minor")
+    if isinstance(minor, bool) or not isinstance(minor, int):
+        raise GoamlMoneyError(
+            f"transaction {txn_id or '<missing id>'}: amount_minor is {minor!r}, not an integer "
+            "minor-unit amount. A missing amount rendered as 0 would state a payment that did not "
+            "happen (DEV-005)."
+        )
+    currency = txn.get("currency")
+    if not isinstance(currency, str) or not currency.strip():
+        raise GoamlMoneyError(
+            f"transaction {txn_id or '<missing id>'}: currency is {currency!r}. ISO 4217 has no "
+            "code for 'unknown' that is not 'XXX' = no currency, and a filing that says a "
+            "transaction had no currency is a claim nobody measured."
+        )
+    _money(element, "TransactionAmount", minor, currency)
     when = txn.get("event_ts_utc")
     if isinstance(when, datetime):
         _el(element, "TransactionDateTime", iso_z(when))
@@ -92,6 +116,49 @@ def _transaction(element: ET.Element, txn: Mapping[str, Any]) -> None:
             identifiers = _el(party, "IdentifyingInfo")
             _el(identifiers, "IdentifierTypeCode", "AccountKey")
             _el(identifiers, "DataIdentifier", str(account))
+
+
+#: The report's money rows, and the element each becomes. ``ReportSubmission.rows`` are
+#: "already-aggregated figures from the warehouse" (``ports/report.py``), not transactions: they
+#: carry a period label, a case count and three minor-unit totals, and no transaction id, amount
+#: or type at all.
+REPORT_BUCKET_MONEY: Final = (
+    ("exposure_minor", "ExposureAmountTotalMinorUnits"),
+    ("loss_avoided_minor", "LossAvoidedAmountTotalMinorUnits"),
+    ("net_benefit_minor", "NetBenefitAmountTotalMinorUnits"),
+)
+
+
+def _report_bucket(parent: ET.Element, row: Mapping[str, Any], *, currency: str) -> None:
+    """One activity bucket of the periodic report, stated as the aggregate it is.
+
+    These rows used to be rendered through :func:`_transaction`, and the defaults there meant what
+    reached the document was a blank ``TransactionId``, an amount of ``0`` and ISO 4217 ``XXX``
+    ("no currency") for every bucket — three invented fields in the one artifact an FIU would act
+    on, in the module whose own header promises every money value carries its currency. A bucket
+    now says its period, its case count and its three totals, each with the report's declared
+    currency and minor-unit scale.
+    """
+    element = _el(parent, "ReportedActivityBucket")
+    bucket = row.get("bucket")
+    if not isinstance(bucket, str) or not bucket.strip():
+        raise GoamlMoneyError(
+            f"report bucket {bucket!r}: a periodic report row has to name the period it totals, "
+            "or its money belongs to no time window"
+        )
+    _el(element, "PeriodLabel", bucket)
+    cases = row.get("cases")
+    if isinstance(cases, bool) or not isinstance(cases, int):
+        raise GoamlMoneyError(f"report bucket {bucket}: cases is {cases!r}, not a count of cases")
+    _el(element, "CaseCount", str(cases))
+    for key, tag in REPORT_BUCKET_MONEY:
+        minor = row.get(key)
+        if isinstance(minor, bool) or not isinstance(minor, int):
+            raise GoamlMoneyError(
+                f"report bucket {bucket}: {key} is {minor!r}, not an integer minor-unit amount "
+                "(DEV-005); an absent total rendered as zero would report that nothing was exposed"
+            )
+        _money(element, tag, minor, currency)
 
 
 def render_case_bundle(bundle: CaseBundle, transactions: Sequence[Mapping[str, Any]] = ()) -> bytes:
@@ -173,7 +240,7 @@ def render_report(submission: ReportSubmission) -> bytes:
     _el(activity, "ActivityDateTime", iso_z(submission.period_start))
     _el(activity, "PeriodicCompletion", "TRUE")
     for row in submission.rows:
-        _transaction(_el(activity, "FinancialTransaction"), row)
+        _report_bucket(activity, row, currency=submission.currency)
     summary = _el(activity, "InstBranch")
     _money(
         summary,

@@ -641,6 +641,19 @@ def test_the_goaml_draft_carries_the_money_with_its_scale_and_its_advisory_note(
         "re-interpret, badly (DEV-005)"
     )
     assert "OXBOW-REPORT-RPT-2026-09" in xml
+    # The report's rows are period aggregates, and rendering them as transactions used to invent
+    # three fields per bucket: a blank TransactionId, an amount of 0 and ISO 4217 'XXX' (no
+    # currency). Asserting their absence is what keeps the fix from quietly reversing.
+    assert "XXX" not in xml, "ISO 4217 'no currency' must not appear in a document of USD totals"
+    assert (
+        "<TransactionId></TransactionId>" not in xml and "TransactionId" not in xml
+    ), "the report has no transactions to identify; an empty id is a fabricated one"
+    for figure in ("12500", "4000", "8500", "7500", "3000"):
+        assert figure in xml, f"bucket {figure} never reached the artifact: {xml[:400]}"
+    assert (
+        xml.count('currency="USD"') == 10
+    ), "three money totals for each of three buckets, plus the branch summary total"
+    assert "ReportedActivityBucket" in xml and "PeriodicCompletion" in xml
     assert "not a filed report and not a decision" in xml, (
         "the advisory note is the disclaimer's form in this medium; a report artifact "
         "without it is more confident than the JSON behind it"
