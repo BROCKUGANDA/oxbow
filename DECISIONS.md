@@ -1404,3 +1404,24 @@ product, not a bug to hide.
 land" for `economics_rows()`. That number is the **score** table's, measured correctly; the
 economics figure in that sentence was carried in from an agent's report and is wrong — the real
 number is 0, for the reason above. `SUBMISSION.md` does not repeat the error.
+
+**RESOLVED the same day, by measurement rather than argument — the entry above was written
+before the check that settles it.** The question "does a null downstream mean an empty set or an
+uncovered account" has a discriminator already in the frame: `graph_out_degree_30d`. Cross-tabulating
+it against the 43,511 null-downstream test rows gives:
+
+```
+null-downstream rows: 43511
+  of which graph_out_degree_30d == 0 or null: 43511
+  still genuinely unknown:                       0
+```
+
+Every account whose downstream term is null has no 30-day out-degree at all, so its 1-hop downstream
+set is provably empty and the missing term is a measured zero rather than an absent measurement.
+The first reading is therefore correct and the second is excluded on the data — DEV-011's
+star-shaped corpus, confirmed by a column that already exists. The tempting-and-wrong fix named
+above (coalesce unconditionally) is still wrong; the right one is narrower and is now implementable:
+price `E_i` from the subject's own `amount_out_24h_minor`, capped at `amount_in_24h_minor`, **only
+where `graph_out_degree_30d` proves the downstream set empty**, and refuse any row where an account
+has out-degree and a null downstream — a case with zero instances today, which is precisely why the
+guard belongs in the code and not in a comment.
