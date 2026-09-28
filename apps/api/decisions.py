@@ -581,13 +581,24 @@ def build_case_bundle(
         model_version=str(score["model_version"]),
         rule_ids=tuple(str(rid) for rid in (score.get("rule_ids") or [])),
     )
-    monte_carlo = MonteCarloInterval(
-        runs=int(economic_row.mc_runs),
-        seed=int(economic_row.mc_seed),
-        p05_minor=int(economic_row.mc_p05_minor),
-        p50_minor=int(economic_row.mc_p50_minor),
-        p95_minor=int(economic_row.mc_p95_minor),
-        interval=tuple(float(value) for value in economic_row.mc_interval),
+    # A stored row may carry no simulated interval at all: migration 0004 made the three quantiles
+    # nullable so an unpropagated account could be priced, and `ck_economics_mc_interval_pairing`
+    # guarantees they are null together with `mc_runs = 0` or present together with draws taken. So
+    # the block is built only from a measured distribution -- `MonteCarloInterval` has no absent
+    # shape, and reading a null as an int here would either raise or, worse, price a packet on a
+    # distribution nobody sampled (DEV-031). The outbox and packet readers already reconstruct the
+    # `None` this passes through: `bundle_from_payload` and `oxbow.packet.loaders` both test for it.
+    monte_carlo = (
+        None
+        if economic_row.mc_p05_minor is None
+        else MonteCarloInterval(
+            runs=int(economic_row.mc_runs),
+            seed=int(economic_row.mc_seed),
+            p05_minor=int(economic_row.mc_p05_minor),
+            p50_minor=int(economic_row.mc_p50_minor),
+            p95_minor=int(economic_row.mc_p95_minor),
+            interval=tuple(float(value) for value in economic_row.mc_interval),
+        )
     )
     economics_block = EconomicsBlock(
         currency=str(economic_row.currency),

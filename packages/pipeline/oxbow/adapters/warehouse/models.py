@@ -467,12 +467,48 @@ class Economics(Base):
     ``config/economics.yaml`` must not silently reinterpret an older run's money.
     This is the storage form of "the assumptions travel with the number"
     (plan §13, spec §6.1).
+
+    The Monte Carlo trio -- ``mc_p05_minor``, ``mc_p50_minor``, ``mc_p95_minor`` -- is
+    nullable, and all three null is a run that never simulated anything. They are
+    nullable because they are a RESULT. ``config/economics.yaml`` declares
+    ``monte_carlo.runs``, ``.seed`` and ``.interval``: those are the *parameters* of an
+    experiment, and they exist whether or not anyone runs it. The quantiles are what
+    :func:`oxbow.quant.monte_carlo.simulate_exposure_interval` returns once it has
+    propagated the fold's landed edge list, and ``oxbow score`` builds its graph in
+    memory for the rules layer and never writes that edge list -- so a scored fold has
+    no quantile to store. DEV-031's finding, one table further out.
+
+    The absence is then a fact about the run rather than a number in it, which is why
+    none of the three defaults. A quantile of ``0`` would report a distribution
+    concentrated at nothing, and the configured ``runs: 10000`` beside it would report
+    ten thousand draws that were never taken; both are the unknown-becoming-a-zero
+    failure 03 §A rule 2 forbids, and both are checkable against an edge list that does
+    not exist. So ``mc_runs`` records the draws THIS ROW ACTUALLY MADE -- ``0`` when the
+    propagation never ran, exactly as ``calibration_n`` records the population a refused
+    calibration never measured -- and ``ck_economics_mc_interval_pairing`` makes the
+    count and the trio state the same fact, so a half-populated distribution cannot be
+    written by any writer, this mapper included.
+
+    That is the shape the rest of the money boundary already uses:
+    ``oxbow.ports.case_sink.EconomicsBlock.monte_carlo`` is ``MonteCarloInterval | None``
+    and ``oxbow.packet.loaders`` reconstructs the ``None``. Until this revision the
+    warehouse table was the one place that could not say "no interval", which made the
+    absence a landing failure instead of a stored fact.
     """
 
     __tablename__ = "economics"
     __table_args__ = (
         UniqueConstraint("run_id", "account_key", name="uq_economics_run_key"),
         CheckConstraint("currency ~ '^[A-Z]{3}$'", name="ck_economics_currency"),
+        # A simulated distribution is either entirely there or entirely absent: the draw
+        # count and the three quantiles are one claim about the run, not four columns.
+        CheckConstraint(
+            "(mc_p05_minor IS NOT NULL AND mc_p50_minor IS NOT NULL "
+            "AND mc_p95_minor IS NOT NULL AND mc_runs >= 1) "
+            "OR (mc_p05_minor IS NULL AND mc_p50_minor IS NULL "
+            "AND mc_p95_minor IS NULL AND mc_runs = 0)",
+            name="ck_economics_mc_interval_pairing",
+        ),
         Index("ix_economics_run_exposure", "run_id", text("exposure_minor DESC")),
     )
 
@@ -490,9 +526,12 @@ class Economics(Base):
     ev_density: Mapped[float | None] = mapped_column(Double)
     mc_runs: Mapped[int] = mapped_column(Integer, nullable=False)
     mc_seed: Mapped[int] = mapped_column(Integer, nullable=False)
-    mc_p05_minor: Mapped[int] = mapped_column(BigInteger, nullable=False)
-    mc_p50_minor: Mapped[int] = mapped_column(BigInteger, nullable=False)
-    mc_p95_minor: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    # Nullable together, never one at a time, and null means "never sampled" rather than "sampled and
+    # found to be nothing": `ck_economics_mc_interval_pairing` above is what keeps the three and the
+    # draw count in one story. Migration 0004 dropped these three NOT NULLs on the live database.
+    mc_p05_minor: Mapped[int | None] = mapped_column(BigInteger)
+    mc_p50_minor: Mapped[int | None] = mapped_column(BigInteger)
+    mc_p95_minor: Mapped[int | None] = mapped_column(BigInteger)
     mc_interval: Mapped[list[float]] = mapped_column(JSONB, nullable=False)
     assumptions: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
 

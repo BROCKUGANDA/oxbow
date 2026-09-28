@@ -48,8 +48,9 @@ band table counted per account-instant would report a population the queue canno
 ``economics`` is priced at that same grain by :func:`economics_rows`, and it is the table the two
 rules bite hardest on: every money column is read from a scored-frame column or an
 ``config/economics.yaml`` declaration, ``EV_i`` is computed by ``quant/ev.py`` rather than restated,
-and the three Monte Carlo quantile columns — NOT NULL, and measured by nothing in this repository —
-refuse the row by name instead of taking a zero or an invented draw count.
+and the three Monte Carlo quantile columns — measured by nothing in this repository — are stored null
+with the row naming the producer that would fill them, rather than taking a zero or an invented draw
+count. Migration 0004 is what makes that storable; DEV-031 is what makes it the right answer.
 
 Nothing here computes a statistic the producer did not publish. A rate or a share taken over the
 run's own rows (a band's observed rate, a bin's population share) is the same class of aggregation
@@ -1611,12 +1612,28 @@ def band_definition_rows(
 #: inflow to the **cluster**, so the cap applied here is never looser than the spec's; and the two
 #: windows have different anchors (fold cutoff vs the scored row's event timestamp), which the frame
 #: cannot reconcile because it stores no per-cluster inflow at all.
-#: **`amount_out_24h_minor`** measures the subject's own outflow only — no downstream legs — and is
-#: deliberately NOT used as a fallback when ``downstream_outflow_24h_minor`` is absent. Swapping in a
+#: **`amount_out_24h_minor`** measures the subject's own outflow only — no downstream legs — so it is
+#: deliberately NOT a general fallback when ``downstream_outflow_24h_minor`` is absent. Swapping in a
 #: narrower definition to fill a null is the substitution this module's first rule exists to stop, and
 #: the refusal names both columns so the choice is visible in the output rather than only here.
+#:
+#: DEV-031 settles the one case where reading it is not a substitution. The null has two readings —
+#: "there is no downstream" (an empty set, so the subject's outflow is the whole of `E_i`) and "the
+#: fold never covered this account" (unknowable) — and the frame already carries the discriminator:
+#: `graph_out_degree_30d`. Where it is 0 or null the account has no 1-hop downstream leg at all, so
+#: the set the downstream term sums over is **measured empty** and the missing term is a measurement
+#: about the graph rather than an absent measurement; the row says so on its face. Every other null
+#: keeps refusing, because there the downstream money is genuinely unmeasured and coalescing it is the
+#: most convincing failure this module knows.
 ECONOMICS_EXPOSURE_SOURCE: Final = "downstream_outflow_24h_minor"
 ECONOMICS_INFLOW_CAP_SOURCE: Final = "amount_in_24h_minor"
+#: The subject's own measured outflow, priced ONLY on the degree-proved branch, never as a coalesce.
+ECONOMICS_SUBJECT_OUTFLOW_SOURCE: Final = "amount_out_24h_minor"
+#: DEV-031's discriminator, already a column of the scored frame: ``0`` or ``null`` here is what turns
+#: a null downstream term into a measured empty set. It is read only when the downstream term is null,
+#: and it is never added to the required set: a frame without it simply cannot prove emptiness, and
+#: every row it does carry prices exactly as it did before.
+ECONOMICS_DOWNSTREAM_DEGREE_SOURCE: Final = "graph_out_degree_30d"
 #: The frame's own currency column, when the producer kept the corpus's currency dimension.
 #: ``config/features.yaml`` groups the money features by ``[entity, currency]`` and the score stage
 #: collapses that dimension before writing ``scored_rows.parquet``, so on the landed 40k run the
@@ -1630,47 +1647,105 @@ ECONOMICS_CURRENCY_SOURCE: Final = "currency"
 #: ``score.calibrated_probability`` for a fold that calibrated and ``score_rows`` refuses a row
 #: without it, so this layer reads the exact number the queue ranks on and no other.
 ECONOMICS_PROBABILITY_SOURCE: Final = "p_fused"
-#: The three ``economics`` columns that ``models.py`` declares NOT NULL and that no artifact this
-#: repository writes measures per account. ``mc_runs``, ``mc_seed`` and ``mc_interval`` ARE declared
-#: by ``config/economics.yaml`` (``monte_carlo.*``) — they describe the intended experiment. The
-#: quantiles are results of an experiment that has to be run per account against the component's
+#: The three ``economics`` columns that measure a simulated distribution this repository does not
+#: produce per account. ``mc_runs``, ``mc_seed`` and ``mc_interval`` ARE declared by
+#: ``config/economics.yaml`` (``monte_carlo.*``) — they describe the intended experiment. The
+#: quantiles are the results of an experiment that has to be run per account against the component's
 #: edge list (:func:`oxbow.quant.monte_carlo.simulate_exposure_interval`), and the score stage never
 #: runs it: it builds its graph in memory for the rules layer and does not land it, so the artifact
 #: the propagator would read (`out/graph/<run>/pairs.parquet`) is the one :func:`_graph_tables`
-#: already reports as missing. Landing them is therefore refused by name, not filled.
+#: already reports as missing. Migration 0004 made them nullable so the absence is STORABLE: the row
+#: lands with all three null, ``mc_runs`` at the zero draws it actually took, and the sentence built
+#: by :func:`_absent_interval_basis` beside it naming the producer that would fill them. A row with
+#: one null and two figures is refused by ``ck_economics_mc_interval_pairing``, which is the database
+#: holding this line rather than a comment.
 ECONOMICS_UNMEASURED_COLUMNS: Final = ("mc_p05_minor", "mc_p50_minor", "mc_p95_minor")
-#: How many accounts a gap line names before switching to a count. A 43k-entry refusal list would
-#: bury the other reasons, and the count is the finding.
-_MC_GAP_NAMED: Final = 6
+#: What ``economics.mc_runs`` holds when the propagation never ran: the number of draws taken, which
+#: is zero. Not a placeholder and not a refusal of the column's meaning — `quant/monte_carlo` itself
+#: raises below one draw (`runs must be >= 1`), so a positive count here is always a count of work
+#: somebody did, and 0 is the only figure that cannot claim otherwise. ``ck_economics_mc_interval_
+#: pairing`` is what keeps the count and :data:`ECONOMICS_UNMEASURED_COLUMNS` in agreement.
+ECONOMICS_UNRUN_MC_DRAWS: Final = 0
 
 
-def _mc_gap_line(accounts: Sequence[str], *, supplied: bool, config: Economics) -> str:
-    """The refusal every account without a measured exposure interval gets, phrased once."""
-    named = ", ".join(sorted(accounts)[:_MC_GAP_NAMED])
-    more = f" and {len(accounts) - _MC_GAP_NAMED} more" if len(accounts) > _MC_GAP_NAMED else ""
-    header = (
-        f"economics: {len(accounts):,} account(s) have no simulated exposure interval"
-        f" ({named}{more})"
-    )
+def _absent_interval_basis(config: Economics) -> str:
+    """The sentence an interval-free ``economics`` row carries in place of the interval.
+
+    Phrased as a statement about the RUN, because that is what it is: the propagation was not
+    performed, so nothing was measured. It names the producer and the artifact it would have read,
+    which is what makes a reader able to check it rather than take it on trust, and it separates the
+    config's declared experiment parameters from any claim that the experiment happened.
+
+    Not an amount, and not a zero: ``mc_p50_minor = 0`` would report a distribution concentrated at
+    nothing, and ``mc_runs`` at the configured figure would report draws that were never taken. Both
+    are the unknown-becoming-a-zero substitution 03 §A rule 2 bans, and DEV-031 names the pair of them
+    as the most convincing possible failure. Migration 0004 is what made the absence storable;
+    ``ck_economics_mc_interval_pairing`` is what stops a half-populated distribution from being.
+    """
     return (
-        f"{header}. `{config.source_path.name}` declares monte_carlo.runs/seed/interval — those "
-        "describe the experiment — while "
-        f"{', '.join(f'`economics.{column}`' for column in ECONOMICS_UNMEASURED_COLUMNS)} are its "
-        "results, and the run recorded none: `oxbow score` builds its graph in memory for the rules "
-        "layer and never lands the edge list "
-        "(`oxbow.quant.monte_carlo.simulate_exposure_interval`) would propagate. A zero would claim "
-        "a distribution concentrated at nothing and a config `runs` would claim "
-        f"{config.monte_carlo.runs:,} draws that were never taken, so the rows are refused and "
-        "counted instead. Supply measured intervals through `intervals=` and the same accounts "
-        "land; note that `oxbow.ports.case_sink.EconomicsBlock` already makes this block optional "
-        "for the packet, so it is the warehouse table's NOT NULL set that is out of step with the "
-        "money boundary the rest of the product uses."
-        if not supplied
-        else (
-            f"{header}. `economics.{', '.join(ECONOMICS_UNMEASURED_COLUMNS)}` are NOT NULL and this "
-            "run's caller supplied intervals for the rest, so these accounts stay unpriced rather "
-            "than borrowing another account's distribution."
-        )
+        f"no simulated exposure interval: `{'`, `'.join(ECONOMICS_UNMEASURED_COLUMNS)}` are null and "
+        f"`mc_runs` is {ECONOMICS_UNRUN_MC_DRAWS} -- the draws this account actually took -- because "
+        "the propagation never ran for it. The producer is "
+        "`oxbow.quant.monte_carlo.simulate_exposure_interval`, which propagates a fold's LANDED edge "
+        "list (`out/graph/<run>/pairs.parquet`, the artifact `oxbow score` reports as absent because "
+        "it builds its graph in memory for the rules layer and never writes it); supply the interval "
+        "through `intervals=` and this row carries the measured trio instead. "
+        f"`{config.source_path.name}` declares monte_carlo.runs={config.monte_carlo.runs:,}, "
+        f"seed={config.monte_carlo.seed}, "
+        f"interval=[{config.monte_carlo.lower_quantile}, {config.monte_carlo.upper_quantile}] -- the "
+        "parameters of that experiment, not a record of it running, which is why only the seed and "
+        "the nominal coverage are stored here and the run count is not (DEV-031, migration 0004)."
+    )
+
+
+def _monte_carlo_columns(interval: MonteCarloInterval | None, config: Economics) -> dict[str, Any]:
+    """The five ``mc_*`` columns for one row, from a measured interval or from its absence.
+
+    Supplied: the caller's five figures, carried through with no arithmetic -- ``ev`` and this mapper
+    do not get to edit a measurement. Absent: the three quantiles stay null, ``mc_runs`` states the
+    zero draws taken, and the seed and nominal coverage are the configuration's declared parameters.
+    The pair cannot be mixed, and the database enforces that rather than asking this function to
+    remember: ``ck_economics_mc_interval_pairing`` rejects a row whose quantiles and draw count
+    disagree about whether a simulation happened.
+    """
+    if interval is None:
+        return {
+            "mc_runs": ECONOMICS_UNRUN_MC_DRAWS,
+            "mc_seed": config.monte_carlo.seed,
+            "mc_p05_minor": None,
+            "mc_p50_minor": None,
+            "mc_p95_minor": None,
+            "mc_interval": [
+                config.monte_carlo.lower_quantile,
+                config.monte_carlo.upper_quantile,
+            ],
+        }
+    return {
+        "mc_runs": interval.runs,
+        "mc_seed": interval.seed,
+        "mc_p05_minor": interval.p05_minor,
+        "mc_p50_minor": interval.p50_minor,
+        "mc_p95_minor": interval.p95_minor,
+        "mc_interval": list(interval.interval),
+    }
+
+
+def _downstream_empty_set_basis(degree: int | None) -> str:
+    """The sentence DEV-031 makes this row carry: why the downstream term contributed nothing.
+
+    Stated as an empty set and never as an amount, because the two are different claims about the
+    graph. Reporting a figure for the downstream money would assert that it was observed and found
+    to move nothing — the unknown-becomes-a-zero substitution 03 §A rule 2 bans and DEV-031 rejects by
+    name. What was measured here is the account's 1-hop out-degree, and it found no leg.
+    """
+    stated = "null" if degree is None else str(degree)
+    return (
+        f"`{ECONOMICS_DOWNSTREAM_DEGREE_SOURCE}` is {stated}, so this account has no 1-hop downstream "
+        f"leg and the set `{ECONOMICS_EXPOSURE_SOURCE}` sums over is measured EMPTY. The downstream "
+        "term contributed nothing because there was nothing downstream to measure, and no downstream "
+        f"amount was measured for this account: `{ECONOMICS_SUBJECT_OUTFLOW_SOURCE}` is the subject's "
+        "own outflow and it is the whole of E_i, capped at the subject's own inflow. The figure is "
+        "therefore an account's exposure rather than a cluster's (DEV-031)."
     )
 
 
@@ -1685,13 +1760,26 @@ def _assumptions_record(
     outflow_minor: int,
     currency: str,
     currency_from_frame: bool,
+    downstream_empty_set_basis: str | None = None,
+    absent_interval_basis: str | None = None,
 ) -> dict[str, Any]:
     """The assumption line that travels with every money figure on this row (plan §13).
 
     Stored on the row rather than joined, so a later edit of ``config/economics.yaml`` cannot
     reinterpret an older run's money: the numbers below are the ones this row's arithmetic used.
+
+    ``downstream_empty_set_basis`` is present only on the DEV-031 branch, and it comes in as a
+    sentence rather than a flag so the row says WHICH term is missing, on WHAT evidence, and at WHAT
+    grain the figure now is — the same discipline that makes ``probability_is_uncalibrated`` travel
+    with ``confidence_label`` rather than sit alone as a boolean.
+
+    ``absent_interval_basis`` is its twin one column further along, present exactly when no
+    propagation interval was supplied for this account. The two are separate parameters because they
+    are separate absences: a row can be priced from a measured downstream term and still carry no
+    simulated distribution, or the other way round, and collapsing them into one flag would let a
+    reader who fixes one gap believe both were filled.
     """
-    return {
+    record: dict[str, Any] = {
         "source": f"config/{config.source_path.name}",
         "currency": currency,
         "currency_is_frame_measurement": currency_from_frame,
@@ -1720,12 +1808,26 @@ def _assumptions_record(
         "calibration_kind": score["calibration_kind"],
         "probability_is_uncalibrated": score["calibration_kind"] != "calibrated_band",
         "confidence_label": score["confidence_label"],
-        "monte_carlo_propagated": True,
+        # The same structural honesty one column further along: a distribution this run did not
+        # simulate is reported as not simulated, and the row that did carry one says it propagated.
+        # `models.py`'s `ck_economics_mc_interval_pairing` keeps this flag and the three quantile
+        # columns from ever telling different stories about the same account.
+        "monte_carlo_propagated": absent_interval_basis is None,
         "disclaimer": (
             "Monetary figures are model estimates derived from the stated assumptions, not measured "
             "outcomes, and are not validated for operational use by any financial institution."
         ),
     }
+    if downstream_empty_set_basis is not None:
+        # The stamp DEV-031 asks for by name, with the missing term and the evidence beside it. A row
+        # that measured its downstream legs carries neither key: nothing about its E_i is partial.
+        record["exposure_is_partial"] = True
+        record["exposure_downstream_basis"] = downstream_empty_set_basis
+    if absent_interval_basis is not None:
+        # And the same for the missing distribution: named by its producer, so a reader can go and
+        # run it instead of guessing whether the nulls mean zero or mean nothing.
+        record["exposure_interval_basis"] = absent_interval_basis
+    return record
 
 
 def economics_rows(
@@ -1766,18 +1868,60 @@ def economics_rows(
     figure trustworthy: an uncalibrated EV is a ranking device under stated assumptions, and the
     row hands the API the vocabulary to say exactly that.
 
-    THE INTERVAL is the other gate, and it is not a labelling question. ``models.py`` declares
-    ``mc_p05_minor``, ``mc_p50_minor`` and ``mc_p95_minor`` NOT NULL, and they are the results of a
-    per-account propagation run (:func:`oxbow.quant.monte_carlo.simulate_exposure_interval` over the
-    fold's landed edge list) that ``oxbow score`` never performs and never can retroactively: the
-    graph it scores against is built in memory and not written. So ``intervals`` is the measured
-    answer, supplied by a caller who ran it, and with nothing supplied every account is refused by
-    name — because a zero would claim a distribution concentrated at nothing, and the config's
-    ``monte_carlo.runs`` would claim 10,000 draws that were never taken. Either is a fabrication with
-    a convincing face, and a row that does not exist is a smaller lie than a row that invents one of
-    its own columns. See :func:`drift_period_rows`, which refuses ``bad_rate`` on exactly this
-    reasoning, and note that ``ports/case_sink.EconomicsBlock`` already treats this block as optional
-    at the money boundary the packet crosses: it is the warehouse table that is out of step.
+    THE DOWNSTREAM TERM is the only money gate left, and DEV-031 settled it by measurement
+    rather than by argument. ``E_i`` is the subject's outflow PLUS its 1-hop downstream, capped at
+    inflow, and ``downstream_outflow_24h_minor`` is null for 43,511 of this run's test rows — which
+    reads either as "no downstream exists" (an empty set, so the subject's own measured outflow is the
+    whole of ``E_i``) or as "the fold never covered this account" (unknowable, so the queue cannot be
+    priced).
+    The frame already carries the discriminator: ``graph_out_degree_30d`` is 0 or null on all 43,511
+    of them and 0 rows remain genuinely unknown, so those accounts provably have no downstream leg and
+    the missing term is a measured empty set. Only there does this function price off
+    ``amount_out_24h_minor``, and the row says why in ``assumptions`` (``exposure_is_partial`` plus the
+    sentence naming the term, the evidence and the resulting grain) — the same structural-label
+    discipline ``probability_is_uncalibrated`` follows above, and the reason the label is a sentence
+    rather than a bare flag. Everywhere else a null downstream still refuses, including the degree > 0
+    case with zero instances today, which is exactly why the guard is code: coalescing unconditionally
+    would turn an unknown into a zero, and DEV-031 rejects that reading as the most convincing
+    possible failure. A present downstream value is priced exactly as it always was, with neither
+    extra key on the row.
+
+    WHAT THE BRANCH PRODUCES on the landed run, measured rather than hoped: all 43,046 current test
+    accounts price, and every one of them comes out at ``exposure_minor = 0``. The reason is the cap,
+    not the substitution. ``amount_out_24h_minor`` is non-zero on 21,860 of the 43,720 test rows and
+    ``amount_in_24h_minor`` on 21,860 too, and no row carries both -- PaySim records an account as a
+    sender or as a receiver inside a window, never both -- so a subject with measured outflow has
+    measured zero inflow, and §3.2 caps its exposure at that zero. The 209 rows that do carry a
+    downstream term carry it at 0. Each landed row therefore states
+    ``exposure_capped_by_inflow`` true with its own ``exposure_before_cap_minor`` beside it, and every
+    EV in the table is the cost-only figure ``-c_i - (1 - p_i) * f``. That is a true reading of a thin
+    corpus, not an arithmetic defect to average away: this run's queue ranks on review cost alone, and
+    a reader who wants exposure needs the graph DEV-031 names. Refusing the rows would have hidden the
+    finding behind an empty table.
+
+    THE INTERVAL is the other gate, and it was never a labelling question: it was a schema question,
+    and migration 0004 settled it. ``mc_p05_minor``, ``mc_p50_minor`` and ``mc_p95_minor`` are the
+    results of a per-account propagation run
+    (:func:`oxbow.quant.monte_carlo.simulate_exposure_interval` over the fold's landed edge list) that
+    ``oxbow score`` never performs and never can retroactively: the graph it scores against is built
+    in memory and not written. While those three columns were NOT NULL the only ways to finish a row
+    were fabrications -- a zero, which claims a distribution concentrated at nothing, or the config's
+    ``monte_carlo.runs``, which claims 10,000 draws that were never taken -- so this function refused
+    every account and the table stayed empty while ``/api/alerts`` reported it as a pricing failure.
+    They are nullable now, so the honest option exists and is what lands: the three quantiles null,
+    ``mc_runs`` at the zero draws actually taken, ``mc_seed`` and ``mc_interval`` at the configuration's
+    declared parameters, and :func:`_absent_interval_basis` naming in ``assumptions`` the producer that
+    would fill them and the edge list it cannot find. ``ck_economics_mc_interval_pairing`` then keeps
+    the nulls and the draw count telling one story, the way 0003's pairing check keeps a calibration
+    rate and its ``n`` together.
+
+    What that does NOT change is that a supplied interval is the measured answer and wins: a caller who
+    ran the propagation passes it through ``intervals`` and the same row carries the trio, the caller's
+    seed and the caller's coverage instead, with ``monte_carlo_propagated`` true and no absence sentence
+    on it. Partial supply prices both halves -- the measured accounts from their own interval and the
+    rest from nothing -- because an account nobody propagated is not evidence that its neighbour's
+    distribution applies to it. The refusal list keeps its old meaning, unchanged: a row refuses only
+    when its MONEY would be invented, and an absent Monte Carlo is no longer an invented money.
 
     A ``*_minor`` column is an integer or the row does not exist. ``assert_money_is_integer_minor``
     runs again in both sinks, but it runs after the row was built: a float that got this far has
@@ -1812,7 +1956,6 @@ def economics_rows(
     supplied = dict(intervals or {})
     rows: list[dict[str, Any]] = []
     refused: list[str] = []
-    unmeasured: list[str] = []
 
     for record in part.to_dicts():
         account_key = _account_key(record.get("account_key"))
@@ -1830,17 +1973,72 @@ def economics_rows(
             # Re-refusing it here would report one gap twice under two wordings.
             continue
 
-        outflow = _integer(record.get(ECONOMICS_EXPOSURE_SOURCE))
+        downstream_raw = record.get(ECONOMICS_EXPOSURE_SOURCE)
+        outflow = _integer(downstream_raw)
         inflow = _integer(record.get(ECONOMICS_INFLOW_CAP_SOURCE))
-        if outflow is None:
+        own_outflow = _integer(record.get(ECONOMICS_SUBJECT_OUTFLOW_SOURCE))
+        degree_raw = record.get(ECONOMICS_DOWNSTREAM_DEGREE_SOURCE)
+        degree = _integer(degree_raw)
+        # DEV-031's discriminator, as a three-way branch and never as a coalesce. A column absent from
+        # the frame is not a null degree, and a float in an integer count column is not a measurement
+        # either, so neither proves anything: only a recorded 0 — or a recorded null, which is the
+        # frame's own "no outgoing edge to count" state — shows the downstream set to be empty.
+        degree_records_no_downstream_leg = (
+            ECONOMICS_DOWNSTREAM_DEGREE_SOURCE in scored.columns
+            and (degree_raw is None or degree == 0)
+        )
+
+        if downstream_raw is None and own_outflow is not None and degree_records_no_downstream_leg:
+            # The measured-empty-set branch: the term sums over nothing, so the subject's own outflow
+            # is the whole of E_i, and the row carries the sentence saying which term is missing, on
+            # what evidence, and at what grain the figure now is.
+            exposure_column = ECONOMICS_SUBJECT_OUTFLOW_SOURCE
+            pre_cap_minor = own_outflow
+            downstream_basis = _downstream_empty_set_basis(degree)
+        elif outflow is not None:
+            # Measured downstream: unchanged, and no partial-exposure key on the row.
+            exposure_column = ECONOMICS_EXPOSURE_SOURCE
+            pre_cap_minor = outflow
+            downstream_basis = None
+        else:
+            if ECONOMICS_DOWNSTREAM_DEGREE_SOURCE not in scored.columns:
+                degree_reason = (
+                    f"DEV-031's discriminator, `{ECONOMICS_DOWNSTREAM_DEGREE_SOURCE}`, is not a "
+                    "column of this frame either, so nothing on it shows the downstream set to be "
+                    "empty rather than unmeasured"
+                )
+            elif downstream_raw is not None:
+                degree_reason = (
+                    f"the stored `{ECONOMICS_EXPOSURE_SOURCE}` is not an integer minor amount, and no "
+                    "degree reading turns a non-amount into a measurement"
+                )
+            elif degree is not None and degree > 0:
+                degree_reason = (
+                    f"DEV-031's discriminator points the other way here: "
+                    f"`{ECONOMICS_DOWNSTREAM_DEGREE_SOURCE}={degree}` records {degree} 1-hop "
+                    "downstream leg(s), so the set the term sums over is NOT empty and its money is "
+                    "genuinely unmeasured — the unknown this guard exists for"
+                )
+            elif degree is None and degree_raw is not None:
+                degree_reason = (
+                    f"`{ECONOMICS_DOWNSTREAM_DEGREE_SOURCE}` is {degree_raw!r}, which is not a counted "
+                    "degree, so it proves nothing about the downstream set"
+                )
+            else:
+                degree_reason = (
+                    f"the downstream set is empty but `{ECONOMICS_SUBJECT_OUTFLOW_SOURCE}` is "
+                    f"{record.get(ECONOMICS_SUBJECT_OUTFLOW_SOURCE)!r}, so there is no measured "
+                    "outflow of the subject's own to price either"
+                )
             refused.append(
                 f"account {account_key}: `{ECONOMICS_EXPOSURE_SOURCE}` is "
-                f"{record.get(ECONOMICS_EXPOSURE_SOURCE)!r}, not a measured amount, so E_i was never "
+                f"{downstream_raw!r}, not a measured amount, so E_i was never "
                 "observed for this fold (the feature's own null policy is null_when_unobserved: the "
                 "fold's graph carried no downstream edge, DEV-011). The account is left unpriced "
                 "rather than priced at E_i = 0, and `amount_out_24h_minor` is not substituted for "
                 "it: that column measures the subject's outflow only, with no downstream legs, so "
-                "using it would answer a different question and let the reader believe otherwise"
+                "using it would answer a different question and let the reader believe otherwise. "
+                f"{degree_reason}."
             )
             continue
         if inflow is None:
@@ -1852,21 +2050,22 @@ def economics_rows(
                 "inflow"
             )
             continue
-        if outflow < 0:
+        if pre_cap_minor < 0:
             refused.append(
-                f"account {account_key}: {ECONOMICS_EXPOSURE_SOURCE}={outflow} is negative, and a "
-                "cluster cannot have removed less than nothing; an absolute value here would be a "
+                f"account {account_key}: {exposure_column}={pre_cap_minor} is negative, and no "
+                "measured outflow can be less than nothing; an absolute value here would be a "
                 "sign correction nobody measured"
             )
             continue
 
         interval = supplied.get(account_key) or None
-        if interval is None:
-            unmeasured.append(account_key)
-            continue
+        # Not a refusal: migration 0004 made the interval absent-able, so an account nobody
+        # propagated is priced on its money and null on its distribution, and says which producer
+        # is missing. `models.py`'s pairing check is what stops the row from half-claiming.
+        monte_carlo_columns = _monte_carlo_columns(interval, config)
 
-        capped = inflow < outflow
-        exposure_minor = inflow if capped else outflow
+        capped = inflow < pre_cap_minor
+        exposure_minor = inflow if capped else pre_cap_minor
         currency_from_frame = ECONOMICS_CURRENCY_SOURCE in scored.columns
         currency = (
             str(record.get(ECONOMICS_CURRENCY_SOURCE)) if currency_from_frame else config.currency
@@ -1906,28 +2105,28 @@ def economics_rows(
                 "analyst_minutes": priced.review_minutes,
                 "recovery_rate": config.recovery.rate,
                 "ev_density": priced.density_ratio,
-                "mc_runs": interval.runs,
-                "mc_seed": interval.seed,
-                "mc_p05_minor": interval.p05_minor,
-                "mc_p50_minor": interval.p50_minor,
-                "mc_p95_minor": interval.p95_minor,
-                "mc_interval": list(interval.interval),
+                # The caller's measured distribution, or the row that says none was taken. Neither
+                # half is computed here: this is a handoff, and a quantile this layer derived would
+                # be a second propagator nobody seeded.
+                **monte_carlo_columns,
                 "assumptions": _assumptions_record(
                     config,
-                    exposure_column=ECONOMICS_EXPOSURE_SOURCE,
+                    exposure_column=exposure_column,
                     cap_column=ECONOMICS_INFLOW_CAP_SOURCE,
                     probability_column=ECONOMICS_PROBABILITY_SOURCE,
                     score={**score, "confidence_label": score_row.confidence_label},
                     capped=capped,
-                    outflow_minor=outflow,
+                    outflow_minor=pre_cap_minor,
                     currency=currency,
                     currency_from_frame=currency_from_frame,
+                    downstream_empty_set_basis=downstream_basis,
+                    absent_interval_basis=None
+                    if interval is not None
+                    else _absent_interval_basis(config),
                 ),
             }
         )
 
-    if unmeasured:
-        refused.append(_mc_gap_line(unmeasured, supplied=bool(supplied), config=config))
     # THE ORDER, STATED: EV density descending, account key ascending — `positive_ev_rows`' and
     # `price_exposures`' own key, so the landed order is the order the allocator would have produced
     # and the capacity cutoff line falls between the same two rows whichever side draws it.
@@ -2987,10 +3186,13 @@ __all__ = [
     "CANONICAL_COMMUNITY_ORDER",
     "DRIFT_REPORT_SOURCES",
     "ECONOMICS_CURRENCY_SOURCE",
+    "ECONOMICS_DOWNSTREAM_DEGREE_SOURCE",
     "ECONOMICS_EXPOSURE_SOURCE",
     "ECONOMICS_INFLOW_CAP_SOURCE",
     "ECONOMICS_PROBABILITY_SOURCE",
+    "ECONOMICS_SUBJECT_OUTFLOW_SOURCE",
     "ECONOMICS_UNMEASURED_COLUMNS",
+    "ECONOMICS_UNRUN_MC_DRAWS",
     "EVIDENCE_KIND_RULE_HIT",
     "EVIDENCE_KIND_TRANSACTION",
     "FAIRNESS_SOURCES",

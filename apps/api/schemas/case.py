@@ -130,6 +130,15 @@ class EconomicsBlock(BaseModel):
     A recovery rate that is an assumption is labelled as one, and the sensitivity band
     is rendered next to the point estimate: "never present a single money number
     without its r band" (config/economics.yaml, plan §12).
+
+    ``monte_carlo`` is optional because the interval is a result, not a term of the
+    price: a fold whose edge list was never propagated has no distribution to show,
+    and migration 0004 stores that as three nulls so the account can still be priced.
+    The route then serves ``None`` rather than a block with a made-up number in it --
+    see :class:`MonteCarlo` for why the floor stays where it is. This matches
+    ``oxbow.ports.case_sink.EconomicsBlock`` and ``oxbow.packet.loaders``, which
+    already treat the whole block as absent rather than zero, and the case page's
+    decoder already accepts null here.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -157,6 +166,15 @@ class EconomicsBlock(BaseModel):
 
 
 class MonteCarlo(BaseModel):
+    """A simulated exposure distribution, present only when one was actually sampled.
+
+    ``runs`` keeps its ``ge=1`` floor, and that is the reason this block is optional
+    rather than zeroable: there is no representable draw count that means "none". A
+    served ``MonteCarlo`` therefore always states at least one draw somebody took, and
+    a run that simulated nothing serves ``None`` -- the alternative would be a case page
+    whose "90 % interval" is a pair of nulls rendered as money (DEV-031, migration 0004).
+    """
+
     model_config = ConfigDict(extra="forbid")
 
     runs: int = Field(ge=1)

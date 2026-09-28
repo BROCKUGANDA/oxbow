@@ -4,10 +4,12 @@ The case response is the object an analyst signs, so the structural rule here is
 **every figure names the table it came from**. The score is the ``score`` row; the
 points are ``scorecard_point``; the money is ``economics``, whose ``assumptions`` column
 is the run's own copy of the config rather than today's; the interval is the stored
-Monte Carlo draw with its ``mc_runs`` and ``mc_seed``. Nothing is composed from two
-tables into a third number, and nothing is recomputed on the way out (02 §B seam 5) —
-the failure that prevents is the API and the pipeline giving an account different
-numbers on the same day.
+Monte Carlo draw with its ``mc_runs`` and ``mc_seed`` — or ``None`` when the row's three
+quantile columns are null because the propagation never ran (DEV-031, migration 0004),
+since an absent distribution is served as absent and never as a zero or an invented draw
+count. Nothing is composed from two tables into a third number, and nothing is recomputed
+on the way out (02 §B seam 5) — the failure that prevents is the API and the pipeline
+giving an account different numbers on the same day.
 
 Three fields are here for a specific plan §15/§14 requirement:
 
@@ -365,14 +367,30 @@ def _economics_block(
             }
             for key, value in sorted(assumptions.items())
         ],
-        monte_carlo=MonteCarlo(
-            runs=int(economic["mc_runs"]),
-            seed=int(economic["mc_seed"]),
-            p05=money(int(economic["mc_p05_minor"]), str(economic["currency"]), decimals=decimals),
-            p50=money(int(economic["mc_p50_minor"]), str(economic["currency"]), decimals=decimals),
-            p95=money(int(economic["mc_p95_minor"]), str(economic["currency"]), decimals=decimals),
-            interval=[float(value) for value in (economic["mc_interval"] or [])],
-        ),
+        monte_carlo=_monte_carlo_block(economic, decimals=decimals),
+    )
+
+
+def _monte_carlo_block(economic: dict[str, Any], *, decimals: int) -> MonteCarlo | None:
+    """The stored distribution, or ``None`` when the run never sampled one.
+
+    ``models.py``'s ``ck_economics_mc_interval_pairing`` guarantees the three quantiles and
+    ``mc_runs`` agree about whether a simulation happened, so testing one is testing all four; the
+    test is on the quantile rather than the count because the count is the column a reader is most
+    likely to quote. Absence is rendered as absence -- the field is ``MonteCarlo | None`` and the
+    page's decoder already handles null -- because ``MonteCarlo.runs`` is ``Field(ge=1)`` and the
+    only way to satisfy that floor here would be to state draws that were never taken. That is the
+    fabrication migration 0004 exists to make unnecessary (DEV-031).
+    """
+    if economic.get("mc_p05_minor") is None:
+        return None
+    return MonteCarlo(
+        runs=int(economic["mc_runs"]),
+        seed=int(economic["mc_seed"]),
+        p05=money(int(economic["mc_p05_minor"]), str(economic["currency"]), decimals=decimals),
+        p50=money(int(economic["mc_p50_minor"]), str(economic["currency"]), decimals=decimals),
+        p95=money(int(economic["mc_p95_minor"]), str(economic["currency"]), decimals=decimals),
+        interval=[float(value) for value in (economic["mc_interval"] or [])],
     )
 
 
