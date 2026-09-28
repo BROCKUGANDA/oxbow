@@ -200,6 +200,63 @@ def test_a_null_merge_reason_is_the_measured_absence_and_round_trips() -> None:
     assert [row.merge_reason for row in rebuilt.rows] == [row.merge_reason for row in table.rows]
 
 
+def test_the_calibration_outcome_round_trips_within_the_writers_rounding() -> None:
+    """Probed rather than presumed, because its sibling reader was broken.
+
+    ``band_table_from_dict`` turned out never to have been callable, so the same check was run
+    on this one. It passes: nothing is dropped, and every difference is a float the writer
+    rounded to 8 decimal places. Counts, method, flags and the refusal reasons are exact, which
+    is what makes the rounding a rendering decision rather than a loss — and what a future
+    "make it compare equal" change would quietly give up.
+    """
+    import numpy as np
+
+    from oxbow.models.calibration import calibrate, calibration_from_dict
+    from oxbow.models.config import load_model_config
+
+    cfg = load_model_config(REPO_ROOT)
+    rng = np.random.default_rng(1337)
+    labels = np.zeros(400, dtype=np.int32)
+    labels[:40] = 1
+    raw = np.clip(rng.normal(0.2, 0.2, 400) + np.where(labels == 1, 0.5, 0.0), 0.0, 1.0)
+    outcome = calibrate(raw, labels, cfg.calibration, 0.1, 0.1)
+
+    payload = _through_artefact_json(outcome.to_dict())
+    rebuilt = calibration_from_dict(payload)
+
+    assert rebuilt.method == outcome.method
+    assert rebuilt.refused == outcome.refused
+    assert rebuilt.refusal_reason == outcome.refusal_reason
+    assert rebuilt.calibrated == outcome.calibrated
+    assert rebuilt.confidence_label(
+        rebuilt.mean_calibrated_probability
+    ) == outcome.confidence_label(
+        outcome.mean_calibrated_probability
+    ), "the word the UI prints is derived, and both sides must derive it from the same number"
+    assert (
+        rebuilt.validation_positives == outcome.validation_positives
+        and rebuilt.validation_rows == outcome.validation_rows
+        and rebuilt.floor == outcome.floor
+        and rebuilt.isotonic_min_positives == outcome.isotonic_min_positives
+    ), "the counts that decide the method must survive exactly"
+    assert rebuilt.branch_reason == outcome.branch_reason
+
+    assert len(rebuilt.reliability) == len(outcome.reliability) == 10
+    for before, after in zip(outcome.reliability, rebuilt.reliability, strict=True):
+        assert before.bin_index == after.bin_index
+        assert (
+            before.sample_size == after.sample_size and before.observed_rate == after.observed_rate
+        )
+        assert after.probability_lower == pytest.approx(before.probability_lower, abs=1e-7)
+        assert after.mean_predicted == pytest.approx(before.mean_predicted, abs=1e-7)
+    assert rebuilt.brier == pytest.approx(outcome.brier, abs=1e-7)
+    assert rebuilt.ece == pytest.approx(outcome.ece, abs=1e-7)
+    assert rebuilt.brier != outcome.brier or outcome.brier == round(outcome.brier, 8), (
+        "the writer's rounding is the only difference; if they ever become bit-equal, "
+        "something else changed and this test should say which"
+    )
+
+
 def test_the_scaling_constants_round_trip_too() -> None:
     """The second reader in the same family, with the same coercion failure modes."""
     from oxbow.scoring.scale import build_scaling
