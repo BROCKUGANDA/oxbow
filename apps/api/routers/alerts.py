@@ -28,7 +28,7 @@ from typing import Any, Final
 from fastapi import APIRouter, Depends, Query
 
 from api.deps import Container, analyst_or_higher, get_container
-from api.policy_engine import live_rank_map, stored_priced_rows
+from api.policy_engine import live_rank_map, rank_from_stored, stored_priced_rows, stored_ranking
 from api.problems import (
     COMMON_ERROR_STATUSES,
     BadRequest,
@@ -295,6 +295,19 @@ def _rankings(
                 (int(row["rank"]) for row in stored.values() if row["selected"]), default=None
             )
             return stored, "stored", cutoff, 0, capacity
+    # Fast path: rank from the columns the run already wrote. `stored_priced_rows` below
+    # re-prices all 43,046 accounts in Python on every request, which measured ~40 s and
+    # made Next's proxy reset before the answer arrived - so the queue could not be opened
+    # in a browser at all. The ordering and the first-fit rule are the allocator's own, read
+    # from `economics`, so the two paths agree by construction; `stored_ranking` returns
+    # None rather than guessing when a density is missing or the run spans currencies.
+    ranked = stored_ranking(read_model, run_id)
+    if ranked is not None:
+        ordered, scored_count = ranked
+        ranks, cutoff = rank_from_stored(ordered, capacity)
+        # `ordered` is restricted to keys the `score` read returned, so this difference is
+        # non-negative by construction rather than clamped into being so.
+        return ranks, "reallocated", cutoff, scored_count - len(ordered), capacity
     rows, skipped = stored_priced_rows(read_model, run_id, container.economics)
     if not rows:
         raise DependencyUnavailable(

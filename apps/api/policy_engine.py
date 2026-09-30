@@ -158,6 +158,112 @@ def repriced_at_rate(
     ]
 
 
+RANKING_COLUMNS: Final = (
+    "account_key",
+    "ev_density",
+    "expected_value_minor",
+    "analyst_minutes",
+    "currency",
+)
+
+
+def stored_ranking(read_model: ReadModel, run_id: str) -> tuple[list[dict[str, Any]], int] | None:
+    """Every scored-and-priced account, in the allocator's own order, from stored columns.
+
+    Why this exists: `stored_priced_rows` reads the whole `score` and `economics` tables and
+    runs `price_account` over all 43,046 of them **on every request**, which made
+    `GET /api/alerts` answer in ~40 s. Next's rewrite proxy resets before that, so the queue
+    never rendered in a browser at all - and plan §14 had already named the fix ("precompute
+    per-account EV inputs; the slider only re-runs allocation over a cached array"). The
+    allocator's own outputs are stored: `economics.ev_density`, `expected_value_minor` and
+    `analyst_minutes` are what `price_account` produced during the run, so ranking is a
+    projected read plus a sort, not a re-pricing.
+
+    Returns the ordered rows *and* the run's scored-account count. The count comes from the
+    same `score` read whose keys restrict the ordering, so `unpriced = scored - ranked` is a
+    difference of two numbers from one query rather than a clamp over two that may disagree.
+
+    Returns `None` - meaning "use the slow path" - when any stored ranking column is absent
+    or null, when nothing is priced, or when the run spans more than one currency. A partial
+    ordering would silently drop accounts from the queue, and a mixed-currency first-fit
+    would spend minutes against money that does not add up; both are worse than a slow but
+    correct page. The `None` has to be reachable without raising, because this runs inside a
+    request: a `TypeError` here is a 500 on the queue, not a fallback.
+    """
+    rows, _ = read_model.source.select(
+        "economics",
+        where={"run_id": run_id},
+        columns=list(RANKING_COLUMNS),
+        allow_missing=True,
+    )
+    if not rows:
+        return None
+    if len({str(row.get("currency")) for row in rows}) > 1:
+        return None
+    for row in rows:
+        if any(row.get(column) is None for column in RANKING_COLUMNS):
+            return None
+    # The slow path's candidate set is `stored_priced_rows`, an inner join of `score` with
+    # `economics`; reading `economics` alone would fund an account the run never scored.
+    # Restricting here is what keeps the two paths the same set and not merely the same list.
+    scored, scored_count = read_model.source.select(
+        "score",
+        where={"run_id": run_id},
+        columns=["account_key"],
+        allow_missing=True,
+        with_count=True,
+    )
+    ranked_keys = {str(row.get("account_key")) for row in scored}
+    ordered = [row for row in rows if str(row.get("account_key")) in ranked_keys]
+    if not ordered:
+        return None
+    ordered.sort(key=lambda row: (-float(row["ev_density"]), str(row["account_key"])))
+    return ordered, int(scored_count or 0)
+
+
+def rank_from_stored(
+    ordered: Sequence[Mapping[str, Any]], capacity_minutes: int
+) -> tuple[dict[str, dict[str, Any]], int | None]:
+    """Positions for every account, selection by the allocator's first-fit rule.
+
+    Position is not the same claim as selection. Every ranked account carries a rank in the
+    density order the run recorded, so the capacity line can be drawn *inside* a full list
+    and everything below it is visibly, deliberately unreviewed (plan §11.2).
+
+    The funding rule mirrors `quant.allocate._greedy_scan`: first-fit over the density order
+    over the positive-EV candidates (`positive_ev_rows` is what feeds that scan, and the EV
+    test lives there, not in the scan itself), comparing and subtracting one integer, and
+    nothing further funded once the budget is spent. `review_minutes` is an `int` on
+    `AccountEV` and `analyst_minutes` is a `Double` column holding it, so the conversion is
+    the producer's own and not a rounding introduced here.
+
+    The one deliberate difference: `_greedy_scan` `break`s, and this loop cannot. A break
+    would leave the tail of the queue unranked, which is the 400 this endpoint already had
+    once. `budget_spent` reproduces the break's *outcome* - no later account is funded, since
+    `price_account` floors every review at `min_review_minutes` > 0 - while still positioning
+    the rows below the line.
+    """
+    remaining = capacity_minutes
+    budget_spent = remaining == 0
+    ranks: dict[str, dict[str, Any]] = {}
+    chosen: list[str] = []
+    for index, row in enumerate(ordered, start=1):
+        key = str(row["account_key"])
+        minutes = int(row["analyst_minutes"])
+        take = (not budget_spent) and int(row["expected_value_minor"]) > 0 and minutes <= remaining
+        if take:
+            remaining -= minutes
+            chosen.append(key)
+            budget_spent = remaining == 0
+        ranks[key] = {
+            "rank": index,
+            "selected": take,
+            "beyond_capacity": not take,
+        }
+    cutoff = max((ranks[key]["rank"] for key in chosen), default=None)
+    return ranks, cutoff
+
+
 def live_rank_map(
     allocation: Allocation, *, priced: Sequence[AccountEV] | None = None
 ) -> dict[str, dict[str, Any]]:
