@@ -16,7 +16,7 @@
    ============================================================================= */
 
 import Link from 'next/link';
-import type { ReactElement } from 'react';
+import type { CSSProperties, ReactElement } from 'react';
 
 import { Icon } from '../../design/icons/Icon';
 import { CopyButton } from '../../design/primitives/EmptyState';
@@ -26,25 +26,31 @@ import { ELLIPSIS, PANEL_SUNKEN, T_LABEL, T_MICRO, T_MONO } from './sx';
 
 /* ------------------------------------------------------------- account ---- */
 
-export function AccountChip({ accountKey, href }: { accountKey: string; href: string }): ReactElement {
-  return (
-    <Link
-      href={href}
-      style={{
-        ...T_MONO,
-        display: 'inline-flex',
-        alignItems: 'center',
-        gap: 6,
-        padding: '1px 8px',
-        fontSize: 'var(--text-label)',
-        color: 'var(--color-ink)',
-        background: 'var(--color-elev-1)',
-        border: '1px solid var(--color-hairline)',
-        borderRadius: 'var(--radius-pill)',
-        textDecoration: 'none',
-        whiteSpace: 'nowrap',
-      }}
-    >
+/**
+ * The chip is mono because it is an evidence string, and it is a link only when the
+ * account has somewhere to land: `AlertRow.case_href` is null on an account no analyst has
+ * opened yet, which on a landed run is 43,045 of 43,046 rows. A chip that linked to
+ * `/cases/null` would offer the reader a page the API has already refused.
+ */
+export function AccountChip({ accountKey, href }: { accountKey: string; href: string | null }): ReactElement {
+  const style: CSSProperties = {
+    ...T_MONO,
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: 6,
+    padding: '1px 8px',
+    fontSize: 'var(--text-label)',
+    color: 'var(--color-ink)',
+    background: 'var(--color-elev-1)',
+    border: '1px solid var(--color-hairline)',
+    borderRadius: 'var(--radius-pill)',
+    textDecoration: 'none',
+    whiteSpace: 'nowrap',
+  };
+  return href === null ? (
+    <span style={style}>{accountKey}</span>
+  ) : (
+    <Link href={href} style={style}>
       {accountKey}
     </Link>
   );

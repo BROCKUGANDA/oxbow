@@ -74,36 +74,37 @@ function rows(count: number, seed: number): AlertRow[] {
     const key = `ACC-${(0x100000 + index * 0x9e37 + seed).toString(16).toUpperCase().slice(0, 6)}`;
     out.push({
       account_key: key,
+      run_id: '01FIXTUREDQUEUE00000000000',
       case_href: `/cases/${key}`,
+      case_status: index < 3 ? 'open' : null,
       score: Math.round(score * 1000) / 1000,
       band,
-      calibration: {
-        bin_label: `${(Math.floor(score * 10) / 10).toFixed(1)}–${((Math.floor(score * 10) + 1) / 10).toFixed(1)}`,
+      // The calibrated arm, because the double exists to exercise the screen that a live
+      // uncalibrated run cannot: `deriveAlertRow`'s uncalibrated branch is covered by
+      // `explorer-and-fidelity.spec.ts` against the served payload, and this row shape is
+      // how the calibrated branch gets rendered at all.
+      confidence: {
+        kind: 'calibrated',
+        probability: Math.round(score * 1000) / 1000,
         observed_rate: Math.round(Math.max(0.01, score - 0.03 + next() * 0.06) * 1000) / 1000,
         n: 40 + Math.floor(next() * 900),
-        expected_rate: Math.round(score * 1000) / 1000,
       },
       typology: pick<Typology>(RULE_IDS, next),
       reasons: [0, 1, 2].map((offset) => {
         const entry = REASON_TEXT[(reasonStart + offset) % REASON_TEXT.length];
         if (entry === undefined) throw new Error('fixture reason index out of range');
-        return {
-          text: entry.text,
-          attribute: entry.attribute,
-          bin: entry.bin,
-          points: -Math.round(6 + next() * 42),
-          contribution: null,
-        };
+        return { text: entry.text, points: -Math.round(6 + next() * 42) };
       }),
       exposure: figure(exposureMinor),
       expected_value: figure(
         Math.round(exposureMinor * score * 0.35 - reviewMinutes * 15_000 - (1 - score) * 2_500_000),
       ),
       rank: index + 1,
-      policy_label: 'EV density under the active policy',
-      review_minutes: reviewMinutes,
-      above_capacity: index < 200,
-      scored_at: new Date(Date.UTC(2026, 8, 25, 4, 20)).toISOString(),
+      allocation_source: 'stored',
+      selected: index < 200,
+      beyond_capacity: index >= 200,
+      cutoff_rank: 200,
+      capacity_minutes: 12_000,
       txn_count: 12 + Math.floor(next() * 400),
       first_seen: new Date(Date.UTC(2026, 8, 2, 6, 0)).toISOString(),
       last_seen: new Date(Date.UTC(2026, 8, 24, Math.floor(next() * 23), Math.floor(next() * 59))).toISOString(),
@@ -121,12 +122,10 @@ export function largeAlertPage(limit: number, offset: number): AlertPage {
     rows: all.slice(offset, offset + limit),
     capacity: {
       cutoff_rank: 200,
-      minutes_available: 12_000,
-      minutes_committed: 11_940,
-      unreviewed_exposure: figure(4_812_000_000),
-      unreviewed_count: 9_800,
-      period_label: 'week to 25 Sep 2026',
-      policy_label: 'EV density, greedy allocator',
+      capacity_minutes: 12_000,
+      allocation_source: 'stored',
+      policy_id: 'POLICY-FIXTURE-1',
+      unpriced_accounts: 0,
     },
     facets: {
       bands: BAND_LETTERS.map((band) => ({
@@ -148,12 +147,10 @@ export const alertPage: AlertPage = {
   rows: alertRows,
   capacity: {
     cutoff_rank: 24,
-    minutes_available: 12_000,
-    minutes_committed: 585,
-    unreviewed_exposure: figure(3_912_000_000),
-    unreviewed_count: 1_388,
-    period_label: 'week to 25 Sep 2026',
-    policy_label: 'EV density, greedy allocator',
+    capacity_minutes: 12_000,
+    allocation_source: 'stored',
+    policy_id: 'POLICY-FIXTURE-1',
+    unpriced_accounts: 2,
   },
   facets: {
     bands: BAND_LETTERS.map((band) => ({ band, count: alertRows.filter((row) => row.band === band).length })),

@@ -377,62 +377,228 @@ export const CalibrationBinDecoder: Decoder<CalibrationBin> = object('Calibratio
   expected_rate: number,
 });
 
+/**
+ * The served `AlertRow` (`apps/api/schemas/catalog.py:155-231`) decoded field for field,
+ * then mapped to what a card renders — THE SERVED SHAPE IS THE CONTRACT, the pattern
+ * section 4 establishes for the explorer and section 3 for the case workspace.
+ *
+ * This section used to decode a different object entirely: `case_href`, `score`,
+ * `calibration{observed_rate,n}`, `policy_label`, `review_minutes`, `above_capacity`,
+ * `scored_at`. None of those keys is on `schemas/catalog.py::AlertRow`, so every live
+ * queue response failed the decoder and the screen showed a refusal. The invention was
+ * invisible in fixture mode, which is the only mode that ever produced a green queue.
+ *
+ * Two fields the old type carried are now simply absent rather than guessed:
+ * `review_minutes` (per-account minutes live in `economics.analyst_minutes` and the read
+ * model's `alert_rows` projection does not select them, so a card that displayed a number
+ * would be displaying a fabrication) and the capacity footer's unreviewed-money tile
+ * (`policy_summary` is empty for every landed run, and plan §19 will not let the client
+ * add up exposure the API declined to state).
+ */
+type ServedAlertReason = { code: string; label: string; points: number | null };
+
+type ServedAlertRow = {
+  account_key: string;
+  run_id: string;
+  band: Band;
+  fused_score: number;
+  calibration_kind: 'calibrated_band' | 'uncalibrated';
+  calibration_note: string | null;
+  calibrated_probability: number | null;
+  observed_rate: number | null;
+  calibration_n: number | null;
+  predicted_typology: string | null;
+  reasons: ServedAlertReason[];
+  exposure: Money;
+  expected_value: Money;
+  rank: number;
+  selected: boolean;
+  beyond_capacity: boolean;
+  cutoff_rank: number | null;
+  capacity_minutes: number;
+  case_id: string | null;
+  case_status: string | null;
+  first_seen_at: string;
+  last_seen_at: string;
+  txn_count: number;
+};
+
+const ServedAlertReasonDecoder: Decoder<ServedAlertReason> = object('ServedAlertReason', {
+  code: string,
+  label: string,
+  points: nullable(number),
+});
+
+type ServedAlertPage = {
+  run_id: string;
+  policy_id: string | null;
+  capacity_minutes: number;
+  cutoff_rank: number | null;
+  allocation_source: string;
+  unpriced_accounts: number;
+  rows: ServedAlertRow[];
+};
+
+const ServedAlertRowDecoder: Decoder<ServedAlertRow> = object('ServedAlertRow', {
+  account_key: string,
+  run_id: string,
+  band: BandDecoder,
+  fused_score: number,
+  calibration_kind: oneOf('CalibrationKind', 'calibrated_band', 'uncalibrated'),
+  calibration_note: nullable(string),
+  calibrated_probability: nullable(number),
+  observed_rate: nullable(number),
+  calibration_n: nullable(integer),
+  predicted_typology: nullable(string),
+  reasons: array(ServedAlertReasonDecoder),
+  exposure: MoneyDecoder,
+  expected_value: MoneyDecoder,
+  rank: integer,
+  selected: boolean,
+  beyond_capacity: boolean,
+  cutoff_rank: nullable(integer),
+  capacity_minutes: integer,
+  case_id: nullable(string),
+  case_status: nullable(string),
+  first_seen_at: string,
+  last_seen_at: string,
+  txn_count: integer,
+});
+
+/**
+ * Confidence, in the producer's two states. `calibrated_band` carries the observed rate
+ * and the population it was measured on; `uncalibrated` carries the fold's own reason
+ * instead — which is the pairing `ck_score_calibration_pairing` enforces in the database
+ * and `_calibration_shape` restates in the schema, so a row that contradicts itself never
+ * reaches this function. The card must not turn the second state into a number.
+ */
+export type AlertConfidence =
+  | { kind: 'calibrated'; probability: number; observed_rate: number; n: number }
+  | { kind: 'uncalibrated'; note: string };
+
+export type AlertReason = { text: string; points: number | null };
+
 export type AlertRow = {
   account_key: string;
-  case_href: string;
+  run_id: string;
+  /** Null until a case exists on the account; the chip then renders a key, not a link. */
+  case_href: string | null;
+  case_status: string | null;
   score: number;
   band: Band;
-  calibration: CalibrationBin;
+  confidence: AlertConfidence;
   typology: Typology | null;
-  reasons: ReasonCode[];
+  reasons: AlertReason[];
   exposure: MoneyFigure;
   expected_value: MoneyFigure;
   rank: number;
-  policy_label: string;
-  review_minutes: number;
-  /** Server-computed: the rank at which the capacity line falls in this page. */
-  above_capacity: boolean;
-  scored_at: string;
+  /**
+   * The page's `allocation_source`, repeated per row the same way the server repeats
+   * `capacity_minutes` and `cutoff_rank` on every row: the card names what ranked it, and
+   * a card that could not see that would have to say nothing or say something invented.
+   */
+  allocation_source: string;
+  /** The allocator's own two states, kept distinct: funded, and over the line. */
+  selected: boolean;
+  beyond_capacity: boolean;
+  cutoff_rank: number | null;
+  capacity_minutes: number;
   txn_count: number;
   first_seen: string;
   last_seen: string;
 };
 
-const AlertRowDecoder: Decoder<AlertRow> = object('AlertRow', {
-  account_key: string,
-  case_href: string,
-  score: number,
-  band: BandDecoder,
-  calibration: CalibrationBinDecoder,
-  typology: nullable(TypologyDecoder),
-  reasons: array(ReasonCodeDecoder),
-  exposure: MoneyFigureDecoder,
-  expected_value: MoneyFigureDecoder,
-  rank: integer,
-  policy_label: string,
-  review_minutes: number,
-  above_capacity: boolean,
-  scored_at: TimestampDecoder,
-  txn_count: integer,
-  first_seen: TimestampDecoder,
-  last_seen: TimestampDecoder,
-});
+/**
+ * `predicted_typology` is the pipeline's `label_typology` column, whose vocabulary is the
+ * rule *names* in `config/rules.yaml` rather than the `R1`-`R12` ids this file's
+ * `TypologyDecoder` accepts. Decoding it as a `Typology` would therefore refuse a
+ * response the server issued honestly, so it is read as a string and only becomes a
+ * typology when it is already one. Nothing on the landed run is labelled at all: the
+ * twelve rules fire on eleven of them, and a card that drew a glyph for an unlabelled
+ * account would be illustrating a claim the model never made.
+ */
+const TYPOLOGY_CODES: readonly string[] = [
+  'R1',
+  'R2',
+  'R3',
+  'R4',
+  'R5',
+  'R6',
+  'R7',
+  'R8',
+  'R9',
+  'R10',
+  'R11',
+  'R12',
+];
 
-export type QueueCapacity = {
-  cutoff_rank: number | null;
-  minutes_available: number;
-  minutes_committed: number;
-  unreviewed_exposure: MoneyFigure | null;
-  unreviewed_count: number;
-  period_label: string;
-  policy_label: string;
-};
+function deriveAlertRow(served: ServedAlertRow, allocationSource: string): AlertRow {
+  const { calibration_kind: kind } = served;
+  const confidence: AlertConfidence =
+    kind === 'calibrated_band' &&
+    served.calibrated_probability !== null &&
+    served.observed_rate !== null &&
+    served.calibration_n !== null
+      ? {
+          kind: 'calibrated',
+          probability: served.calibrated_probability,
+          observed_rate: served.observed_rate,
+          n: served.calibration_n,
+        }
+      : {
+          kind: 'uncalibrated',
+          note: served.calibration_note ?? 'the fold declined to calibrate and recorded no reason',
+        };
+  return {
+    account_key: served.account_key,
+    run_id: served.run_id,
+    // A route the client owns, composed from the stored case id. Absent, not "#", when
+    // no case has been opened: the chip then states the account and links nowhere.
+    case_href: served.case_id === null ? null : `/cases/${served.case_id}`,
+    case_status: served.case_status,
+    score: served.fused_score,
+    band: served.band,
+    confidence,
+    typology: TYPOLOGY_CODES.includes(served.predicted_typology ?? '') ? (served.predicted_typology as Typology) : null,
+    reasons: served.reasons.map((reason) => ({
+      // `_reasons` documents that the stored column arrives in two shapes; the sentence
+      // is what the analyst reads, and `points` is null whenever the producer did not
+      // store one, which the card renders as no number rather than as zero.
+      text: reason.label === '' ? reason.code : reason.label,
+      points: reason.points,
+    })),
+    exposure: { value: served.exposure, band: null, band_rates: null },
+    expected_value: { value: served.expected_value, band: null, band_rates: null },
+    rank: served.rank,
+    allocation_source: allocationSource,
+    selected: served.selected,
+    beyond_capacity: served.beyond_capacity,
+    cutoff_rank: served.cutoff_rank,
+    capacity_minutes: served.capacity_minutes,
+    txn_count: served.txn_count,
+    first_seen: served.first_seen_at,
+    last_seen: served.last_seen_at,
+  };
+}
+
 
 /**
- * The queue page. `capacity` is what the cutoff line is drawn from: the rank the
- * active policy can review, and the money the unreviewed remainder is worth.
- * The rows are `data.rows`; the paging window is `meta`.
+ * The capacity line, from the four page fields `AlertQueue` actually serves
+ * (`apps/api/schemas/catalog.py::AlertQueue`). What used to be decoded here —
+ * `minutes_committed`, `unreviewed_exposure`, `unreviewed_count`, `period_label`,
+ * `policy_label` — is not on that schema and is not derivable from what is: the
+ * unreviewed money figure would have to come from `policy_summary`, which every landed
+ * run leaves empty, and plan §19 forbids the client adding up exposure the API declined
+ * to state. So the line says what funded how far, and nothing more.
  */
+export type QueueCapacity = {
+  cutoff_rank: number | null;
+  capacity_minutes: number;
+  allocation_source: string;
+  policy_id: string | null;
+  unpriced_accounts: number;
+};
+
 export type QueueFacets = {
   bands: { band: Band; count: number }[];
   typologies: { typology: Typology; rule_code: string; count: number }[];
@@ -448,35 +614,41 @@ export type QueueFilterRecovery = {
 export type AlertPage = {
   rows: AlertRow[];
   capacity: QueueCapacity;
-  facets: QueueFacets;
-  /** Narrowest-predicate data for the filters-excluded empty state. */
+  /**
+   * `null` because `/api/alerts` serves no facet counts and no filter-recovery row. Both
+   * were invented fields of the shape this section used to decode; the filter bar already
+   * renders a null facet set as "no counts shown", which is the truth on a live run.
+   */
+  facets: QueueFacets | null;
   filter_recovery: QueueFilterRecovery | null;
 };
 
-export const AlertPageDecoder: Decoder<AlertPage> = object('AlertPage', {
-  rows: array(AlertRowDecoder),
-  capacity: object('QueueCapacity', {
-    cutoff_rank: nullable(integer),
-    minutes_available: number,
-    minutes_committed: number,
-    unreviewed_exposure: nullable(MoneyFigureDecoder),
-    unreviewed_count: integer,
-    period_label: string,
-    policy_label: string,
-  }),
-  facets: object('Facets', {
-    bands: array(object('BandFacet', { band: BandDecoder, count: integer })),
-    typologies: array(object('TypologyFacet', { typology: TypologyDecoder, rule_code: string, count: integer })),
-  }),
-  filter_recovery: nullable(
-    object('FilterRecovery', {
-      narrowest: string,
-      label: string,
-      rows_if_removed: integer,
-      unfiltered_rows: integer,
-    }),
-  ),
+const ServedAlertPageDecoder: Decoder<ServedAlertPage> = object('ServedAlertPage', {
+  run_id: string,
+  policy_id: nullable(string),
+  capacity_minutes: integer,
+  cutoff_rank: nullable(integer),
+  allocation_source: string,
+  unpriced_accounts: integer,
+  rows: array(ServedAlertRowDecoder),
 });
+
+function deriveAlertPage(served: ServedAlertPage): AlertPage {
+  return {
+    rows: served.rows.map((row) => deriveAlertRow(row, served.allocation_source)),
+    capacity: {
+      cutoff_rank: served.cutoff_rank,
+      capacity_minutes: served.capacity_minutes,
+      allocation_source: served.allocation_source,
+      policy_id: served.policy_id,
+      unpriced_accounts: served.unpriced_accounts,
+    },
+    facets: null,
+    filter_recovery: null,
+  };
+}
+
+export const AlertPageDecoder: Decoder<AlertPage> = mapDecode(ServedAlertPageDecoder, deriveAlertPage, 'AlertPage');
 
 /* ========================================================== 3. case workspace */
 

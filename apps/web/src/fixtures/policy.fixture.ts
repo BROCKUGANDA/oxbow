@@ -17,7 +17,11 @@ const CANDIDATES = alertRows.map((row) => ({
   key: row.account_key,
   p: row.score,
   exposure: row.exposure.value.minor,
-  minutes: row.review_minutes,
+  // The band's standard review time, which is the policy's own input — not a queue row
+  // field. `AlertRow` carries no `review_minutes` because `alert_rows` in the read model
+  // does not select `economics.analyst_minutes`, and a card that displayed a number the
+  // API never served would be displaying a fabrication.
+  minutes: { A: 5, B: 12, C: 25, D: 60, E: 120 }[row.band] ?? 25,
 }));
 
 export const policyDefaults: PolicyDefaults = {

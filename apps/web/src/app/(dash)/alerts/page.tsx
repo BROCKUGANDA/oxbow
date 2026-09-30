@@ -52,7 +52,7 @@ import {
 import { useListResource, useRuntime } from '@/lib/api/hooks';
 import { failureDetail, failureRunId, failureTitle, isRunNotFound } from '@/lib/api/problem';
 import { PIPELINE_COMMAND, RUNTIME_ESTIMATE_FALLBACK } from '@/lib/copy';
-import { compactFromMinor, count } from '@/lib/format/money';
+import { count } from '@/lib/format/money';
 
 /** THE queue row box: the virtualiser's estimate, the skeleton's row height and the
  *  card's own outer height are this one number, in that one place. It is derived from
@@ -328,6 +328,11 @@ function QueueExplorer(): ReactElement {
       }
       const row = rows[focused];
       if (row === undefined) return;
+      // A row with no case has nowhere to open and nothing to decide. The shortcut is
+      // ignored rather than routing to `/cases/null`, which is what an unconditional push
+      // on the old non-nullable `case_href` would have become the moment the server told
+      // the truth about an account nobody had opened yet.
+      if (row.case_href === null) return;
       if (event.key === 'Enter') router.push(row.case_href);
       if (event.key === 'e' || event.key === 'd') {
         router.push(`${row.case_href}?decide=${event.key === 'e' ? 'escalate' : 'dismiss'}`);
@@ -605,6 +610,18 @@ function FilterBar({
 
 /* ------------------------------------------------------------- one card -- */
 
+/**
+ * The response's own `allocation_source`, in the words the queue is allowed to use.
+ * `stored` means the run wrote `policy_allocation` rows; `reallocated` means the API drew
+ * the line just now from stored economics. The old card printed a `policy_label` the API
+ * never serves, which on a run with no active policy rendered as "ranked by undefined".
+ */
+function rankedByLabel(source: string): string {
+  if (source === 'stored') return 'the run\'s stored policy allocation';
+  if (source === 'reallocated') return 'a live re-allocation over stored economics';
+  return source;
+}
+
 function QueueCard({
   row,
   assumptions,
@@ -623,7 +640,8 @@ function QueueCard({
     <article
       role="listitem"
       data-alert-card={row.account_key}
-      data-above-capacity={row.above_capacity}
+      data-selected={row.selected}
+      data-calibration-kind={row.confidence.kind}
       aria-current={focused ? 'true' : undefined}
       onClick={onFocus}
       style={{
@@ -648,11 +666,21 @@ function QueueCard({
         <span className="u-num" style={{ ...T_LABEL, color: 'var(--color-ink)' }}>
           score {row.score.toFixed(3)}
         </span>
-        {/* Confidence is the calibration bin's observed rate and n, never an adjective. */}
-        <span style={{ ...T_MICRO, color: 'var(--color-ink-muted)' }} data-calibration>
-          confidence {(row.calibration.observed_rate * 100).toFixed(0)}% — observed rate in this band{' '}
-          {(row.calibration.observed_rate * 100).toFixed(1)}% · n={count(row.calibration.n)}
-        </span>
+        {/* Confidence is the calibration bin's observed rate and n, never an adjective —
+            and when the fold refused to calibrate, it is that refusal instead of a rate.
+            The uncalibrated arm is the state of the landed run on all 43,046 rows: 18
+            validation positives is below `min_positives_for_calibration`, so no observed
+            rate exists to show and the card says so. */}
+        {row.confidence.kind === 'calibrated' ? (
+          <span style={{ ...T_MICRO, color: 'var(--color-ink-muted)' }} data-calibration>
+            confidence {(row.confidence.observed_rate * 100).toFixed(0)}% — observed rate in this band{' '}
+            {(row.confidence.observed_rate * 100).toFixed(1)}% · n={count(row.confidence.n)}
+          </span>
+        ) : (
+          <span style={{ ...T_MICRO, color: 'var(--color-ink-faint)' }} data-calibration title={row.confidence.note}>
+            probability uncalibrated — no observed rate measured
+          </span>
+        )}
         {typology !== null ? (
           <span
             style={{ ...T_MICRO, color: 'var(--color-ink-faint)', marginLeft: 'auto' }}
@@ -679,20 +707,20 @@ function QueueCard({
         <ol style={{ margin: 0, padding: 0, listStyle: 'none', display: 'flex', flexDirection: 'column', gap: 2 }}>
           {row.reasons.map((reason) => (
             <li
-              key={reason.attribute}
+              key={reason.text}
               style={{ ...T_LABEL, color: 'var(--color-ink-muted)', ...ELLIPSIS }}
               title={reason.text}
             >
-              <span className="u-num" style={{ color: 'var(--color-ink)' }}>
-                {reason.points}
-              </span>{' '}
+              {/* The producer stores the sentence and, sometimes, no point value at all.
+                  A missing `points` renders as no number — a `0` there would read as
+                  "contributed nothing", which is a different claim from "not recorded". */}
+              {reason.points !== null ? <span className="u-num" style={{ color: 'var(--color-ink)' }}>{reason.points}</span> : null}{' '}
               {reason.text}
             </li>
           ))}
         </ol>
         <p style={{ ...T_MICRO, color: 'var(--color-ink-faint)', margin: '2px 0 0' }}>
-          {count(row.txn_count)} transactions in window · {count(row.review_minutes)} analyst-minutes · ranked by{' '}
-          {row.policy_label}
+          {count(row.txn_count)} transactions in window · ranked by {rankedByLabel(row.allocation_source)}
         </p>
       </div>
 
@@ -709,10 +737,10 @@ function QueueCard({
         style={{ gridColumn: '1 / -1', display: 'flex', alignItems: 'center', gap: 10, ...GAP_TIGHT, flexWrap: 'wrap' }}
       >
         <span className="u-num" style={{ ...T_MICRO, color: 'var(--color-ink-faint)' }}>
-          rank {count(row.rank)} under {row.policy_label}
+          rank {count(row.rank)} under {rankedByLabel(row.allocation_source)}
         </span>
-        <span style={{ ...T_MICRO, color: row.above_capacity ? 'var(--color-state-done)' : 'var(--color-ink-faint)' }}>
-          {row.above_capacity ? 'inside capacity' : 'below the cutoff'}
+        <span style={{ ...T_MICRO, color: row.selected ? 'var(--color-state-done)' : 'var(--color-ink-faint)' }}>
+          {row.selected ? 'funded this period' : row.beyond_capacity ? 'below the cutoff' : 'not funded'}
         </span>
         <span style={{ marginLeft: 'auto', ...T_MICRO }}>
           {/* Unconditional. `Timestamp` has an honest "zone unreported" arm for the case
@@ -729,15 +757,20 @@ function QueueCard({
 /* --------------------------------------------------------- capacity line -- */
 
 /**
- * The never-cut line. It states the budget that produced it and the money the
- * remainder is worth, so "we chose not to look" is on the record rather than
- * implied by a scrollbar. Money is rendered through `compactFromMinor`, never as raw
- * minor units.
+ * The never-cut line. It states the budget that produced it and where the line fell, so
+ * "we chose not to look" is on the record rather than implied by a scrollbar.
+ *
+ * What it does not state is the money sitting below the line. That figure belongs to
+ * `policy_summary`, which no landed run populates, and the rule the API enforces on itself
+ * — nothing composed where a measurement is absent — binds the browser too. The tile was
+ * dropped rather than filled in with a sum over the page the reader happens to be looking
+ * at, which would have been a different number on every scroll.
  */
 function CapacityLine({ capacity }: { capacity: QueueCapacity }): ReactElement {
-  const reviewed = capacity.cutoff_rank ?? 0;
-  const unreviewed = capacity.unreviewed_count;
-  const exposure = capacity.unreviewed_exposure;
+  const statement =
+    capacity.cutoff_rank === null
+      ? `nothing clears positive expected value at ${count(capacity.capacity_minutes)} analyst-minutes — every account below is unreviewed by that decision`
+      : `capacity cutoff · funded through rank ${count(capacity.cutoff_rank)} of the priced run at ${count(capacity.capacity_minutes)} analyst-minutes`;
   return (
     <div
       data-capacity-line
@@ -773,10 +806,9 @@ function CapacityLine({ capacity }: { capacity: QueueCapacity }): ReactElement {
           whiteSpace: 'nowrap',
         }}
       >
-        capacity cutoff · {count(reviewed)} reviewed of {count(reviewed + unreviewed)} at{' '}
-        {count(capacity.minutes_available)} analyst-minutes this {capacity.period_label} · {capacity.policy_label}
+        {statement} · {rankedByLabel(capacity.allocation_source)}
       </span>
-      {exposure !== null ? (
+      {capacity.unpriced_accounts > 0 ? (
         <span
           style={{
             ...T_MICRO,
@@ -788,9 +820,7 @@ function CapacityLine({ capacity }: { capacity: QueueCapacity }): ReactElement {
             whiteSpace: 'nowrap',
           }}
         >
-          below this line · {count(unreviewed)} alerts ·{' '}
-          {compactFromMinor(exposure.value.minor, exposure.value.decimals)} {exposure.value.currency} of exposure
-          consciously not reviewed
+          {count(capacity.unpriced_accounts)} scored accounts carry no economics row, so they are not ranked at all
         </span>
       ) : null}
     </div>

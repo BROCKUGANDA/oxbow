@@ -36,7 +36,13 @@ from api.problems import (
     problem_responses,
 )
 from api.readmodel import ReadModel, money
-from api.routers.common import Pagination, alert_page_params, build_meta, build_page_meta
+from api.routers.common import (
+    Pagination,
+    alert_page_params,
+    assumption_lines,
+    build_meta,
+    build_page_meta,
+)
 from api.schemas.catalog import AlertFacets, AlertQueue, AlertRow
 from api.schemas.common import Envelope, ObjectPageEnvelope, envelope
 from api.security import Principal
@@ -187,6 +193,12 @@ def list_alerts(
         run_id=rid,
         model_version=str(run["model_version"]),
         provenance=str(run["provenance"]),
+        # Every card on this page prints two money figures, and plan §16 requires each one
+        # to name the `config/economics.yaml` keys it is a function of. Omitting them made
+        # the client's own guard refuse the whole pane — `MissingAssumptions: currency
+        # figure "Exposure at risk" has no assumption line` — which is the correct outcome
+        # for a page that would otherwise show an unbacked number, and the wrong page.
+        assumptions=assumption_lines(container.economics),
     )
     return envelope(queue, **meta.model_dump())
 
