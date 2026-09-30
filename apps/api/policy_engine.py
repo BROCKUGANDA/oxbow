@@ -167,12 +167,19 @@ def live_rank_map(allocation: Allocation) -> dict[str, dict[str, Any]]:
     """
     ordered = list(allocation.candidates)
     selected_keys = list(allocation.selected_keys)
+    # A set, deliberately: membership was tested against the list inside a loop over every
+    # candidate, which is O(n^2) -- 43,046 scored accounts made GET /api/alerts answer in
+    # 2m17s, against plan §14's "the greedy path must return in under 200ms" and the
+    # interactive capacity simulator the demo is built around. The list is kept for
+    # allocation.selected's own ordering; only the lookup changes.
+    selected_lookup = frozenset(selected_keys)
     result: dict[str, dict[str, Any]] = {}
     for index, row in enumerate(ordered):
+        chosen = row.account_key in selected_lookup
         result[row.account_key] = {
             "rank": index + 1,
-            "selected": row.account_key in selected_keys,
-            "beyond_capacity": row.account_key not in selected_keys,
+            "selected": chosen,
+            "beyond_capacity": not chosen,
         }
     for row in allocation.selected:
         entry = result.get(row.account_key)

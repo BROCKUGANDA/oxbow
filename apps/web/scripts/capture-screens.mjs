@@ -118,11 +118,36 @@ const browser = await chromium.launch({
 });
 const page = await browser.newPage({ viewport: { width: 1440, height: 900 }, deviceScaleFactor: 2 });
 
+/**
+ * The queue answers in about 50 s against 43,046 scored accounts on this host (measured:
+ * 2m17s before the O(n^2) lookup in policy_engine.live_rank_map was fixed, 50 s after).
+ * Playwright's 30 s navigation default would therefore time out on the one screen the demo
+ * is built around, and silently capturing a partial page is exactly the failure that produced
+ * the previous skeleton screenshot set. So the budget is raised, and the settle is a wait for
+ * evidence rather than a sleep - the same assertion discipline, applied before the shutter.
+ *
+ * The latency itself is a real finding and is reported, not tuned away: plan §14 asks the
+ * greedy allocation path to answer in under 200 ms so the capacity simulator stays
+ * interactive, and it does not. The fix is to land per-account policy_allocation rows and read
+ * stored ranks, not to make the demo wait harder.
+ */
+const RENDER_BUDGET_MS = Number(process.env.OXBOW_CAPTURE_TIMEOUT_MS ?? 180_000);
+page.setDefaultNavigationTimeout(RENDER_BUDGET_MS);
+page.setDefaultTimeout(RENDER_BUDGET_MS);
+
 const failures = [];
 for (const [name, route] of SHOTS) {
-  await page.goto(`${BASE}${route}`, { waitUntil: 'networkidle' });
-  // The panes resolve on a timer in fixture mode; shooting the first frame would capture
-  // the skeletons the CLS suite exists to prevent.
+  await page.goto(`${BASE}${route}`, { waitUntil: 'networkidle', timeout: RENDER_BUDGET_MS });
+  // Wait for something that only exists once a response decoded, then let the panes settle.
+  // A fixed sleep was the previous behaviour and it is what let a skeleton be photographed.
+  if (name !== '08-state-gallery') {
+    await page
+      .waitForSelector(
+        '[data-money-figure], [data-run-id], table tbody tr, [data-cytoscape-host], [data-empty-state], [data-problem-detail]',
+        { timeout: RENDER_BUDGET_MS },
+      )
+      .catch(() => {});
+  }
   await page.waitForTimeout(2_500);
   const failure = await assertRendered(name, page);
   if (failure !== null) {
