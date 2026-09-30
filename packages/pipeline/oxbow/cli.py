@@ -1657,6 +1657,11 @@ LANDING_REPORT_ORDER: Final = (
     "scorecard_point",
     "band_definition",
     "drift_period",
+    # The policy tables are shaped from the backtest document and reported with it. `policy` is
+    # written first because `policy_summary.policy_id` is a NOT NULL foreign key to it, and the
+    # landing writes in this order, so a summary could not otherwise land ahead of its parent.
+    "policy",
+    "policy_summary",
     "ablation_row",
     "validation_metric",
     "fairness_row",
@@ -1666,6 +1671,9 @@ LANDING_REPORT_ORDER: Final = (
     "graph_edge",
     "account_membership",
 )
+#: The two tables the command dashboard reads for its currency tiles, named once here because the
+#: sink's declared handoff vocabulary is what decides whether they can be written at all.
+POLICY_TABLES: Final = ("policy", "policy_summary")
 
 
 def _read_json_object(path: Path) -> dict[str, Any]:
@@ -1717,11 +1725,24 @@ def _backtest_pair_for_run(root: Path, run_id: str) -> tuple[Path, Path] | None:
 def _backtest_tables(
     ctx: StageContext, run_id: str
 ) -> tuple[dict[str, list[dict[str, Any]]], dict[str, list[str]]]:
-    """``ablation_row``, ``validation_metric``, ``fairness_row``, ``perturbation_row``, ``backtest_fold``.
+    """``policy``, ``policy_summary`` and the five backtest-document tables.
 
-    A missing or fixture-provenanced artifact refuses these five tables and nothing else: the
+    A missing or fixture-provenanced artifact refuses these tables and nothing else: the
     analytical half of the handoff is additive, and "there is no backtest for this run" is a
     different finding from "the backtest failed to shape".
+
+    The two policy tables carry an extra gate the five do not. ``PostgresWarehouseSink.write`` calls
+    ``assert_writable_table`` first, and ``policy``/``policy_summary`` are absent from
+    ``oxbow.ports.warehouse.WAREHOUSE_TABLES`` — the port's declared handoff vocabulary — so a write
+    for either raises ``WarehouseTableError`` and the landing's single transaction rolls the whole
+    run back: 43k scores, half a million rule hits and the queue gone, all because of a table the
+    port never declared. So the shape runs, and its result is held back with a refusal naming the
+    declaration that would let it through, rather than being handed to a sink that refuses it. The
+    same gate covers the second gap: ``sink.write`` stamps ``run_id`` onto every row it inserts and
+    ``policy`` declares no ``run_id`` column (a policy is a standing configuration;
+    ``policy_summary`` is a run's measurement of it), so that table needs the stamp made
+    conditional on the table having the column. Neither file is in this stage's edit scope, so both
+    are reported rather than patched around here.
     """
     from oxbow.adapters.warehouse.landing import (
         LandingError,
@@ -1729,11 +1750,16 @@ def _backtest_tables(
         backtest_fold_rows,
         fairness_rows,
         perturbation_rows,
+        policy_rows,
+        policy_summary_rows,
         validation_metric_rows,
     )
     from oxbow.backtest.config_io import load_backtest_config
+    from oxbow.ports.warehouse import WAREHOUSE_TABLES
+    from oxbow.quant.economics import load_economics
 
     names = (
+        *POLICY_TABLES,
         "ablation_row",
         "validation_metric",
         "fairness_row",
@@ -1767,6 +1793,24 @@ def _backtest_tables(
             )
             return tables, {name: [message] for name in names}
         resamples = int(load_backtest_config(ctx.root).bootstrap_resamples)
+        economics = load_economics(ctx.root)
+        tables["policy"], refusals["policy"] = policy_rows(ablation, card, economics)
+        (
+            tables["policy_summary"],
+            refusals["policy_summary"],
+        ) = policy_summary_rows(ablation, card, economics, run_id=run_id)
+        for name in POLICY_TABLES:
+            if name in WAREHOUSE_TABLES:
+                continue
+            shaped = tables.pop(name, [])
+            refusals[name] = [
+                f"{name} shaped {len(shaped)} row(s) from {pair[0].as_posix()} and handed them "
+                f"back: {name} is not declared in "
+                "oxbow.ports.warehouse.WAREHOUSE_TABLES, so assert_writable_table would refuse the "
+                "write and the whole landing transaction would roll back. The port declaration, and "
+                "(for `policy`) the unconditional run_id stamp in PostgresWarehouseSink.write, are "
+                "the two changes that land these rows"
+            ]
         tables["ablation_row"], refusals["ablation_row"] = ablation_rows(
             card, ablation, declared_resamples=resamples
         )
@@ -2089,15 +2133,25 @@ def land_warehouse_rows(ctx: StageContext, handle: StageHandle, *, run_id: str) 
     engine.dispose()
 
     for name in LANDING_REPORT_ORDER:
-        if name not in written:
-            continue
         lines = refusals.get(name) or []
-        note = (
-            f" ({skipped[name]:,} row(s) already landed under another key, skipped)"
-            if name in skipped
-            else ""
-        )
-        ctx.echo(f"[warehouse] {name}: {written[name]:,} row(s) landed under run {run_id}{note}")
+        if name not in written:
+            # A table that landed nothing still owes the reader its reason. `written` only holds
+            # tables the sink accepted a write for, so a table that refused wholesale — or that the
+            # port will not let be written at all — used to print nothing, which left an operator
+            # with an empty Postgres table and no line to grep. Silence is how a refusal turns into
+            # a mystery.
+            if not lines:
+                continue
+            ctx.echo(f"[warehouse] {name}: 0 row(s) landed under run {run_id}")
+        else:
+            note = (
+                f" ({skipped[name]:,} row(s) already landed under another key, skipped)"
+                if name in skipped
+                else ""
+            )
+            ctx.echo(
+                f"[warehouse] {name}: {written[name]:,} row(s) landed under run {run_id}{note}"
+            )
         for reason in lines[:REFUSAL_LINES_SHOWN]:
             ctx.echo(f"[warehouse]   {name} refused: {reason[:REFUSAL_PREVIEW_CHARS]}")
         if len(lines) > REFUSAL_LINES_SHOWN:

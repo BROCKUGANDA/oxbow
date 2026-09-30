@@ -78,6 +78,7 @@ from oxbow.adapters.warehouse.models import (
 )
 from oxbow.ports.case_sink import MonteCarloInterval
 from oxbow.ports.warehouse import assert_run_id
+from oxbow.quant.allocate import AllocatorId
 from oxbow.quant.economics import Economics
 from oxbow.quant.ev import CalibratedScore, price_account
 from oxbow.quant.money import Money
@@ -1486,6 +1487,798 @@ def backtest_fold_rows(
             continue
         rows.append(row)
     return rows, refused
+
+
+# --- the policy tables: the run's one operating point -----------------------
+
+#: ``policy`` and ``policy_summary`` are the two tables ``/api/dashboard`` reads for its four
+#: currency tiles and ``/api/policy`` reads for the operating point, and nothing in this repository
+#: has ever written either. ``apps/api/readmodel.py`` lists both in ``POSTGRES_ONLY_TABLES`` (the
+#: read side may query them) while ``oxbow.ports.warehouse.WAREHOUSE_TABLES`` — the *write*
+#: vocabulary, enforced by ``assert_writable_table`` before the sink touches a row — declares
+#: neither. Their columns are also all NOT NULL except ``policy``'s three optional fields, so these
+#: tables cannot hold a partially-measured row the way ``economics`` can since migration 0004: a
+#: column with no published figure refuses the whole row, and that refusal is the finding.
+#:
+#: **THE ACTIVE-POLICY RULE, STATED.** ``models.py`` says of ``policy`` that "exactly one is
+#: active", and ``apps/api/policy_engine.stored_policy`` resolves it as ``Policy.active IS TRUE``
+#: ordered by ``created_at.desc()`` — so a loader that emitted three ladders would let the database
+#: choose the operating point by insertion time, and ``/api/policy`` and the queue's cutoff line
+#: would follow whichever row happened to be newest. The artifact holds nine arms and up to three
+#: ladders apiece, so the rule has to be declared, never measured out of the figures.
+#: :data:`POLICY_OWNER` reuses :data:`BACKTEST_FOLD_OWNER`, the one declaration in this file that
+#: already answers the same question for the same document at the same one-row grain: the run's
+#: final calibrated arm (``full_calibrated``) under the constrained-optimal queue (``ev_cpsat``).
+#: ``backtest_fold``, ``policy`` and ``policy_summary`` then describe **one** operating point, so a
+#: reader comparing a dashboard tile against the fold curve is comparing two views of the same
+#: configuration rather than two configurations that happen to agree today.
+#:
+#: Two independent facts confirm that owner rather than a preference. First, the artifact records
+#: the identity it needs: the ladder key in ``variants[].policies`` is echoed by the record's own
+#: ``policy`` scalar, and ``solver`` resolves by exact match against ``AllocatorId.label`` — the
+#: pipeline's own vocabulary, not a name minted here. ``policy_id`` **is** that recorded ladder name
+#: because ``policy`` carries no ``run_id``: a policy is a standing operating configuration and
+#: ``policy_summary`` is one run's measurement of it, which is exactly what ``uq_policy_summary`` on
+#: ``(run_id, policy_id)`` says. Second, ``policy.solver`` is VARCHAR(16) and of the six
+#: ``AllocatorId`` values only ``cpsat_exact`` fits it: ``greedy_ev_density`` is seventeen
+#: characters and the two degraded and two baseline ids are longer, so truncating would land a
+#: solver id that names no allocation anyone ran. The declared owner is the only ladder this schema
+#: can describe honestly — which is a finding about the column, not a reason to pick a winner.
+POLICY_OWNER: Final = BACKTEST_FOLD_OWNER
+#: The artifact these figures are read from, named in every refusal so a reader goes to the file
+#: rather than to this function.
+POLICY_ARTIFACT: Final = "out/backtest/<run>/ablation_results.json"
+#: The producer's own run-level record for one policy. Named because the refusals below claim it is
+#: missing fields: ``PolicyAggregate`` publishes ``net_benefit_total_minor`` and nothing else in
+#: money totals, and ``backtest/harness.py`` serialises the per-fold economics inside ``folds[]``.
+POLICY_AGGREGATE_PRODUCER: Final = "oxbow.backtest.harness.PolicyAggregate"
+
+#: ``policy``'s economic parameters are the declared assumption set the run consumed. Config is
+#: their only source — the artifact records money, never the knobs that priced it — and they are
+#: labelled as declarations inside ``policy_summary.assumptions`` so a stored row cannot be
+#: reinterpreted by a later edit of ``config/economics.yaml``. The precedent is
+#: :func:`_frame_tables` reading the band actions and review minutes from the same loaders rather
+#: than restating them. The allocation identity, the solver and the degraded state come from the
+#: artifact, which is the only place that records what actually solved.
+POLICY_CONFIG_SOURCES: Final[dict[str, str]] = {
+    "capacity_minutes": "capacity.review_minutes_per_period",
+    "recovery_rate": "recovery.rate",
+    "analyst_cost_per_hour_minor": "analyst.cost_per_hour_minor",
+    "min_review_minutes": "analyst.min_review_minutes",
+    "friction_cost_minor": "friction_cost_minor",
+    "four_eyes_threshold_minor": "four_eyes.threshold_exposure_minor",
+}
+#: Money columns on ``policy``: integer minor units, read with :func:`_integer` so a float in the
+#: artifact or a bool in config cannot land as one minor unit (DEV-005).
+POLICY_MONEY: Final = frozenset(
+    {"analyst_cost_per_hour_minor", "friction_cost_minor", "four_eyes_threshold_minor"}
+)
+#: The recorded sentence is the only place the artifact names what solved. ``AllocatorId.label`` is
+#: matched exactly rather than paraphrased, so a label no enum owns refuses the row; two of the six
+#: labels carry the producer's own ``DEGRADED`` word, and that is where ``degraded`` and
+#: ``degraded_reason`` come from rather than from a flag anyone could set.
+_DEGRADED_MARK: Final = "DEGRADED"
+
+#: ``policy_summary``'s published columns and the artifact key each is read from. The producer calls
+#: the tail figures means-over-folds and the table calls them ``var95_minor``/``es975_minor``; the
+#: name difference is recorded here, not smoothed over, because the mean over five folds is not the
+#: run's 95th percentile and the column has no other honest reading available.
+POLICY_SUMMARY_SOURCES: Final[dict[str, str]] = {
+    "net_benefit_minor": "net_benefit_total_minor",
+    "benefit_per_analyst_hour_minor": "benefit_per_analyst_hour_minor",
+    "max_drawdown_minor": "max_drawdown_minor",
+    "var95_minor": "var95_mean_minor",
+    "es975_minor": "es975_mean_minor",
+    "alerts_per_10k_accounts": "mean_alerts_per_10k_accounts",
+    "risk_adjusted_benefit": "risk_adjusted_benefit_ratio.value",
+}
+POLICY_SUMMARY_MONEY: Final = frozenset(
+    {
+        "net_benefit_minor",
+        "benefit_per_analyst_hour_minor",
+        "max_drawdown_minor",
+        "var95_minor",
+        "es975_minor",
+    }
+)
+#: The ``policy_summary`` columns the table declares NOT NULL and this artifact publishes no
+#: run-level figure for, each with what *is* recorded instead and who would have to publish the
+#: total. Each entry is ``(the total key the producer would have to publish, why it is not
+#: published today)`` and it is read as a **lookup**, not hard-coded as a refusal: the day
+#: :class:`oxbow.backtest.harness.PolicyAggregate` serialises these totals the column lands with no
+#: change to this file, and until then it refuses by name. Summing the per-fold figures here instead
+#: would be the pipeline computing an answer it never measured — the harness sums per-fold net
+#: benefit into ``net_benefit_total_minor`` and publishes that total; for these six it publishes
+#: nothing, so a total written here would be arithmetic the producer declined to do, wearing the
+#: producer's name. ``frontier`` is the starkest of the six: not even a per-fold series exists,
+#: because ``quant/frontier.py`` computes the sweep and no path in ``oxbow backtest`` serialises it.
+POLICY_SUMMARY_UNPUBLISHED: Final[dict[str, tuple[str, str]]] = {
+    "loss_avoided_minor": (
+        "captured_value_total_minor",
+        "`captured_value_minor` is recorded per fold inside folds[].economics and "
+        f"{POLICY_AGGREGATE_PRODUCER} carries no run-level total for it",
+    ),
+    "analyst_cost_minor": (
+        "review_cost_total_minor",
+        "`review_cost_minor` is recorded per fold and no total is published",
+    ),
+    "friction_cost_minor": (
+        "friction_cost_total_minor",
+        "`friction_cost_minor` is recorded per fold and no total is published",
+    ),
+    "selected_count": (
+        "selected_count_total",
+        "`accounts_reviewed` is recorded per fold and no total is published",
+    ),
+    "candidate_count": (
+        "candidate_count_total",
+        "`n_decisions` is recorded per fold and no total is published",
+    ),
+    "frontier": (
+        "frontier_points",
+        "the artifact records no capacity sweep at all: `quant/frontier.py` computes one and "
+        "no path in `oxbow backtest` serialises it",
+    ),
+}
+#: Which of those six hold money (integer minor units) and which hold counts, so the lookup parses
+#: each by its own column type rather than trusting the key's spelling.
+POLICY_SUMMARY_TOTAL_COUNTS: Final = frozenset({"selected_count", "candidate_count"})
+
+
+class _OwnerPolicy(NamedTuple):
+    """The owner arm's owner-ladder record, plus the siblings the baseline column reads."""
+
+    arm_id: str
+    arm_label: str
+    ladder: str
+    record: Mapping[str, Any]
+    siblings: Mapping[str, Any]
+
+
+def _owner_policy(ablation: Mapping[str, Any]) -> tuple[_OwnerPolicy | None, str | None]:
+    """The record :data:`POLICY_OWNER` names, or the reason the run has no operating point.
+
+    Refusing here is the point of declaring an owner. Picking the highest ``net_benefit_minor``
+    instead would choose a winner by its score, which is how a benchmark gets read as a result —
+    and the artifact's arms differ by *model*, so their money is not one quantity measured nine
+    times. A control is refused by the artifact's own label, not by this file's judgement.
+    """
+    arm_id, ladder = POLICY_OWNER
+    arms = [
+        variant
+        for variant in (ablation.get("variants") or [])
+        if isinstance(variant, Mapping) and variant.get("row_id") is not None
+    ]
+    for variant in arms:
+        if str(variant.get("row_id")) != arm_id:
+            continue
+        if bool(variant.get("is_control")):
+            return None, (
+                f"policy owner: arm {arm_id!r} is labelled a control by the artifact, and a control "
+                "measures the harness rather than a configuration anyone would run"
+            )
+        siblings = variant.get("policies")
+        siblings = siblings if isinstance(siblings, Mapping) else {}
+        record = siblings.get(ladder)
+        if not isinstance(record, Mapping):
+            return None, (
+                f"policy owner: arm {arm_id!r} records ladders {sorted(map(str, siblings))} and no "
+                f"{ladder!r}, so the declared operating point has no record to project"
+            )
+        echo = record.get("policy")
+        if echo is not None and str(echo) != ladder:
+            return None, (
+                f"policy owner: the record sits under ladder {ladder!r} and names itself "
+                f"{echo!r}; one of the two is a renamed key and the loader cannot tell which"
+            )
+        return (
+            _OwnerPolicy(
+                arm_id=arm_id,
+                arm_label=str(variant.get("label") or arm_id),
+                ladder=ladder,
+                record=record,
+                siblings=siblings,
+            ),
+            None,
+        )
+    return None, (
+        f"policy owner: no variant in the document has row_id {arm_id!r} "
+        f"(arms present: {', '.join(sorted(str(variant.get('row_id')) for variant in arms))[:220]}), "
+        f"so the operating point declared by POLICY_OWNER is not a configuration this run measured. "
+        f"The artifact that would carry it is {POLICY_ARTIFACT}"
+    )
+
+
+def _owner_folds(owner: _OwnerPolicy) -> list[Mapping[str, Any]]:
+    """The owner ladder's fold records, the grain every per-period figure is read at."""
+    return [fold for fold in (owner.record.get("folds") or []) if isinstance(fold, Mapping)]
+
+
+def _solver_identity(owner: _OwnerPolicy) -> tuple[str | None, bool, str | None, str | None]:
+    """``solver``, ``degraded`` and ``degraded_reason`` from the one recorded sentence.
+
+    The artifact records ``allocator_label`` and nothing else naming what solved, so the label is
+    matched against :class:`oxbow.quant.allocate.AllocatorId`'s own ``label`` text. An exact match
+    is the only allowed reading: the enum is the pipeline's vocabulary of allocation ids and a
+    loader that fuzzy-matched it would invent an id its author never issued.
+    """
+    label = _text(owner.record.get("allocator_label"))
+    if label is None:
+        return (
+            None,
+            False,
+            None,
+            (
+                f"policy.solver: {owner.arm_id}/{owner.ladder} records no allocator_label, so nothing "
+                "names the allocation that produced these figures"
+            ),
+        )
+    for candidate in AllocatorId:
+        if candidate.label != label:
+            continue
+        solver = _name(candidate.value, limit=16)
+        if solver is None:
+            return (
+                None,
+                False,
+                False,
+                (
+                    f"policy.solver: the recorded allocator is {candidate.value!r}, "
+                    f"{len(candidate.value)} characters, and policy.solver is VARCHAR(16). Landing it "
+                    "would need the column widened or the id truncated, and a truncated solver id names "
+                    "an allocation nobody ran"
+                ),
+            )
+        degraded = _DEGRADED_MARK in label
+        return solver, degraded, (label if degraded else None), None
+    return (
+        None,
+        False,
+        None,
+        (
+            f"policy.solver: allocator_label {label[:90]!r} matches no AllocatorId.label, so the "
+            "artifact names an allocation this repository's own vocabulary does not own"
+        ),
+    )
+
+
+def _artifact_currency(owner: _OwnerPolicy, card: Mapping[str, Any]) -> tuple[str | None, str]:
+    """The currency the artifact records for the owner's money, or the reason it has none.
+
+    Fold economics and the model card are two records of one fact, so they have to agree before a
+    three-character currency code goes on a row whose whole purpose is to say which money these
+    figures are in. Config is deliberately *not* consulted: a run priced in the currency the
+    harness used, and a later edit of ``config/economics.yaml`` cannot reinterpret it.
+    """
+    pairs: list[tuple[str, Any]] = [("model_card", card.get("currency"))]
+    pairs.extend(
+        (
+            f"fold {fold.get('fold_index')}",
+            (fold.get("economics") or {}).get("currency")
+            if isinstance(fold.get("economics"), Mapping)
+            else None,
+        )
+        for fold in _owner_folds(owner)
+    )
+    value, problem = _collapse(pairs, what="policy currency")
+    if problem:
+        return None, problem
+    if value is None:
+        return None, "policy currency: neither the model card nor any fold economics recorded one"
+    parsed = _name(value, limit=CURRENCY_LEN)
+    return parsed, (
+        f"policy currency: {value!r} is not a {CURRENCY_LEN}-character code"
+        if parsed is None
+        else ""
+    )
+
+
+def _policy_config_values(config: Economics) -> dict[str, Any]:
+    """The declared operating parameters, read once from the config the run consumed.
+
+    Keys are the ``policy`` column names and the values are read straight off the validated
+    :class:`oxbow.quant.economics.Economics` object, whose loader already refuses a recovery rate
+    outside ``(0, 1)``, a zero ``min_review_minutes``, a per-hour cost that does not divide by 60
+    and a sensitivity band that is not three ascending values. Nothing here re-checks those: it
+    only refuses a value that is absent or the wrong type for its column.
+    """
+    return {
+        "capacity_minutes": config.capacity.review_minutes_per_period,
+        "recovery_rate": config.recovery.rate,
+        "analyst_cost_per_hour_minor": config.analyst.cost_per_hour_minor,
+        "min_review_minutes": config.analyst.min_review_minutes,
+        "friction_cost_minor": config.friction_cost.minor,
+        "four_eyes_threshold_minor": config.four_eyes.threshold_exposure_minor,
+    }
+
+
+def policy_rows(
+    ablation: Mapping[str, Any],
+    card: Mapping[str, Any],
+    config: Economics,
+) -> tuple[list[dict[str, Any]], list[str]]:
+    """The run's one operating policy — ``policy_summary``'s required parent key.
+
+    ``policy_summary.policy_id`` is a NOT NULL ``ForeignKey("policy.policy_id")`` in both
+    ``models.py`` and migration 0001, and nothing else in the repository inserts into ``policy``
+    (the API's own ``stored_policy`` only reads it), so the summary cannot be landed until this
+    row can be. Every column of it has an honest source: the declared assumption set for the
+    economic parameters, the recorded ladder identity for the rest.
+
+    The recovery-rate band the plan makes mandatory (DEV §3.2, "never present a single money
+    figure without its r band") has its declared home here: ``recovery_sensitivity_band`` is JSONB
+    and NOT NULL, so a policy row that carried only ``recovery_rate`` would be refused by this
+    mapper rather than landed — the band travels with the rate or the row does not exist.
+    """
+    owner, problem = _owner_policy(ablation)
+    if owner is None:
+        return [], [problem or "policy: no owner record"]
+
+    refused: list[str] = []
+    row: dict[str, Any] = {}
+
+    # The identity, both halves of it read from the artifact and cross-checked there.
+    policy_id = _name(owner.ladder, limit=64)
+    if policy_id is None:
+        refused.append(f"policy.policy_id: ladder name {owner.ladder!r} does not fit VARCHAR(64)")
+    else:
+        row["policy_id"] = policy_id
+    name = _name(owner.record.get("allocator_label"), limit=128)
+    if name is None:
+        refused.append(
+            "policy.name: the producer's allocator_label is absent or longer than VARCHAR(128)"
+        )
+    else:
+        row["name"] = name
+
+    solver, degraded, degraded_reason, solver_problem = _solver_identity(owner)
+    if solver_problem:
+        refused.append(solver_problem)
+    else:
+        row["solver"] = solver
+        # Exactly one active policy, and this mapper emits exactly one row: the declared owner.
+        # `active` is the database's answer to "which operating point is the desk running", so it
+        # is set from the rule above and never inferred from a figure.
+        row["active"] = True
+        row["degraded"] = degraded
+        if degraded_reason is not None:
+            row["degraded_reason"] = degraded_reason
+        # `solve_ms` is nullable and the artifact records no solve time, so it is left unset rather
+        # than zeroed: a zero would claim a solve that took no time.
+        gap = owner.record.get("optimality_gap_minor")
+        if gap is not None:
+            parsed_gap = _integer(gap)
+            if parsed_gap is None:
+                refused.append(f"policy.optimality_gap_minor: {gap!r} is not an integer count")
+            else:
+                row["optimality_gap_minor"] = parsed_gap
+
+    currency, currency_problem = _artifact_currency(owner, card)
+    if currency is None:
+        refused.append(currency_problem)
+    else:
+        row["currency"] = currency
+
+    declared = _policy_config_values(config)
+    for column, path in POLICY_CONFIG_SOURCES.items():
+        raw = declared[column]
+        if column in POLICY_MONEY:
+            value: Any = _integer(raw)
+        elif column == "recovery_rate" or column == "min_review_minutes":
+            value = _ratio(raw)
+        else:
+            value = _integer(raw)
+        if value is None:
+            refused.append(
+                f"policy.{column}: config/economics.yaml {path} = {raw!r} is not a value the "
+                "column can hold"
+            )
+        else:
+            row[column] = value
+
+    band = [value for value in (_ratio(v) for v in config.recovery.band) if value is not None]
+    if len(band) != len(config.recovery.band) or not band:
+        refused.append(
+            f"policy.recovery_sensitivity_band: {list(config.recovery.band)!r} is not a band of "
+            "finite rates, and no currency figure on this policy may be read without it"
+        )
+    elif config.recovery.rate not in band:
+        refused.append(
+            f"policy.recovery_rate: {config.recovery.rate!r} is not one of its own sensitivity "
+            f"band {band}, so the row would state a point estimate outside the range it declares"
+        )
+    else:
+        row["recovery_rate"] = _ratio(config.recovery.rate)
+        row["recovery_sensitivity_band"] = band
+
+    minutes = {
+        key: _integer(value) for key, value in sorted(config.review_minutes_by_alert_class.items())
+    }
+    if not minutes or any(value is None for value in minutes.values()):
+        refused.append(
+            "policy.review_minutes_by_band: config declares no alert-class minutes, so the row "
+            "could not say what any band costs to review"
+        )
+    else:
+        row["review_minutes_by_band"] = {key: int(value) for key, value in minutes.items()}
+
+    if refused:
+        return [], [f"policy {owner.arm_id}/{owner.ladder}: {line}" for line in refused]
+    return [row], []
+
+
+def _run_identity_refusal(ablation: Mapping[str, Any], run_id: str) -> str | None:
+    """Whether this artifact may be bound to this run id at all.
+
+    The partition key is what stops one run's economics being read as another's, so the binding is
+    checked against the three fields the artifact records about itself before a single money figure
+    is landed under an id:
+
+    * ``fold_plan_window.window_source`` — the path of the features manifest the fold plan was cut
+      from, which names the run the *scores* came from. This is the same field
+      ``cli._backtest_pair_for_run`` selects the artifact by, re-checked here rather than trusted,
+      because a mapper that assumes its caller filtered is a mapper with two sources of truth.
+    * ``content_sha256`` — the digest of the document being read, so the stored row can name the
+      exact artifact version behind its figures.
+    * ``corpus`` and ``provenance_note`` — what the run says it measured and how it says it knows.
+    """
+    window = ablation.get("fold_plan_window")
+    source = str(window.get("window_source") or "") if isinstance(window, Mapping) else ""
+    if run_id.strip().upper() not in source.upper():
+        return (
+            f"the artifact's fold_plan_window.window_source is {source!r}, which does not name run "
+            f"{run_id}: these are walk-forward figures for a different run's features, and landing "
+            f"them under this run id would put another run's money inside the partition key that "
+            f"exists to keep them apart. The artifact that would be needed is {POLICY_ARTIFACT} for "
+            "this run"
+        )
+    digest = ablation.get("content_sha256")
+    if not isinstance(digest, str) or len(digest) != 64:
+        return (
+            f"the artifact records content_sha256 {digest!r}, which is not the 64-character digest "
+            f"this row would need to name the artifact version its figures came from"
+        )
+    if _name(ablation.get("corpus"), limit=64) is None:
+        return "the artifact records no corpus, and the row cannot say what these figures measured"
+    if _text(ablation.get("provenance_note")) is None:
+        return (
+            "the artifact records no provenance_note, so nothing here says the figures came off a "
+            "real corpus run rather than a fixture"
+        )
+    return None
+
+
+def _policy_assumptions(
+    owner: _OwnerPolicy, config: Economics, ablation: Mapping[str, Any], currency: str
+) -> dict[str, Any]:
+    """The assumption line travelling with the summary, and the run identity behind it (plan §13).
+
+    ``recovery.sensitivity_band`` is in here as well as on the parent ``policy`` row because
+    ``policy_summary`` declares **no** band column: the dashboard re-prices its loss-avoided tile
+    from ``container.economics.recovery.band`` at read time (``routers/dashboard.py``), not from
+    the stored run, so a stored summary without its own band would be a money figure whose band can
+    be moved by editing config after the run. The row carries the band it was measured under.
+    """
+    window = ablation.get("fold_plan_window")
+    return {
+        "source": POLICY_ARTIFACT,
+        "content_sha256": ablation.get("content_sha256"),
+        "corpus": ablation.get("corpus"),
+        "provenance": ablation.get("provenance_note"),
+        "fold_plan_window_source": window.get("window_source")
+        if isinstance(window, Mapping)
+        else None,
+        "owner_arm": owner.arm_id,
+        "owner_arm_label": owner.arm_label,
+        "owner_ladder": owner.ladder,
+        "allocator_label": owner.record.get("allocator_label"),
+        "currency": currency,
+        # The BASE, never the exponent: `Money.decimals` is the exponent the renderer raises ten to
+        # and `minor_units_per_major` is the base. Wiring the base into a `decimals` field divides
+        # every figure by 10^100 and the page reads zero (DEV-024's trap, eight endpoints deep).
+        "minor_units_per_major": config.minor_units_per_major,
+        "source_config": f"config/{config.source_path.name}",
+        "recovery.rate": config.recovery.rate,
+        "recovery.sensitivity_band": list(config.recovery.band),
+        "capacity.review_minutes_per_period": config.capacity.review_minutes_per_period,
+        "analyst.cost_per_minute_minor": config.analyst.cost_per_minute_minor,
+        "analyst.min_review_minutes": config.analyst.min_review_minutes,
+        "friction_cost_minor": config.friction_cost.minor,
+        "four_eyes.threshold_exposure_minor": config.four_eyes.threshold_exposure_minor,
+        "tail_risk.var_alpha": config.tail_risk.var_alpha,
+        "tail_risk.es_alpha": config.tail_risk.es_alpha,
+        "are_declared_assumptions_not_measurements": (
+            "every key above recovery.sensitivity_band is read from config/economics.yaml because "
+            "the backtest artifact records money and never the knobs that priced it"
+        ),
+        "ev_formula": "EV_i = p_i * E_i * r - c_i - (1 - p_i) * f, ranked by EV_i / m_i",
+        "disclaimer": (
+            "Monetary figures are model estimates derived from the stated assumptions, not measured "
+            "outcomes, and are not validated for operational use by any financial institution."
+        ),
+    }
+
+
+def _cumulative_curve(owner: _OwnerPolicy) -> tuple[list[dict[str, Any]] | None, str | None]:
+    """The published per-period curve, zipped onto the fold indices the same record publishes.
+
+    Two lists the producer wrote, matched positionally and refused when they do not have the same
+    length. No value here is computed: the period labels come from ``folds[].fold_index`` and the
+    money from ``cumulative_benefit_minor``.
+    """
+    curve = owner.record.get("cumulative_benefit_minor")
+    folds = _owner_folds(owner)
+    if not isinstance(curve, list) or not folds:
+        return None, "policy_summary.cumulative_curve: no published curve or no fold records"
+    if len(curve) != len(folds):
+        return None, (
+            f"policy_summary.cumulative_curve: the record publishes {len(curve)} period(s) of "
+            f"cumulative benefit and {len(folds)} fold(s), so the curve cannot be labelled without "
+            "guessing which period belongs to which fold"
+        )
+    points: list[dict[str, Any]] = []
+    for fold, value in zip(folds, curve, strict=True):
+        index = _integer(fold.get("fold_index"))
+        minor = _integer(value)
+        if index is None or minor is None:
+            return None, (
+                f"policy_summary.cumulative_curve: fold {fold.get('fold_index')!r} carries a value "
+                f"of {value!r}, and a money point that is not an integer count of minor units is "
+                "not a point"
+            )
+        points.append({"period": index, "cumulative_benefit_minor": minor})
+    return points, None
+
+
+def _baselines(owner: _OwnerPolicy) -> tuple[dict[str, Any] | None, str | None]:
+    """The baseline comparison the artifact records, echoed rather than re-authored.
+
+    The two ``*_reduction_vs_threshold_minor`` fields are the producer's own statement of what this
+    ladder is worth against the score-threshold policy at the same capacity, and the sibling
+    record's published totals are that policy's own figures. Nothing is computed from them.
+    """
+    reductions = {
+        key: _integer(owner.record.get(key))
+        for key in (
+            "var95_reduction_vs_threshold_minor",
+            "es975_reduction_vs_threshold_minor",
+        )
+    }
+    if any(value is None for key, value in reductions.items()):
+        missing = [key for key, value in reductions.items() if value is None]
+        return None, (
+            f"policy_summary.baselines: the record publishes no {', '.join(missing)}, so there is "
+            "no measured reduction against the threshold policy to store"
+        )
+    baseline = owner.siblings.get("score_threshold")
+    if not isinstance(baseline, Mapping):
+        return None, (
+            f"policy_summary.baselines: arm {owner.arm_id!r} records no score_threshold ladder, so "
+            "the thing the reductions are reductions against has no published figures here"
+        )
+    return (
+        {
+            "baseline_ladder": "score_threshold",
+            "baseline_allocator_label": baseline.get("allocator_label"),
+            "baseline_net_benefit_total_minor": _integer(baseline.get("net_benefit_total_minor")),
+            "baseline_var95_mean_minor": _integer(baseline.get("var95_mean_minor")),
+            "baseline_es975_mean_minor": _integer(baseline.get("es975_mean_minor")),
+            "reduction_vs_threshold_minor": {
+                key: int(value) for key, value in sorted(reductions.items())
+            },
+        },
+        None,
+    )
+
+
+def policy_summary_rows(
+    ablation: Mapping[str, Any],
+    card: Mapping[str, Any],
+    config: Economics,
+    *,
+    run_id: str,
+) -> tuple[list[dict[str, Any]], list[str]]:
+    """What the run's operating policy is worth over its periods, with its tail.
+
+    Every figure is read from the artifact's owner record, and the record's run identity is checked
+    against ``run_id`` before anything is landed under it. The row is the one ``/api/dashboard``
+    turns into four currency tiles, and those tiles are the reason this mapper exists.
+
+    **What it refuses, and why that is not a fixable omission.** ``policy_summary`` declares every
+    column NOT NULL, and :data:`POLICY_SUMMARY_UNPUBLISHED` names six the artifact does not publish
+    at the run grain at all: ``loss_avoided_minor``, ``analyst_cost_minor``,
+    ``friction_cost_minor``, ``selected_count``, ``candidate_count`` and ``frontier``. Five of them
+    are recorded per fold inside ``folds[].economics`` and only there; ``frontier`` is recorded
+    nowhere, because ``quant/frontier.py`` is never serialised by ``oxbow backtest``. Summing the
+    fold series would be this pipeline computing a money total the producer declined to publish —
+    and the producer publishes ``net_benefit_total_minor`` precisely because it *does* choose which
+    totals to stand behind. So each column is read as a lookup of the total key the producer would
+    have to publish, refuses by name while it is absent, and lands unchanged the moment
+    :class:`oxbow.backtest.harness.PolicyAggregate` serialises it. That is the finding the four
+    dashboard tiles are waiting on: a producer addition in :mod:`oxbow.backtest.harness`, not a
+    migration and not a loader that tries harder.
+    """
+    assert_run_identifiable(run_id)
+    identity_problem = _run_identity_refusal(ablation, run_id)
+    if identity_problem:
+        return [], [f"policy_summary: {identity_problem}"]
+    owner, problem = _owner_policy(ablation)
+    if owner is None:
+        return [], [f"policy_summary: {problem or 'no owner record'}"]
+
+    record = owner.record
+    refused: list[str] = []
+    row: dict[str, Any] = {}
+
+    # The parent key, taken from the same declared owner as the `policy` row: `policy_summary` is
+    # one run's measurement OF that policy, and `uq_policy_summary` on (run_id, policy_id) is what
+    # says so. `run_id` itself is stamped by the sink, never written here.
+    policy_id = _name(owner.ladder, limit=64)
+    if policy_id is None:
+        refused.append(f"policy_summary.policy_id: ladder name {owner.ladder!r} is not a name")
+    else:
+        row["policy_id"] = policy_id
+
+    currency, currency_problem = _artifact_currency(owner, card)
+    if currency is None:
+        refused.append(currency_problem)
+    else:
+        row["currency"] = currency
+
+    money_by_column = {
+        column: _dig(record, path) for column, path in POLICY_SUMMARY_SOURCES.items()
+    }
+    for column, value in money_by_column.items():
+        if column in POLICY_SUMMARY_MONEY:
+            parsed: Any = _integer(value)
+        else:
+            parsed = _ratio(value)
+        if parsed is None:
+            refused.append(
+                f"policy_summary.{column}: {POLICY_SUMMARY_SOURCES[column]!r} is absent from the "
+                f"owner record or is not a number this column holds ({value!r})"
+            )
+        else:
+            row[column] = parsed
+
+    note = _text(_dig(record, "risk_adjusted_benefit_ratio.not_sharpe_because"))
+    formula = _text(_dig(record, "risk_adjusted_benefit_ratio.formula"))
+    label = _text(_dig(record, "risk_adjusted_benefit_ratio.label"))
+    if note is None or formula is None or label is None:
+        refused.append(
+            "policy_summary.risk_adjusted_benefit_note: the record publishes no label, formula or "
+            "not-sharpe sentence, and the plan requires the label that says this is NOT a Sharpe "
+            "ratio to travel with the ratio itself"
+        )
+    else:
+        row["risk_adjusted_benefit_note"] = f"{label} = {formula}; {note}"
+
+    draw_pairs = [
+        (
+            f"fold {fold.get('fold_index')}",
+            (fold.get("economics") or {}).get("mc_draws")
+            if isinstance(fold.get("economics"), Mapping)
+            else None,
+        )
+        for fold in _owner_folds(owner)
+    ]
+    seed_pairs = [
+        (
+            f"fold {fold.get('fold_index')}",
+            (fold.get("economics") or {}).get("mc_seed")
+            if isinstance(fold.get("economics"), Mapping)
+            else None,
+        )
+        for fold in _owner_folds(owner)
+    ]
+    for column, pairs in (("mc_runs", draw_pairs), ("mc_seed", seed_pairs)):
+        value, collapse_problem = _collapse(pairs, what=f"policy_summary.{column}")
+        if collapse_problem:
+            refused.append(collapse_problem)
+            continue
+        parsed = _integer(value)
+        if parsed is None:
+            refused.append(
+                f"policy_summary.{column}: no fold of the owner ladder recorded it, and a draw "
+                "count is a count of work someone did — this run did that work and said how often, "
+                "or the column stays unset"
+            )
+            continue
+        row[column] = parsed
+
+    curve, curve_problem = _cumulative_curve(owner)
+    if curve_problem:
+        refused.append(curve_problem)
+    else:
+        row["cumulative_curve"] = curve
+
+    baselines, baselines_problem = _baselines(owner)
+    if baselines_problem:
+        refused.append(baselines_problem)
+    else:
+        row["baselines"] = baselines
+
+    drawdown = row.get("max_drawdown_minor")
+    flagged = record.get("zero_drawdown_labelled")
+    if not isinstance(flagged, bool):
+        refused.append(
+            f"policy_summary.zero_drawdown: zero_drawdown_labelled = {flagged!r} is not a recorded "
+            "flag, and a drawdown claim needs the producer's own word on it"
+        )
+    elif isinstance(drawdown, int) and flagged != (drawdown == 0):
+        refused.append(
+            f"policy_summary.zero_drawdown: the record flags zero_drawdown_labelled={flagged} "
+            f"while publishing max_drawdown_minor={drawdown}, and a flag that contradicts the "
+            "figure it reports cannot be arbitrated by the loader guessing which is the lie"
+        )
+    else:
+        row["zero_drawdown"] = flagged
+
+    declared = _policy_config_values(config)
+    row["capacity_minutes"] = _integer(declared["capacity_minutes"])
+    if row["capacity_minutes"] is None:
+        refused.append("policy_summary.capacity_minutes: config names no period review budget")
+    for column, value in (
+        ("var_alpha", config.tail_risk.var_alpha),
+        ("es_alpha", config.tail_risk.es_alpha),
+    ):
+        parsed_alpha = _ratio(value)
+        if parsed_alpha is None:
+            refused.append(f"policy_summary.{column}: config/economics.yaml declares no level")
+        else:
+            row[column] = parsed_alpha
+
+    assumptions = _policy_assumptions(owner, config, ablation, currency or config.currency)
+    row["assumptions"] = assumptions
+
+    # The six totals that decide the row, read as a lookup: a published total lands, an absent one
+    # refuses by name with the per-fold field and the missing key stated beside it.
+    unpublished: list[str] = []
+    for column, (total_key, why) in sorted(POLICY_SUMMARY_UNPUBLISHED.items()):
+        raw = record.get(total_key)
+        if raw is None:
+            unpublished.append(
+                f"policy_summary.{column}: NOT NULL and unpublished — {why}. The key this mapper "
+                f"would read is `{total_key}`, and the owner record does not carry it"
+            )
+            continue
+        if column == "frontier":
+            points = [entry for entry in raw if isinstance(entry, Mapping)] if raw else None
+            if not isinstance(raw, list) or points is None or len(points) != len(raw):
+                unpublished.append(
+                    f"policy_summary.{column}: `{total_key}` = {raw!r} is not the list of recorded "
+                    "operating points the column holds, and an empty frontier would read as a sweep "
+                    "that found nothing rather than a sweep never run"
+                )
+            else:
+                row[column] = list(points)
+            continue
+        parsed_total = _integer(raw)
+        if parsed_total is None:
+            kind = "an integer count" if column in POLICY_SUMMARY_TOTAL_COUNTS else "a money figure"
+            unpublished.append(
+                f"policy_summary.{column}: `{total_key}` = {raw!r} is not {kind}; a float in a "
+                "money column is DEV-005 and a count that is not a count is a rounding rule"
+            )
+        else:
+            row[column] = parsed_total
+
+    if refused or unpublished:
+        return (
+            [],
+            [
+                f"policy_summary {owner.arm_id}/{owner.ladder} refused: no row landed. "
+                f"{len(unpublished)} required column(s) have no published figure and "
+                f"{len(refused)} further check(s) named below. The producer that would fill the "
+                f"totals is {POLICY_AGGREGATE_PRODUCER}, in {POLICY_ARTIFACT}; the same money is "
+                "already landed per fold in `backtest_fold`, so nothing here is lost — it is at a "
+                "grain the table cannot hold, because uq_policy_summary keys one row per run and "
+                "policy, and neither column is nullable.",
+                *unpublished,
+                *refused,
+            ],
+        )
+    return [row], []
 
 
 # --- the scored frame's studio tables ---------------------------------------
@@ -3482,6 +4275,11 @@ __all__ = [
     "GRAPH_EDGE_SOURCES",
     "NODE_COMMUNITY_COLUMN",
     "PERTURBATION_SOURCES",
+    "POLICY_ARTIFACT",
+    "POLICY_CONFIG_SOURCES",
+    "POLICY_OWNER",
+    "POLICY_SUMMARY_SOURCES",
+    "POLICY_SUMMARY_UNPUBLISHED",
     "SCORECARD_ENTRY_FIELDS",
     "SCORECARD_POINT_SOURCES",
     "SCORE_COLUMNS",
@@ -3505,6 +4303,8 @@ __all__ = [
     "fairness_rows",
     "graph_edge_rows",
     "perturbation_rows",
+    "policy_rows",
+    "policy_summary_rows",
     "rule_hit_rows",
     "score_rows",
     "scorecard_bin_rows",
