@@ -158,14 +158,30 @@ def repriced_at_rate(
     ]
 
 
-def live_rank_map(allocation: Allocation) -> dict[str, dict[str, Any]]:
+def live_rank_map(
+    allocation: Allocation, *, priced: Sequence[AccountEV] | None = None
+) -> dict[str, dict[str, Any]]:
     """``account_key -> {rank, selected, beyond_capacity}`` from a live allocation.
 
     The alert queue uses this when a run wrote no ``policy_allocation`` rows, and the
     response says ``allocation_source: 'reallocated'`` rather than presenting the
     ranks as if they were the pipeline's.
     """
-    ordered = list(allocation.candidates)
+    # The allocator's own candidate list is the set it was willing to *select from*, and a
+    # greedy pass that finds almost nothing profitable returns a short one - on the landed
+    # run, three accounts of 43,046 clear positive expected value. Ranking only those three
+    # made every other queue row answer `rank: None`, and the endpoint refuses to position a
+    # row it cannot place, so GET /api/alerts returned 400 for any page wider than the head:
+    # the queue could not render at all. Position is not the same claim as selection, so the
+    # ordering is taken over every priced account the run supplied, using the allocator's own
+    # comparator (-density_ratio, then account_key) rather than a second one invented here,
+    # and `selected` still comes only from what the allocation actually chose. Every account
+    # below the line is visible and marked as unreviewed, which is plan §11.2's whole point.
+    ordered = (
+        sorted(priced, key=lambda row: (-row.density_ratio, row.account_key))
+        if priced
+        else list(allocation.candidates)
+    )
     selected_keys = list(allocation.selected_keys)
     # A set, deliberately: membership was tested against the list inside a loop over every
     # candidate, which is O(n^2) -- 43,046 scored accounts made GET /api/alerts answer in

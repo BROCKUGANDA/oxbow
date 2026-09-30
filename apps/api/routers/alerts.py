@@ -303,7 +303,7 @@ def _rankings(
             "as 'no alerts' rather than 'nothing scored'."
         )
     allocation = _allocate(rows, capacity, container)
-    ranks = live_rank_map(allocation)
+    ranks = live_rank_map(allocation, priced=rows)
     cutoff = max((entry["rank"] for entry in ranks.values() if entry["selected"]), default=None)
     # An unpriced account (scored, no stored economics row) is a missing row in the run's
     # own output. It is counted into the response rather than quietly absent from the
