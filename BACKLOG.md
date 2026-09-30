@@ -297,3 +297,38 @@ restoring the exit-139 segfault (DEV-021).
    while the walk-forward and the conformance suites were running, and restarting a 70-minute
    run to count type errors is the wrong order of operations.
 
+
+## The queue cannot be screenshotted: per-request pricing exceeds the web proxy's timeout (2026-10-01)
+
+`GET /api/alerts?limit=100` answers 200 in ~37-40 s when called directly, but Next's
+rewrite proxy gives up first, and the web log says so plainly:
+
+```
+Failed to proxy http://127.0.0.1:8123/api/alerts?limit=100&offset=0&sort=rank
+  [Error: socket hang up] { code: 'ECONNRESET' }     (repeated, once per retry)
+```
+
+So the browser never receives rows and `/alerts` keeps its skeleton. Shrinking `PAGE_SIZE`
+does not help, because the cost is not the page: `policy_engine.stored_priced_rows` reads
+all 43,046 score rows and all 43,046 economics rows, prices every one in Python, and sorts
+them, on **every request** — then `alert_page` reads again for the page itself.
+
+Plan §14 named the fix and it was never built: *"Precompute per-account EV inputs; the
+slider only re-runs allocation over a cached array."* The concrete form is to land
+`policy_allocation` rows per run (the table is declared, `readmodel` already joins it, and
+`_rankings` prefers stored ranks when present — `apps/api/routers/alerts.py:291-297`), so
+the queue is an indexed SQL read with the ordering pushed down. Until then:
+
+* the capacity simulator cannot be interactive, and
+* no screenshot or video frame of the queue, the case workspace, or the policy frontier can
+  be captured, because every one of those routes pays the same 40 s.
+
+A second, smaller blocker behind the same routes: `/api/dashboard`, `/api/scorecard` and
+`/api/validation` all answer **503**, honestly, because `policy_summary`, `scorecard_spec`
+and the fold tables have no producer output. `DEV-033`'s walk-forward re-run is what would
+fill the fold tables; the policy totals need `backtest/harness.py::PolicyAggregate` to
+publish run-level sums.
+
+Stopgap for a demo, if one is ever needed and labelled as one: cache the priced ordering per
+`run_id` in-process. It converts repeat requests to milliseconds but leaves the first
+request too slow for the proxy, so it does not unblock the capture on its own.

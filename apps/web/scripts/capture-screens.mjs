@@ -104,7 +104,7 @@ async function assertRendered(name, page) {
   // state. /dev/states deliberately enumerates every failure tier, so only the refusal checks
   // apply there.
   if (ROUTE_MARKERS[name] === undefined) return null;
-  const marks = await page.locator(MARKER_SELECTOR).count();
+  const marks = await page.locator(ROUTE_MARKERS[name] ?? '.__never_matches__').count();
   if (marks === 0) return `${name}: no resolved content marker on the page`;
   return null;
 }
@@ -167,7 +167,9 @@ for (const [name, route] of SHOTS) {
   // Wait for something that only exists once a response decoded, then let the panes settle.
   // A fixed sleep was the previous behaviour and it is what let a skeleton be photographed.
   if (ROUTE_MARKERS[name] !== undefined) {
-    await page.waitForSelector(MARKER_SELECTOR, { timeout: RENDER_BUDGET_MS }).catch(() => {});
+    await page
+      .waitForSelector(ROUTE_MARKERS[name] ?? '.__never_matches__', { timeout: RENDER_BUDGET_MS })
+      .catch(() => {});
   }
   await page.waitForTimeout(2_500);
   const failure = await assertRendered(name, page);
