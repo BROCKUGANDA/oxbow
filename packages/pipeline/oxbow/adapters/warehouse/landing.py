@@ -66,7 +66,7 @@ import json
 import re
 from collections.abc import Mapping, Sequence
 from datetime import UTC, date, datetime
-from typing import Any, Final
+from typing import Any, Final, NamedTuple
 
 import polars as pl
 
@@ -1647,6 +1647,33 @@ ECONOMICS_CURRENCY_SOURCE: Final = "currency"
 #: ``score.calibrated_probability`` for a fold that calibrated and ``score_rows`` refuses a row
 #: without it, so this layer reads the exact number the queue ranks on and no other.
 ECONOMICS_PROBABILITY_SOURCE: Final = "p_fused"
+#: --- DEV-032: the run's OWN measured exposure, joined rather than reconstructed ------------------
+#: ``backtest_corpus.parquet`` is written by the same score stage, in the same run, beside
+#: ``scored_rows.parquet``. Its ``exposure_minor`` column is the account's measured outflow inside
+#: its own window, added by ``cli._attach_corpus_economics`` from ``amount_out_30d_minor``, and it is
+#: the term ``backtest/economics.py`` reads (as ``account.exposure_minor``) to produce the published
+#: walk-forward money. ``scored_rows.parquet`` carries no exposure column at all — which is the only
+#: reason the reconstruction below ever existed. Measured on run ``01M3H8WG436R394NZT2GS1KG69``:
+#: corpus 79,998 rows / 76,849 accounts, ``exposure_minor`` 0 nulls, 40,001 non-zero, sum
+#: 920,049,878,010 minor; collapsed to one current row per scored test account, 43,046 rows, 0 nulls,
+#: 21,743 non-zero, sum 525,454,483,107 minor.
+ECONOMICS_CORPUS_EXPOSURE_SOURCE: Final = "exposure_minor"
+#: Named in every corpus refusal, so a reader goes to the artifact instead of guessing at the code.
+ECONOMICS_CORPUS_ARTIFACT: Final = "out/score/<run>/backtest_corpus.parquet"
+#: The grain the corpus row is read at: the SAME ``(account_key, fold, as_of_ts)`` stamp the landed
+#: ``score`` row came from. Not "the corpus's latest row for the account", because the corpus covers
+#: every window the fold touched, and a stamp the walk-forward never scored out-of-sample is not
+#: evidence about the score the queue shows. The triple is also the role scoping: the corpus carries
+#: no ``role`` column (measured: 85 columns, none named ``role``), so the out-of-sample restriction
+#: is structural — the keys come from the scored slice already filtered to ``role=test``.
+ECONOMICS_CORPUS_KEY_COLUMNS: Final = ("account_key", "fold", "as_of_ts")
+#: ``assumptions.exposure_source``: which BASIS priced ``E_i``, in the same idiom ``pricing_basis``
+#: uses for the probability (DEV-029: ``p_fused:uncalibrated`` against ``calibrated_probability``).
+#: Two values, always stated, because a reader who cannot tell the measured row from the reconstructed
+#: one cannot tell whether the queue's money is a measurement or a proxy — and DEV-032's whole finding
+#: is that the two disagree by construction.
+EXPOSURE_FROM_CORPUS: Final = "backtest_corpus:exposure_minor"
+EXPOSURE_FROM_RECONSTRUCTION: Final = "scored_frame:activity_feature_reconstruction"
 #: The three ``economics`` columns that measure a simulated distribution this repository does not
 #: produce per account. ``mc_runs``, ``mc_seed`` and ``mc_interval`` ARE declared by
 #: ``config/economics.yaml`` (``monte_carlo.*``) — they describe the intended experiment. The
@@ -1749,11 +1776,171 @@ def _downstream_empty_set_basis(degree: int | None) -> str:
     )
 
 
+def _corpus_measured_basis(stamp: str) -> str:
+    """The sentence a row priced from the run's own measured exposure carries.
+
+    The corpus path needs its own basis line for the same reason DEV-031 gave the reconstruction one:
+    the row states WHICH artifact and WHICH stamp its ``E_i`` came from, so a reader can go and read
+    that cell instead of taking the mapper's word for it. It also has to say what was NOT applied —
+    §3.2's inflow cap — and why, because a row whose exposure is bigger than its own window's inflow
+    looks like a cap that was forgotten rather than a cap that does not belong to this measure.
+    """
+    return (
+        f"E_i is `{EXPOSURE_FROM_CORPUS}` read at this row's own stamp ({stamp}) from "
+        f"`{ECONOMICS_CORPUS_ARTIFACT}`, the artifact the same score stage wrote beside the scored "
+        "frame and the column `backtest/economics.py` prices the published walk-forward on — so the "
+        "queue and the card read one measurement rather than two (DEV-032). §3.2's inflow cap is NOT "
+        "applied here: it caps a window's outflow at the inflow of the same window, and on this "
+        "corpus no account both receives and sends inside one window (DEV-032 measured 0 of 43,720), "
+        "so applying it to a measured 30-day figure lands every row at nothing again. A cell measured "
+        "at 0 minor prices the account at 0 minor; an account the artifact does not answer for "
+        "refuses by name and is never reconstructed in its place."
+    )
+
+
+def _corpus_join_stamp(record: Mapping[str, Any]) -> str:
+    """The row's own stamp, written the way the artifact's keys read, for refusals and assumptions."""
+    return ", ".join(f"{name}={record.get(name)!r}" for name in ECONOMICS_CORPUS_KEY_COLUMNS)
+
+
+class _CorpusExposure(NamedTuple):
+    """What the corpus artifact answered for one account's current stamp.
+
+    ``value`` is the stored cell exactly as the artifact holds it — an integer, a null, or something
+    that is not an amount at all — and ``rows`` is how many corpus rows carried that stamp. Both are
+    needed because "no row", "a null cell", "several rows" and "a measured 0" are four different
+    findings: flattening any of them into the others is the unknown-becomes-a-zero substitution this
+    module's first rule bans, and DEV-032 is what it looks like when the flattening wins.
+    """
+
+    value: Any
+    rows: int
+
+
+def _corpus_absence_reason(
+    account_key: str, record: Mapping[str, Any], row: _CorpusExposure | None
+) -> str | None:
+    """Why the corpus cannot price this account, or ``None`` when it can.
+
+    Reached only on the measured path, and the reason always names
+    ``out/score/<run>/backtest_corpus.parquet`` and the ``(account_key, fold, as_of_ts)`` it looked
+    for, because "this account has no measured exposure" is only checkable if the reader knows which
+    file and which row was asked. A row that carries a measured 0 is priceable and gets no reason:
+    that is the distinction DEV-032 exists for, and an absent measurement must not read as the same
+    finding as a measured nothing.
+    """
+    stamp = _corpus_join_stamp(record)
+    if row is None or row.rows == 0:
+        return (
+            f"account {account_key}: `{ECONOMICS_CORPUS_ARTIFACT}` has no row at this scored row's "
+            f"own stamp ({stamp}), so its `{ECONOMICS_CORPUS_EXPOSURE_SOURCE}` was never measured for "
+            "it. The account is left unpriced "
+            "rather than priced from the activity-feature reconstruction (DEV-032: the corpus is the "
+            "only artifact of this run that measured exposure, and a proxy is not a measurement that "
+            "arrived late)"
+        )
+    if row.rows > 1:
+        return (
+            f"account {account_key}: `{ECONOMICS_CORPUS_ARTIFACT}` carries {row.rows} rows at the one "
+            f"stamp ({stamp}), so the account's exposure exists {row.rows} times over and this layer "
+            "has no rule for choosing — DEV-026's grain is one decision per account, and letting "
+            "whichever row the join retained win would make the queue's money depend on iteration "
+            "order"
+        )
+    if row.value is None:
+        return (
+            f"account {account_key}: `{ECONOMICS_CORPUS_ARTIFACT}` has a row at ({stamp}) but its "
+            f"`{ECONOMICS_CORPUS_EXPOSURE_SOURCE}` cell is null, so there is no measured amount to "
+            "price. A null is not a zero, and `amount_out_24h_minor` is not substituted for it "
+            "(03 §A rule 2, DEV-032)"
+        )
+    return None
+
+
+def _corpus_exposures(corpus: pl.DataFrame, *, current: pl.DataFrame) -> dict[str, _CorpusExposure]:
+    """``account_key`` -> the corpus's measured exposure at each current scored row's own stamp.
+
+    THE GRAIN, and it is DEV-026's: ``economics`` is ``UNIQUE (run_id, account_key)``, while
+    ``backtest_corpus.parquet`` is one row per (account, as-of) — measured on the landed 40k run,
+    79,998 rows over 76,849 accounts and 77,691 ``(account_key, fold)`` pairs. The collapse therefore
+    happens on BOTH sides of the join: ``current`` is the scored slice already resolved to one current
+    row per account by :func:`_current_score_per_account` (so an account names exactly one stamp), and
+    any account the artifact answers more than once at that stamp is refused rather than resolved. One
+    account cannot be priced twice, and its money cannot be booked per row.
+
+    THE ROLE, and the honest answer is that the corpus cannot be filtered by it: it carries no ``role``
+    column (measured: 85 columns, none named ``role``), and its rows cover every window the fold
+    touched, train included. Scoping to ``role=test`` is done structurally instead — the join keys come
+    from the scored slice filtered to ``test``, so the only corpus rows that can price a row are the
+    ones the walk-forward scored out-of-sample. The other 33,803 corpus accounts (76,849 minus the
+    run's 43,046 scored ones) never enter the table.
+
+    THE VALUES are returned untouched, because this function decides where a row was read from and
+    nothing more: a null, a float and an absent row all become refusals in the caller, which is where
+    the money decision lives.
+    """
+    keys = list(ECONOMICS_CORPUS_KEY_COLUMNS)
+    missing = [
+        name for name in (*keys, ECONOMICS_CORPUS_EXPOSURE_SOURCE) if name not in corpus.columns
+    ]
+    if missing:
+        raise LandingError(
+            f"`{ECONOMICS_CORPUS_ARTIFACT}` cannot price exposure: it carries no "
+            f"{missing} column(s). The measured path reads `E_i` from "
+            f"`{ECONOMICS_CORPUS_EXPOSURE_SOURCE}` joined on {keys}; an artifact without it is not a "
+            "corpus with unmeasured accounts, it is the wrong file, and the account-level refusals "
+            "would report a whole-run gap one account at a time"
+        )
+    unstampable = [name for name in keys if name not in current.columns]
+    if unstampable:
+        raise LandingError(
+            f"the scored slice cannot name its own stamp: no {unstampable} column, so no "
+            f"`{ECONOMICS_CORPUS_ARTIFACT}` row can be matched to a landed score and every account "
+            "would refuse with a reason that says only 'absent'"
+        )
+
+    right = corpus.select([*keys, ECONOMICS_CORPUS_EXPOSURE_SOURCE]).with_columns(
+        pl.lit(True).alias("_corpus_row")
+    )
+    try:
+        # Two artifacts, one stage, so the key dtypes agree on any run built by this code. A widened
+        # fold column (Int32 -> Int64) in either would otherwise fail inside polars with a SchemaError
+        # naming nothing but itself, so the corpus keys are cast to the scored slice's own types and a
+        # genuinely unjoinable column fails here with the file and the columns named.
+        right = right.with_columns(*(pl.col(name).cast(current.schema[name]) for name in keys))
+    except pl.exceptions.PolarsError as exc:
+        raise LandingError(
+            f"`{ECONOMICS_CORPUS_ARTIFACT}` cannot be joined on {keys}: {exc}"
+        ) from exc
+
+    matched = (
+        current.select(keys)
+        .join(right, on=keys, how="left")
+        .group_by(keys, maintain_order=True)
+        .agg(
+            pl.col("_corpus_row").is_not_null().sum().alias("_rows"),
+            pl.col(ECONOMICS_CORPUS_EXPOSURE_SOURCE).first().alias("_value"),
+        )
+    )
+    by_account: dict[str, _CorpusExposure] = {}
+    for record in matched.to_dicts():
+        account = record.get("account_key")
+        if not isinstance(account, str):
+            # A null or non-string key cannot name a corpus row either; `economics_rows` already
+            # refuses it as a key too short, long or absent to land in CHAR(12).
+            continue
+        by_account[account] = _CorpusExposure(
+            value=record.get("_value"), rows=int(record.get("_rows") or 0)
+        )
+    return by_account
+
+
 def _assumptions_record(
     config: Economics,
     *,
     exposure_column: str,
-    cap_column: str,
+    exposure_source: str,
+    cap_column: str | None,
     probability_column: str,
     score: Mapping[str, Any],
     capped: bool,
@@ -1762,22 +1949,35 @@ def _assumptions_record(
     currency_from_frame: bool,
     downstream_empty_set_basis: str | None = None,
     absent_interval_basis: str | None = None,
+    corpus_basis: str | None = None,
 ) -> dict[str, Any]:
     """The assumption line that travels with every money figure on this row (plan §13).
 
     Stored on the row rather than joined, so a later edit of ``config/economics.yaml`` cannot
     reinterpret an older run's money: the numbers below are the ones this row's arithmetic used.
 
-    ``downstream_empty_set_basis`` is present only on the DEV-031 branch, and it comes in as a
-    sentence rather than a flag so the row says WHICH term is missing, on WHAT evidence, and at WHAT
-    grain the figure now is — the same discipline that makes ``probability_is_uncalibrated`` travel
-    with ``confidence_label`` rather than sit alone as a boolean.
+    ``exposure_source`` is the discriminator DEV-032 asks for, and it is on every row because a
+    reader who cannot tell the measured ``E_i`` from the reconstructed one cannot tell whether the
+    queue's money is a measurement: ``backtest_corpus:exposure_minor`` against
+    ``scored_frame:activity_feature_reconstruction``. It is the twin of the calibration state one key
+    further along, and it is not a restatement of ``exposure_source_column``, which names the column
+    while this names the artifact and the path.
 
-    ``absent_interval_basis`` is its twin one column further along, present exactly when no
-    propagation interval was supplied for this account. The two are separate parameters because they
-    are separate absences: a row can be priced from a measured downstream term and still carry no
-    simulated distribution, or the other way round, and collapsing them into one flag would let a
-    reader who fixes one gap believe both were filled.
+    ``downstream_empty_set_basis`` is present only on the DEV-031 branch of the reconstruction path,
+    and it comes in as a sentence rather than a flag so the row says WHICH term is missing, on WHAT
+    evidence, and at WHAT grain the figure now is — the same discipline that makes
+    ``probability_is_uncalibrated`` travel with ``confidence_label`` rather than sit alone as a
+    boolean.
+
+    ``corpus_basis`` is its twin on the other path, present exactly when ``E_i`` was read from the
+    corpus artifact, and it says the opposite: which file and stamp the figure came from, and why
+    §3.2's cap was not applied to it.
+
+    ``absent_interval_basis`` is the third, one column further along, present exactly when no
+    propagation interval was supplied for this account. The three are separate parameters because they
+    are separate facts: a row can be priced from the corpus and still carry no simulated
+    distribution, or be reconstructed and carry one, and collapsing them would let a reader who fixes
+    one gap believe both were filled.
     """
     record: dict[str, Any] = {
         "source": f"config/{config.source_path.name}",
@@ -1795,6 +1995,7 @@ def _assumptions_record(
         "capacity.review_minutes_per_period": config.capacity.review_minutes_per_period,
         "ev_formula": "EV_i = p_i * E_i * r - c_i - (1 - p_i) * f, ranked by EV_i / m_i",
         # Where each term was read from, so a reviewer can go to the column rather than the code.
+        "exposure_source": exposure_source,
         "exposure_source_column": exposure_column,
         "exposure_cap_column": cap_column,
         "exposure_capped_by_inflow": capped,
@@ -1820,9 +2021,13 @@ def _assumptions_record(
     }
     if downstream_empty_set_basis is not None:
         # The stamp DEV-031 asks for by name, with the missing term and the evidence beside it. A row
-        # that measured its downstream legs carries neither key: nothing about its E_i is partial.
+        # that measured its downstream legs carries neither key: nothing about its E_i is partial, and
+        # neither does a row read from the corpus, whose E_i is a measurement of its own.
         record["exposure_is_partial"] = True
         record["exposure_downstream_basis"] = downstream_empty_set_basis
+    if corpus_basis is not None:
+        # The other basis, stated the same way: file, stamp, and the cap this path declines to apply.
+        record["exposure_corpus_basis"] = corpus_basis
     if absent_interval_basis is not None:
         # And the same for the missing distribution: named by its producer, so a reader can go and
         # run it instead of guessing whether the nulls mean zero or mean nothing.
@@ -1836,13 +2041,30 @@ def economics_rows(
     config: Economics,
     role: str = "test",
     intervals: Mapping[str, MonteCarloInterval] | None = None,
+    corpus: pl.DataFrame | None = None,
 ) -> tuple[list[dict[str, Any]], list[str]]:
     """One priced ``economics`` row per landed ``score`` row's account, plus the refusals.
 
     THE GRAIN is the queue's, not the frame's: :func:`_current_score_per_account`, the same rule
     ``score_rows`` uses, so an account scored in two folds is priced once and on the same row the
     score table shows. Pricing a stale fold while the queue shows the current one is DEV-026's
-    double-charge wearing a money column.
+    double-charge wearing a money column. ``corpus`` is collapsed the same way on its own side (see
+    :func:`_corpus_exposures`), so an account with four corpus rows still gets one priced row.
+
+    THE EXPOSURE is read from the run's own measurement, and the reconstruction is a fallback.
+    ``corpus`` is the run's ``backtest_corpus.parquet`` — the frame the same score stage wrote beside
+    ``scored_rows.parquet``, whose ``exposure_minor`` column is what ``backtest/economics.py`` prices
+    the published walk-forward on. Supplied, every account's ``E_i`` is that column, joined at the
+    account's own current ``(account_key, fold, as_of_ts)`` stamp, and ``assumptions.exposure_source``
+    says ``backtest_corpus:exposure_minor``. Omitted (``None``, the default, which is what
+    ``cli.py``'s one call site does today), this function behaves exactly as it did before DEV-032 was
+    filed: it reconstructs ``E_i`` from the scored frame's activity features and stamps every row
+    ``scored_frame:activity_feature_reconstruction``. The default is backward compatible, not
+    equivalent: DEV-032 measured what the reconstruction produces on PaySim (43,046 rows at
+    ``exposure_minor = 0``, because §3.2's cap is degenerate on a corpus where no account both receives
+    and sends inside one window), and an all-zero queue is a proxy that lost its subject. A caller who
+    has the artifact and does not pass it is landing the proxy on purpose, which is why the row says
+    which basis priced it.
 
     THE ARITHMETIC is not implemented here. :func:`oxbow.quant.ev.price_account` is called once per
     account, because it already does the §11 formula in integer minor units over probabilities
@@ -1868,12 +2090,12 @@ def economics_rows(
     figure trustworthy: an uncalibrated EV is a ranking device under stated assumptions, and the
     row hands the API the vocabulary to say exactly that.
 
-    THE DOWNSTREAM TERM is the only money gate left, and DEV-031 settled it by measurement
-    rather than by argument. ``E_i`` is the subject's outflow PLUS its 1-hop downstream, capped at
-    inflow, and ``downstream_outflow_24h_minor`` is null for 43,511 of this run's test rows — which
-    reads either as "no downstream exists" (an empty set, so the subject's own measured outflow is the
-    whole of ``E_i``) or as "the fold never covered this account" (unknowable, so the queue cannot be
-    priced).
+    THE DOWNSTREAM TERM belongs to the FALLBACK path, and DEV-031 settled it by measurement rather
+    than by argument. Where no corpus was supplied, ``E_i`` is the subject's outflow PLUS its 1-hop
+    downstream, capped at inflow, and ``downstream_outflow_24h_minor`` is null for 43,511 of this run's
+    test rows — which reads either as "no downstream exists" (an empty set, so the subject's own
+    measured outflow is the whole of ``E_i``) or as "the fold never covered this account" (unknowable,
+    so the queue cannot be priced).
     The frame already carries the discriminator: ``graph_out_degree_30d`` is 0 or null on all 43,511
     of them and 0 rows remain genuinely unknown, so those accounts provably have no downstream leg and
     the missing term is a measured empty set. Only there does this function price off
@@ -1883,21 +2105,27 @@ def economics_rows(
     rather than a bare flag. Everywhere else a null downstream still refuses, including the degree > 0
     case with zero instances today, which is exactly why the guard is code: coalescing unconditionally
     would turn an unknown into a zero, and DEV-031 rejects that reading as the most convincing
-    possible failure. A present downstream value is priced exactly as it always was, with neither
-    extra key on the row.
+    possible failure. A present downstream value is priced exactly as it always was, with neither extra
+    key on the row. None of this machinery reaches a corpus-priced row: its ``E_i`` is a measurement of
+    the account's own money and nothing about it is partial, so it carries no
+    ``exposure_is_partial`` — a label applied to every row labels nothing.
 
-    WHAT THE BRANCH PRODUCES on the landed run, measured rather than hoped: all 43,046 current test
-    accounts price, and every one of them comes out at ``exposure_minor = 0``. The reason is the cap,
-    not the substitution. ``amount_out_24h_minor`` is non-zero on 21,860 of the 43,720 test rows and
-    ``amount_in_24h_minor`` on 21,860 too, and no row carries both -- PaySim records an account as a
-    sender or as a receiver inside a window, never both -- so a subject with measured outflow has
-    measured zero inflow, and §3.2 caps its exposure at that zero. The 209 rows that do carry a
-    downstream term carry it at 0. Each landed row therefore states
-    ``exposure_capped_by_inflow`` true with its own ``exposure_before_cap_minor`` beside it, and every
-    EV in the table is the cost-only figure ``-c_i - (1 - p_i) * f``. That is a true reading of a thin
-    corpus, not an arithmetic defect to average away: this run's queue ranks on review cost alone, and
-    a reader who wants exposure needs the graph DEV-031 names. Refusing the rows would have hidden the
-    finding behind an empty table.
+    WHAT EACH PATH PRODUCES on the landed run, measured rather than hoped. The reconstruction, which
+    is what ``cli.py`` calls today: all 43,046 current test accounts price and every one of them comes
+    out at ``exposure_minor = 0``, so every EV in the table is the cost-only figure
+    ``-c_i - (1 - p_i) * f``. The reason is the cap, not the substitution —
+    ``amount_out_24h_minor`` is non-zero on 21,860 of the 43,720 test rows and ``amount_in_24h_minor``
+    on 21,860 too, and no row carries both (PaySim records an account as a sender or as a receiver
+    inside a window, never both), so §3.2 caps every subject's exposure at a measured no-inflow; the
+    209 rows that do carry a downstream term carry it at 0. That is what DEV-032 is about: a queue
+    ranked on review cost alone while the run's own measured exposure sits in the next file.
+    The corpus path, with ``corpus=backtest_corpus.parquet``: 43,046 rows land with 0 refusals, 0 of
+    them null on the joined column, 21,743 at a non-zero ``exposure_minor`` summing 525,454,483,107
+    minor, and the exposure is the account's measured 30-day outflow — the figure the published
+    walk-forward already prices, uncapped, which is why ``exposure_capped_by_inflow`` is false on
+    those rows and :func:`_corpus_measured_basis` says so on the face of each one. Capping it at
+    ``amount_in_24h_minor`` anyway would leave 1 non-zero row out of 43,046 (measured), i.e. the
+    all-zero queue under a different name.
 
     THE INTERVAL is the other gate, and it was never a labelling question: it was a schema question,
     and migration 0004 settled it. ``mc_p05_minor``, ``mc_p50_minor`` and ``mc_p95_minor`` are the
@@ -1939,7 +2167,8 @@ def economics_rows(
         raise LandingError(
             f"the scored frame cannot populate {missing} for `economics`, so no account can be "
             f"priced: E_i is read from {ECONOMICS_EXPOSURE_SOURCE} capped at "
-            f"{ECONOMICS_INFLOW_CAP_SOURCE} and p_i from {ECONOMICS_PROBABILITY_SOURCE}"
+            f"{ECONOMICS_INFLOW_CAP_SOURCE} on the reconstruction path (the one that runs when no "
+            f"`corpus` is supplied) and p_i from {ECONOMICS_PROBABILITY_SOURCE}"
         )
 
     # Asked first, and its answer is the only account set this table may price: the calibration
@@ -1952,6 +2181,11 @@ def economics_rows(
         table="economics",
         role=role,
     )
+    # DEV-032's primary path: the run's own measured exposure, joined at each current row's own
+    # stamp. `None` — the default, and what `cli.py` passes today — means no corpus artifact was
+    # handed over, so the reconstruction below runs exactly as it did before this function could
+    # tell the two apart.
+    exposures = _corpus_exposures(corpus, current=part) if corpus is not None else None
 
     supplied = dict(intervals or {})
     rows: list[dict[str, Any]] = []
@@ -1988,7 +2222,42 @@ def economics_rows(
             and (degree_raw is None or degree == 0)
         )
 
-        if downstream_raw is None and own_outflow is not None and degree_records_no_downstream_leg:
+        # Which basis prices E_i, stated on the row whichever way it goes (DEV-032). The corpus is
+        # the measurement; everything below this first arm is the reconstruction, now a fallback.
+        exposure_source = EXPOSURE_FROM_RECONSTRUCTION
+        corpus_basis: str | None = None
+        priced_from_corpus = False
+
+        if exposures is not None:
+            corpus_row = exposures.get(account_key)
+            reason = _corpus_absence_reason(account_key, record, corpus_row)
+            measured = (
+                _integer(corpus_row.value) if (reason is None and corpus_row is not None) else None
+            )
+            if reason is None and measured is None:
+                stored = corpus_row.value if corpus_row is not None else None
+                reason = (
+                    f"account {account_key}: `{ECONOMICS_CORPUS_ARTIFACT}` has "
+                    f"`{ECONOMICS_CORPUS_EXPOSURE_SOURCE}` = {stored!r} at "
+                    f"{_corpus_join_stamp(record)}, which is not an integer minor amount, and no "
+                    "rounding rule was measured for it: the account is left unpriced rather than "
+                    "rounded into the queue"
+                )
+            if reason is not None:
+                # No fall-through to the reconstruction. An account the artifact does not answer for
+                # has no measured E_i, and pricing it from activity features anyway would put two
+                # bases in one column with nothing on the row to say which one the money came from.
+                refused.append(reason)
+                continue
+            exposure_column = ECONOMICS_CORPUS_EXPOSURE_SOURCE
+            pre_cap_minor = int(measured)
+            downstream_basis = None
+            exposure_source = EXPOSURE_FROM_CORPUS
+            corpus_basis = _corpus_measured_basis(_corpus_join_stamp(record))
+            priced_from_corpus = True
+        elif (
+            downstream_raw is None and own_outflow is not None and degree_records_no_downstream_leg
+        ):
             # The measured-empty-set branch: the term sums over nothing, so the subject's own outflow
             # is the whole of E_i, and the row carries the sentence saying which term is missing, on
             # what evidence, and at what grain the figure now is.
@@ -2041,7 +2310,10 @@ def economics_rows(
                 f"{degree_reason}."
             )
             continue
-        if inflow is None:
+        if not priced_from_corpus and inflow is None:
+            # The cap is part of the RECONSTRUCTED E_i's definition, and the corpus path does not use
+            # it: refusing a measured row for a term it never reads would be DEV-028's mistake — a
+            # loader treating its own column as a verdict about the corpus.
             refused.append(
                 f"account {account_key}: `{ECONOMICS_INFLOW_CAP_SOURCE}` is "
                 f"{record.get(ECONOMICS_INFLOW_CAP_SOURCE)!r}. The inflow cap is part of E_i's "
@@ -2064,7 +2336,11 @@ def economics_rows(
         # is missing. `models.py`'s pairing check is what stops the row from half-claiming.
         monte_carlo_columns = _monte_carlo_columns(interval, config)
 
-        capped = inflow < pre_cap_minor
+        # §3.2's cap belongs to the reconstruction, whose two terms are one window's money. A
+        # corpus-priced E_i is the account's own measured figure over the artifact's own window, and
+        # capping it at a 24-hour inflow this corpus provably never has (DEV-032: 0 of 43,720 rows
+        # carry both an inflow and an outflow) is the all-zero queue arriving under a different name.
+        capped = False if priced_from_corpus else inflow < pre_cap_minor
         exposure_minor = inflow if capped else pre_cap_minor
         currency_from_frame = ECONOMICS_CURRENCY_SOURCE in scored.columns
         currency = (
@@ -2112,7 +2388,8 @@ def economics_rows(
                 "assumptions": _assumptions_record(
                     config,
                     exposure_column=exposure_column,
-                    cap_column=ECONOMICS_INFLOW_CAP_SOURCE,
+                    exposure_source=exposure_source,
+                    cap_column=None if priced_from_corpus else ECONOMICS_INFLOW_CAP_SOURCE,
                     probability_column=ECONOMICS_PROBABILITY_SOURCE,
                     score={**score, "confidence_label": score_row.confidence_label},
                     capped=capped,
@@ -2123,6 +2400,7 @@ def economics_rows(
                     absent_interval_basis=None
                     if interval is not None
                     else _absent_interval_basis(config),
+                    corpus_basis=corpus_basis,
                 ),
             }
         )
@@ -3185,6 +3463,9 @@ __all__ = [
     "BAND_SOURCES",
     "CANONICAL_COMMUNITY_ORDER",
     "DRIFT_REPORT_SOURCES",
+    "ECONOMICS_CORPUS_ARTIFACT",
+    "ECONOMICS_CORPUS_EXPOSURE_SOURCE",
+    "ECONOMICS_CORPUS_KEY_COLUMNS",
     "ECONOMICS_CURRENCY_SOURCE",
     "ECONOMICS_DOWNSTREAM_DEGREE_SOURCE",
     "ECONOMICS_EXPOSURE_SOURCE",
@@ -3195,6 +3476,8 @@ __all__ = [
     "ECONOMICS_UNRUN_MC_DRAWS",
     "EVIDENCE_KIND_RULE_HIT",
     "EVIDENCE_KIND_TRANSACTION",
+    "EXPOSURE_FROM_CORPUS",
+    "EXPOSURE_FROM_RECONSTRUCTION",
     "FAIRNESS_SOURCES",
     "GRAPH_EDGE_SOURCES",
     "NODE_COMMUNITY_COLUMN",

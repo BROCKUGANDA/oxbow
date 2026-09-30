@@ -1783,7 +1783,11 @@ def _backtest_tables(
 
 
 def _frame_tables(
-    ctx: StageContext, *, scored: pl.DataFrame, events: pl.DataFrame
+    ctx: StageContext,
+    *,
+    scored: pl.DataFrame,
+    events: pl.DataFrame,
+    corpus: pl.DataFrame | None = None,
 ) -> tuple[dict[str, list[dict[str, Any]]], dict[str, list[str]]]:
     """The studio and evidence tables, each shaped from the run's own landed rows.
 
@@ -1823,7 +1827,9 @@ def _frame_tables(
     tables["band_definition"], refusals["band_definition"] = band_definition_rows(
         scored, actions=actions, review_minutes=minutes
     )
-    tables["economics"], refusals["economics"] = economics_rows(scored, config=economics)
+    tables["economics"], refusals["economics"] = economics_rows(
+        scored, config=economics, corpus=corpus
+    )
     tables["scorecard_bin"], refusals["scorecard_bin"] = scorecard_bin_rows(scored)
     tables["scorecard_point"], refusals["scorecard_point"] = scorecard_point_rows(scored)
     tables["drift_period"], refusals["drift_period"] = drift_period_rows(scored)
@@ -1982,6 +1988,23 @@ def land_warehouse_rows(ctx: StageContext, handle: StageHandle, *, run_id: str) 
         return EXIT_REFUSED
 
     scored = pl.read_parquet(scored_path)
+    # DEV-032: the run's own measured exposure lives in this artifact, not in the scored
+    # frame, which carries no exposure column at all. Reconstructing E_i from activity
+    # features instead prices every PaySim account at zero, because the plan's 24-hour cap
+    # is degenerate on a corpus where no account both receives and sends inside the window
+    # (0 of 43,720). So the corpus is read here and threaded into the one table that needs
+    # it; when it is absent the queue is knowingly built on a proxy, and that is said out
+    # loud rather than left for a reader to discover in the numbers.
+    corpus_path = score_dir / "backtest_corpus.parquet"
+    corpus = pl.read_parquet(corpus_path) if corpus_path.is_file() else None
+    if corpus is None:
+        ctx.echo(
+            f"[warehouse] {corpus_path} is not there, so economics falls back to the "
+            "activity-feature reconstruction of E_i. On this corpus that prices every "
+            "account at zero exposure; the rows will land and every expected value will be "
+            "negative. Read that as the proxy it is, not as a finding about the money.",
+            err=True,
+        )
     # The frame is one row per event in the slice: that set of txn_ids IS the sample.
     slice_ids = pl.read_parquet(frame_path, columns=["txn_id"]).get_column("txn_id").to_frame()
 
@@ -1995,7 +2018,7 @@ def land_warehouse_rows(ctx: StageContext, handle: StageHandle, *, run_id: str) 
         payload["score"] = scores
         payload["rule_hit"] = rule_hit_rows(scored)
         for shapes in (
-            _frame_tables(ctx, scored=scored, events=events),
+            _frame_tables(ctx, scored=scored, events=events, corpus=corpus),
             _backtest_tables(ctx, run_id),
             _graph_tables(ctx, run_id),
         ):

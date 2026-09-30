@@ -31,6 +31,22 @@ stored fact and the account lands priced. What the file insists on instead is th
 the row's `assumptions` name the producer that would fill them, and the money either way is the same
 money — a distribution nobody sampled was never part of `EV_i`, so no figure here moves because one
 went missing.
+
+DEV-032 is the fourth case, and it decides what the queue is worth. The landed run has TWO exposure
+figures: `scored_rows.parquet` has none at all (123 columns, no exposure column), while
+`backtest_corpus.parquet` — written by the same stage, in the same run — carries `exposure_minor` on
+every row: 0 nulls, 40,001 non-zero of 79,998, sum 920,049,878,010 minor. The reconstruction this
+file spent DEV-031 defending prices 43,046 accounts at `exposure_minor = 0`, because §3.2's cap is
+`min(outflow, inflow)` and PaySim has no account that both receives and sends inside one window (0 of
+43,720). So the queue's money column was a proxy while the measurement sat in the next file, and the
+published walk-forward — which reads the corpus column through `backtest/economics.py` — disagreed
+with it by construction. The tests below pin the source change: `corpus=` prices from the measured
+column joined at the scored row's own `(account_key, fold, as_of_ts)` stamp; the reconstruction
+survives only as the named fallback it is now; an account the corpus does not answer for REFUSES
+rather than falling back; a corpus cell measured at 0 prices at 0 and is a different finding from a
+missing row; two corpus rows for one account become one priced row (DEV-026's grain, in a new table);
+and `exposure_source` says on every row which basis produced its money, with `exposure_is_partial`
+confined to the fallback so it stops labelling rows that measured the thing.
 """
 
 from __future__ import annotations
@@ -43,12 +59,16 @@ import polars as pl
 import pytest
 
 from oxbow.adapters.warehouse.landing import (
+    ECONOMICS_CORPUS_ARTIFACT,
+    ECONOMICS_CORPUS_EXPOSURE_SOURCE,
     ECONOMICS_DOWNSTREAM_DEGREE_SOURCE,
     ECONOMICS_EXPOSURE_SOURCE,
     ECONOMICS_INFLOW_CAP_SOURCE,
     ECONOMICS_SUBJECT_OUTFLOW_SOURCE,
     ECONOMICS_UNMEASURED_COLUMNS,
     ECONOMICS_UNRUN_MC_DRAWS,
+    EXPOSURE_FROM_CORPUS,
+    EXPOSURE_FROM_RECONSTRUCTION,
     LandingError,
     economics_rows,
 )
@@ -215,6 +235,38 @@ def _uncalibrated(**overrides: Any) -> pl.DataFrame:
     }
     merged.update(overrides)
     return _scored(**merged)
+
+
+def _corpus(**overrides: Any) -> pl.DataFrame:
+    """One row of `backtest_corpus.parquet`: the run's measured exposure at one stamp.
+
+    The artifact is one row per (account, as-of) with its fold, so the three key columns are here and
+    `exposure_minor` is the measured money `cli._attach_corpus_economics` landed and
+    `backtest/economics.py` prices the published walk-forward on. Its default is 30,000,000 — a figure
+    the scored fixture does NOT carry in any column (its downstream term is 10,000,000 and its own
+    outflow 6,000,000), so a test that finds 30,000,000 on the row knows which artifact priced it.
+
+    The dtype of a null `exposure_minor` is pinned explicitly: a one-row frame built from `None` alone
+    would infer `Null` rather than the `Int64` the parquet carries, and the distinction this file cares
+    most about — a measured 0 against an absent measurement — has to be tested against the column the
+    artifact actually has.
+    """
+    base: dict[str, Any] = {
+        "account_key": ACCT,
+        "fold": 0,
+        "as_of_ts": T0,
+        ECONOMICS_CORPUS_EXPOSURE_SOURCE: 30_000_000,
+    }
+    base.update(overrides)
+    return pl.DataFrame(
+        [base],
+        schema={
+            "account_key": pl.String,
+            "fold": pl.Int32,
+            "as_of_ts": pl.Datetime("us", UTC),
+            ECONOMICS_CORPUS_EXPOSURE_SOURCE: pl.Int64,
+        },
+    )
 
 
 def test_one_account_priced_end_to_end_and_checkable_by_hand() -> None:
@@ -955,6 +1007,347 @@ def test_a_frame_with_no_out_of_sample_rows_refuses_the_table_rather_than_postin
     """`score_rows` is asked first, so `economics` inherits its out-of-sample refusal verbatim."""
     with pytest.raises(LandingError, match="no scored rows with role="):
         economics_rows(_scored(role="train"), config=_config(), intervals=_intervals(ACCT))
+
+
+def test_the_corpus_column_prices_e_i_and_the_row_names_the_artifact() -> None:
+    """DEV-032's source change, on the shipped config's own numbers.
+
+    The scored frame offers 10,000,000 of downstream and 6,000,000 of the subject's own outflow; the
+    corpus carries 30,000,000. Only the corpus can produce the figures below, computed with
+    `config/economics.yaml`'s declared terms (r = 0.35, 15,000 minor/analyst-minute, band A = 5 min,
+    friction 2,500,000), not a hand-built copy of them:
+
+        p*E*r = 0.5 * 30,000,000 * 0.35             =  5,250,000
+        c     = 5 min x 15,000                      =     75,000
+        (1-p)*f = 0.5 * 2,500,000                   =  1,250,000
+        EV      = 5,250,000 - 75,000 - 1,250,000    =  3,925,000
+        density = 3,925,000 / 5 minutes             =  785,000.0
+    """
+    shipped = load_economics(REPO_ROOT)
+    rows, refused = economics_rows(
+        _scored(), config=shipped, intervals=_intervals(ACCT), corpus=_corpus()
+    )
+
+    assert refused == [], refused
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["exposure_minor"] == 30_000_000, "the corpus column priced it, not either feature"
+    assert row["loss_avoided_minor"] == 5_250_000
+    assert row["analyst_cost_minor"] == 75_000
+    assert row["friction_cost_minor"] == 1_250_000
+    assert row["expected_value_minor"] == 3_925_000
+    assert row["ev_density"] == 785_000.0
+    assert isinstance(row["exposure_minor"], int) and not isinstance(row["exposure_minor"], bool)
+    assert_money_is_integer_minor("economics", row)
+
+    assumptions = row["assumptions"]
+    # The discriminator: which BASIS priced this row, on every row, both values possible.
+    assert assumptions["exposure_source"] == EXPOSURE_FROM_CORPUS
+    assert assumptions["exposure_source_column"] == ECONOMICS_CORPUS_EXPOSURE_SOURCE
+    # §3.2's inflow cap is a term of the reconstruction, and a corpus row says it did not use it.
+    assert assumptions["exposure_capped_by_inflow"] is False
+    assert assumptions["exposure_cap_column"] is None
+    assert assumptions["exposure_before_cap_minor"] == 30_000_000
+    basis = assumptions["exposure_corpus_basis"]
+    assert ECONOMICS_CORPUS_ARTIFACT in basis, basis
+    assert ECONOMICS_CORPUS_EXPOSURE_SOURCE in basis, basis
+    # Checkable at the row's own stamp, not just at the file.
+    assert f"fold={0!r}" in basis, basis
+    assert "backtest/economics.py" in basis, basis
+
+
+def test_a_corpus_priced_row_is_not_partial_while_the_fallback_row_is() -> None:
+    """A label applied to everything labels nothing, so the two bases have to be separable.
+
+    The frame is DEV-031's empty-set shape — no downstream term, `graph_out_degree_30d` of 0, the
+    subject's own outflow 12,000,000 — which is the branch that stamps `exposure_is_partial` and the
+    sentence naming the missing term. Handed the corpus, the same account is priced from a measurement
+    (30,000,000) of its own money, so nothing about its E_i is partial and neither key may appear:
+
+        fallback: E = 12,000,000 -> 0.5*12,000,000*0.35 - 75,000 - 1,250,000 =    775,000, partial
+        corpus:   E = 30,000,000 -> 0.5*30,000,000*0.35 - 75,000 - 1,250,000 =  3,925,000, measured
+    """
+    frame = _scored(
+        **{
+            ECONOMICS_EXPOSURE_SOURCE: None,
+            ECONOMICS_DOWNSTREAM_DEGREE_SOURCE: 0,
+            ECONOMICS_SUBJECT_OUTFLOW_SOURCE: 12_000_000,
+        }
+    )
+
+    fallback, gaps_a = economics_rows(frame, config=_config(), intervals=_intervals(ACCT))
+    measured, gaps_b = economics_rows(
+        frame, config=_config(), intervals=_intervals(ACCT), corpus=_corpus()
+    )
+
+    assert gaps_a == [] and gaps_b == []
+    assert fallback[0]["exposure_minor"] == 12_000_000
+    assert fallback[0]["expected_value_minor"] == 775_000
+    assert fallback[0]["assumptions"]["exposure_source"] == EXPOSURE_FROM_RECONSTRUCTION
+    assert fallback[0]["assumptions"]["exposure_is_partial"] is True
+    assert "exposure_downstream_basis" in fallback[0]["assumptions"]
+    assert "exposure_corpus_basis" not in fallback[0]["assumptions"]
+
+    assert measured[0]["exposure_minor"] == 30_000_000
+    assert measured[0]["expected_value_minor"] == 3_925_000
+    assert measured[0]["assumptions"]["exposure_source"] == EXPOSURE_FROM_CORPUS
+    assert (
+        "exposure_is_partial" not in measured[0]["assumptions"]
+    ), "a row priced from the measured corpus column claimed a partial exposure"
+    assert "exposure_downstream_basis" not in measured[0]["assumptions"]
+    assert measured[0]["assumptions"]["exposure_corpus_basis"]
+
+
+def test_two_corpus_rows_for_one_account_price_it_once_at_the_current_stamp() -> None:
+    """DEV-026's grain in the money table's other half: rows collapsed, an account booked once.
+
+    `backtest_corpus.parquet` is one row per (account, as-of) — 79,998 rows over 76,849 accounts on
+    the landed run — so a naive account-key join multiplies. ACCT has three corpus rows here and two
+    scored rows; the current scored row is fold 2 at T2, and that is the ONE stamp whose exposure is
+    read:
+
+        fold 0 @ T0   11,000,000   superseded by the later fold
+        fold 1 @ T1    999,999     a stamp the scored slice never carried (never scored, never priced)
+        fold 2 @ T2   25,000,000   current
+
+        EV = 0.5 * 25,000,000 * 0.35 - 75,000 - 1,250,000 = 4,375,000 - 1,325,000 = 3,050,000
+        density = 3,050,000 / 5 = 610,000.0
+
+    OTHER is scored and covered once, at the fixture's own stamp, for 30,000,000 (EV 3,925,000). Two
+    accounts in, two rows out — an explicit count, because the defect this pins is a third row.
+    """
+    t1 = T0.replace(month=3, day=20)
+    t2 = T0.replace(month=4, day=1)
+    frames = pl.concat(
+        [
+            _scored(account_key=ACCT, fold=0, as_of_ts=T0),
+            _scored(
+                account_key=ACCT,
+                fold=2,
+                as_of_ts=t2,
+                **{ECONOMICS_EXPOSURE_SOURCE: 12_000_000},
+            ),
+            _scored(account_key=OTHER, fold=0, as_of_ts=T0),
+        ]
+    )
+    corpus = pl.concat(
+        [
+            _corpus(
+                account_key=ACCT,
+                fold=0,
+                as_of_ts=T0,
+                **{ECONOMICS_CORPUS_EXPOSURE_SOURCE: 11_000_000},
+            ),
+            _corpus(
+                account_key=ACCT, fold=1, as_of_ts=t1, **{ECONOMICS_CORPUS_EXPOSURE_SOURCE: 999_999}
+            ),
+            _corpus(
+                account_key=ACCT,
+                fold=2,
+                as_of_ts=t2,
+                **{ECONOMICS_CORPUS_EXPOSURE_SOURCE: 25_000_000},
+            ),
+            _corpus(
+                account_key=OTHER,
+                fold=0,
+                as_of_ts=T0,
+                **{ECONOMICS_CORPUS_EXPOSURE_SOURCE: 30_000_000},
+            ),
+        ]
+    )
+
+    rows, refused = economics_rows(
+        frames, config=_config(), intervals=_intervals(ACCT, OTHER), corpus=corpus
+    )
+
+    assert refused == [], refused
+    assert len(rows) == 2, f"one priced row per account, got {len(rows)}: {rows}"
+    assert sorted(row["account_key"] for row in rows) == sorted({ACCT, OTHER})
+    by_account = {row["account_key"]: row for row in rows}
+    assert by_account[ACCT]["exposure_minor"] == 25_000_000, "the current fold, once"
+    assert by_account[ACCT]["expected_value_minor"] == 3_050_000
+    assert by_account[ACCT]["ev_density"] == 610_000.0
+    assert by_account[OTHER]["exposure_minor"] == 30_000_000
+    assert 999_999 not in {
+        row["exposure_minor"] for row in rows
+    }, "a stamp the walk-forward never scored priced an account"
+    assert all(row["assumptions"]["exposure_source"] == EXPOSURE_FROM_CORPUS for row in rows)
+
+
+def test_two_corpus_rows_at_one_stamp_refuse_instead_of_letting_the_join_pick() -> None:
+    """The other half of the grain rule: one account, one stamp, two amounts is not a measurement.
+
+    A duplicate ``(account_key, fold, as_of_ts)`` in the artifact is a build defect, and this layer has
+    no rule for choosing between two figures for the same instant. Picking whichever row the join
+    retained is the silent-drop pattern DEV-026 names, and its money would depend on iteration order,
+    so the account refuses and the queue loses the row rather than inventing one.
+    """
+    corpus = pl.concat(
+        [
+            _corpus(**{ECONOMICS_CORPUS_EXPOSURE_SOURCE: 30_000_000}),
+            _corpus(**{ECONOMICS_CORPUS_EXPOSURE_SOURCE: 40_000_000}),
+        ]
+    )
+
+    rows, refused = economics_rows(_scored(), config=_config(), corpus=corpus)
+
+    assert rows == [], f"one account was priced twice, or priced by iteration order: {rows}"
+    assert len(refused) == 1, refused
+    assert ECONOMICS_CORPUS_ARTIFACT in refused[0], refused[0]
+    assert ACCT in refused[0], refused[0]
+    assert "2 rows" in refused[0], refused[0]
+
+
+def test_a_corpus_exposure_measured_at_zero_prices_and_a_missing_row_refuses() -> None:
+    """The single distinction DEV-032 turns on: a measured nothing is not an absent measurement.
+
+    Both accounts have identical scored frames whose downstream term is null, so the fallback would
+    price both from `amount_out_24h_minor` = 12,000,000. Only one of them has a corpus row, and it is
+    measured at 0 minor:
+
+        OTHER (corpus says 0):  E = 0           -> EV = 0 - 75,000 - 1,250,000 = -1,325,000
+        ACCT  (corpus says nothing): refused, and NOT reconstructed to 12,000,000
+
+    The refusal has to name the artifact and the join key, because "this account has no measured
+    exposure" is only checkable if the reader can see which row of which file was asked.
+    """
+    frames = pl.concat([_scored(account_key=ACCT), _scored(account_key=OTHER)])
+    frames = frames.with_columns(
+        pl.lit(None, dtype=pl.Int64).alias(ECONOMICS_EXPOSURE_SOURCE),
+        pl.lit(0, dtype=pl.Int64).alias(ECONOMICS_DOWNSTREAM_DEGREE_SOURCE),
+        pl.lit(12_000_000, dtype=pl.Int64).alias(ECONOMICS_SUBJECT_OUTFLOW_SOURCE),
+    )
+    corpus = _corpus(account_key=OTHER, **{ECONOMICS_CORPUS_EXPOSURE_SOURCE: 0})
+
+    rows, refused = economics_rows(frames, config=_config(), corpus=corpus)
+
+    assert len(rows) == 1, f"the account the corpus does not cover was priced anyway: {rows}"
+    priced = rows[0]
+    assert priced["account_key"] == OTHER
+    assert (
+        priced["exposure_minor"] == 0
+    ), "a measured zero prices AT zero; it is not treated as absent"
+    assert priced["expected_value_minor"] == -1_325_000
+    assert priced["ev_density"] == -265_000.0
+    assumptions = priced["assumptions"]
+    assert assumptions["exposure_source"] == EXPOSURE_FROM_CORPUS
+    assert assumptions["exposure_capped_by_inflow"] is False
+    assert "exposure_is_partial" not in assumptions, assumptions
+
+    assert len(refused) == 1, refused
+    gap = refused[0]
+    assert ACCT in gap, gap
+    assert ECONOMICS_CORPUS_ARTIFACT in gap, gap
+    assert "no row" in gap, gap
+    assert f"fold={0!r}" in gap, gap
+    assert "exposure_minor" in gap, gap
+
+
+def test_a_corpus_row_whose_cell_is_null_refuses_rather_than_becoming_the_measured_zero() -> None:
+    """Null and 0 are one column apart in the artifact and a whole finding apart on the row."""
+    rows, refused = economics_rows(
+        _scored(),
+        config=_config(),
+        corpus=_corpus(**{ECONOMICS_CORPUS_EXPOSURE_SOURCE: None}),
+    )
+
+    assert rows == [], f"a null exposure landed as a zero: {rows}"
+    assert len(refused) == 1, refused
+    assert "null" in refused[0] and ECONOMICS_CORPUS_ARTIFACT in refused[0], refused[0]
+    assert "not a zero" in refused[0], refused[0]
+
+
+def test_a_corpus_without_the_exposure_column_fails_as_the_wrong_file_naming_it() -> None:
+    """A missing column is a fact about the artifact, not 43,046 facts about accounts.
+
+    The scored frame's own exposure columns raise on absence, and the corpus has to answer the same way
+    rather than refusing every account with a reason that says only "absent" — which is how the wrong
+    parquet (the feature frame, the graph pairs file) would arrive at the queue looking like a corpus
+    full of uncovered accounts.
+    """
+    without_exposure = _corpus().drop(ECONOMICS_CORPUS_EXPOSURE_SOURCE)
+    with pytest.raises(LandingError) as raised:
+        economics_rows(_scored(), config=_config(), corpus=without_exposure)
+    message = str(raised.value)
+    assert ECONOMICS_CORPUS_ARTIFACT in message, message
+    assert ECONOMICS_CORPUS_EXPOSURE_SOURCE in message, message
+
+    for key in ("fold", "as_of_ts"):
+        with pytest.raises(LandingError) as missing_key:
+            economics_rows(_scored(), config=_config(), corpus=_corpus().drop(key))
+        assert key in str(missing_key.value), str(missing_key.value)
+
+    # And the fallback path is unchanged by all of this: no corpus, no measured column needed.
+    assert economics_rows(_scored(), config=_config())[0][0]["exposure_minor"] == 10_000_000
+
+
+def test_the_pricing_basis_of_the_probability_is_unchanged_by_the_corpus_path() -> None:
+    """DEV-029's discriminator is not this change's business, and the two must stay separable.
+
+    Same account, priced three ways. The exposure moves between them (the fallback's 10,000,000 against
+    the corpus's 30,000,000, EV 425,000 against 3,925,000), and every key that says what the
+    probability IS stays byte-identical — calibrated against `p_fused:uncalibrated` labelled in the
+    pipeline's own words, with `probability_source_column` still `p_fused`.
+    """
+    calibrated_fallback, _ = economics_rows(_scored(), config=_config())
+    calibrated_corpus, _ = economics_rows(_scored(), config=_config(), corpus=_corpus())
+    uncalibrated_corpus, _ = economics_rows(_uncalibrated(), config=_config(), corpus=_corpus())
+
+    probability_keys = (
+        "calibration_kind",
+        "probability_is_uncalibrated",
+        "probability_source_column",
+        "confidence_label",
+    )
+    calibrated_fallback_basis = {
+        key: calibrated_fallback[0]["assumptions"][key] for key in probability_keys
+    }
+    calibrated_corpus_basis = {
+        key: calibrated_corpus[0]["assumptions"][key] for key in probability_keys
+    }
+    assert calibrated_corpus_basis == calibrated_fallback_basis
+    assert calibrated_corpus[0]["assumptions"]["calibration_kind"] == "calibrated_band"
+    assert calibrated_corpus[0]["assumptions"]["probability_is_uncalibrated"] is False
+    assert calibrated_corpus[0]["assumptions"]["probability_source_column"] == "p_fused"
+    assert "observed rate in this band: 31%, n=97" in calibrated_corpus_basis["confidence_label"]
+
+    label = uncalibrated_corpus[0]["assumptions"]["confidence_label"]
+    assert uncalibrated_corpus[0]["assumptions"]["calibration_kind"] == "uncalibrated"
+    assert uncalibrated_corpus[0]["assumptions"]["probability_is_uncalibrated"] is True
+    assert "probabilities are uncalibrated" in label, label
+
+    # The exposure basis moved the money; the probability basis did not.
+    assert calibrated_fallback[0]["exposure_minor"] == 10_000_000
+    assert calibrated_fallback[0]["expected_value_minor"] == 425_000
+    assert calibrated_corpus[0]["exposure_minor"] == 30_000_000
+    assert calibrated_corpus[0]["expected_value_minor"] == 3_925_000
+
+
+def test_the_corpus_cannot_widen_the_queue_beyond_the_rows_the_run_scored_out_of_sample() -> None:
+    """The role scoping, structural: the corpus has no `role` column, so the join cannot reach one.
+
+    ACCT is the run's only out-of-sample row; OTHER is a train row, and the corpus covers both at
+    30,000,000 and 50,000,000. The queue prices ACCT alone (EV 3,925,000 at p 0.5, m 5): an in-sample
+    account entering through the exposure side would rank a number the model memorised beside the
+    honest ones, which is the reason `score_rows` filters on `role` and the reason this filter cannot
+    be bypassed by a second artifact.
+    """
+    frames = pl.concat(
+        [_scored(account_key=ACCT, role="test"), _scored(account_key=OTHER, role="train")]
+    )
+    corpus = pl.concat(
+        [
+            _corpus(account_key=ACCT, **{ECONOMICS_CORPUS_EXPOSURE_SOURCE: 30_000_000}),
+            _corpus(account_key=OTHER, **{ECONOMICS_CORPUS_EXPOSURE_SOURCE: 50_000_000}),
+        ]
+    )
+
+    rows, refused = economics_rows(frames, config=_config(), corpus=corpus)
+
+    assert refused == [], refused
+    assert [row["account_key"] for row in rows] == [ACCT]
+    assert rows[0]["exposure_minor"] == 30_000_000
+    assert rows[0]["expected_value_minor"] == 3_925_000
 
 
 def test_the_hand_stated_figures_are_the_shipped_file_declares() -> None:

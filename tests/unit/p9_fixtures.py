@@ -220,7 +220,9 @@ def make_bundle(
                 "Pass-through ratio in the top decile: minus 48 points",
                 "Counterparty overlap with a flagged account in the same hour: minus 21 points",
             ],
-            calibration=CalibrationReading(band="E", observed_rate=0.412, n=1_204),
+            calibration=CalibrationReading(
+                kind="calibrated_band", band="E", observed_rate=0.412, n=1_204
+            ),
             model_version="lgbm-4.5.0+scorecard-woe-2024-03-01",
             rule_ids=("R4_CYCLE_MEMBER", "R2_FAN_OUT"),
         ),
