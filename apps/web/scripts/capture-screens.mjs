@@ -103,10 +103,8 @@ async function assertRendered(name, page) {
   // Something must have resolved: a figure, a run id, a row, the canvas, or a named empty
   // state. /dev/states deliberately enumerates every failure tier, so only the refusal checks
   // apply there.
-  if (name === '08-state-gallery') return null;
-  const marks = await page
-    .locator('[data-money-figure], [data-run-id], table tbody tr, [data-cytoscape-host], [data-empty-state]')
-    .count();
+  if (ROUTE_MARKERS[name] === undefined) return null;
+  const marks = await page.locator(MARKER_SELECTOR).count();
   if (marks === 0) return `${name}: no resolved content marker on the page`;
   return null;
 }
@@ -132,6 +130,34 @@ const page = await browser.newPage({ viewport: { width: 1440, height: 900 }, dev
  * stored ranks, not to make the demo wait harder.
  */
 const RENDER_BUDGET_MS = Number(process.env.OXBOW_CAPTURE_TIMEOUT_MS ?? 180_000);
+
+/**
+ * What counts as "this screen resolved".
+ *
+ * The first version of this list guessed: `table tbody tr` and `[data-empty-state]` match
+ * nothing, because the queue virtualises alert CARDS (`data-alert-card`, alerts/page.tsx:625)
+ * and the empty states are marked by role, not by a data attribute. A guard that rejects every
+ * good capture is worse than no guard at all - under deadline pressure it gets deleted - so the
+ * selectors here are the ones the components actually emit.
+ */
+/**
+ * What counts as "this screen resolved" - per route, never a union.
+ *
+ * The first version accepted `[role="status"]`. That is the skeleton's own live region, so a
+ * page still loading satisfies it: the run "passed" /alerts and /network and produced two
+ * screenshots of three grey bars. A guard that green-lights a skeleton is worse than no guard,
+ * because it converts a visible problem into a signed-off one. So each route names a marker
+ * only resolved content emits, and a route without an entry here fails rather than guessing.
+ */
+const ROUTE_MARKERS = {
+  '01-dashboard': '[data-money-figure]',
+  '02-alerts-queue': '[data-alert-card]',
+  '03-network-explorer': '[data-cytoscape-host]',
+  '04-scorecard': '[data-money-figure], [data-run-id]',
+  '05-case-workspace': '[data-money-figure]',
+  '06-policy-frontier': '[data-money-figure]',
+  '07-model-validation': '[data-run-id]',
+};
 page.setDefaultNavigationTimeout(RENDER_BUDGET_MS);
 page.setDefaultTimeout(RENDER_BUDGET_MS);
 
@@ -140,13 +166,8 @@ for (const [name, route] of SHOTS) {
   await page.goto(`${BASE}${route}`, { waitUntil: 'networkidle', timeout: RENDER_BUDGET_MS });
   // Wait for something that only exists once a response decoded, then let the panes settle.
   // A fixed sleep was the previous behaviour and it is what let a skeleton be photographed.
-  if (name !== '08-state-gallery') {
-    await page
-      .waitForSelector(
-        '[data-money-figure], [data-run-id], table tbody tr, [data-cytoscape-host], [data-empty-state], [data-problem-detail]',
-        { timeout: RENDER_BUDGET_MS },
-      )
-      .catch(() => {});
+  if (ROUTE_MARKERS[name] !== undefined) {
+    await page.waitForSelector(MARKER_SELECTOR, { timeout: RENDER_BUDGET_MS }).catch(() => {});
   }
   await page.waitForTimeout(2_500);
   const failure = await assertRendered(name, page);
