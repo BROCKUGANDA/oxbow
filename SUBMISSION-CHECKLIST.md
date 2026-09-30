@@ -1,145 +1,115 @@
-# Submission checklist — the four days
+# Submission checklist — the last day
 
-Companion to [SUBMISSION.md](SUBMISSION.md). Every command here was run on this machine and
-is quoted with what it produced, so the remaining work is execution, not discovery.
-Rules: deadline **1 October**, six required components, judging is on the Devpost page alone.
+Companion to [SUBMISSION.md](SUBMISSION.md). Every command here was run on this machine and is
+quoted with what it returned, so the remaining work is execution, not discovery.
+Deadline **2026-10-01**, six required components, judging on the Devpost page alone.
+
+## What is already true, measured
+
+| | |
+|---|---|
+| Repository | MIT `LICENSE` with the dataset terms; no CI workflows; `.env` untracked; `tests/unit/test_publication_preflight.py` **10 passed**; largest tracked file 508 KB (`apps/web/tests/states/.screens/full-gallery.png`). Safe to make public as it stands. |
+| Remote | `github.com/BROCKUGANDA/oxbow` exists, **private**, default `main`. `gh auth` for `BROCKUGANDA` works. |
+| Submission copy | `SUBMISSION.md` restructured into one section per judging criterion (Innovation & Impact, Technical Feasibility, Rigor & Validation, Presentation), each with a checkable claim and the command that produces it. |
+| Decision record | `DECISIONS.md` to **DEV-033**. DEV-028 (uncalibrated scores land labelled, floor untouched), DEV-029 (uncalibrated EV priced and stamped), DEV-030 (11 of 12 typology rules fire on zero accounts), DEV-031 (exposure downstream term is a measured empty set), DEV-032 (the queue priced everyone at zero while the measured column sat in the next file), DEV-033 (the honest scorer aborts an ablation whose folds degraded, and that is correct). |
+| Failure modes | `docs/FAILURE-MODES.md` plus `tests/unit/test_failure_mode_register.py`, which fails if a row cites a test that no longer exists or an open gap is missing from the findings list. Proven to bite: it failed on three unlisted rows before the list was completed. |
+| Design system | 15 hand-drawn glyphs (the 12 typology marks plus 3 utility) at 1.75px on a 24px grid; OKLCH tokens with a generated `tokens.ts` mirror and a drift gate; banned-list clean (no Inter, no glassmorphism, no Lucide, no emoji); axe 0 critical on 10 routes; **CLS measured 0.000000** on `/alerts` and `/cases/[id]`. |
+| Gates that pass now | `ruff check` clean over `apps/api`, `packages`, `scripts`; `lint-imports` 4 kept / 0 broken; `no-float-money` OK over 161 files; `tests/unit/test_p7_economics_landing.py`, `test_p7_warehouse_landing.py`, `test_p7_erasure_preserves_chain.py`, `test_p7_validation_served_fields.py`, `test_p9_eval_surfaces_builder_refusals.py`, `test_failure_mode_register.py` all green. |
 
 ## Blocking, and only you can do it
 
 | | |
 |---|---|
-| ~~`gh auth login -h github.com`~~ **not blocking — re-measured 2026-09-28** | The row here said the keyring token for `BROCKUGANDA` was invalid and "nothing can be published until this is redone." It is valid: `gh auth status` reports `Logged in to github.com account BROCKUGANDA (keyring)`, and `gh api user` round-trips (`BROCKUGANDA`, `repo` + `workflow` scopes). `github.com/BROCKUGANDA/oxbow` already exists, is **PRIVATE**, non-empty, default branch `main`. So the two acts left are yours and neither is a login: **push** (`git rev-list --count origin/main..HEAD` = 57 commits behind the local tree) and **flip visibility**. The flip is deliberate and separately gated: `tests/unit/test_publication_preflight.py` must be green first, and the history should be scanned before anything is public. |
-| **Team real full names** (component 05) | Left blank in SUBMISSION.md on purpose. |
-| **Confirm student eligibility** | Rules say *students only*, ages 13+, *companies and professional organisations excluded*. Late entries are rejected outright, so settle this before the deadline, not on it. |
+| **Team real full names** (component 05) | Left blank in `SUBMISSION.md` deliberately — inventing a name into a submission is the one thing that cannot be verified by a test. |
+| **Confirm student eligibility** | Rules say *students only*, ages 13+, companies and professional organisations excluded. Late entries are rejected outright, so settle this before the deadline, not on it. |
 | **YouTube unlisted link** (component 03) | Needs your account; the video file is produced locally. |
+| **Push and the visibility flip** (component 02) | `git push origin main` then `gh repo edit BROCKUGANDA/oxbow --visibility public`. Nothing in this repository's own tooling pushes. Re-run the history scan first, not just the HEAD gate — a push makes every past commit readable. |
 
-## 02 — publish the repository
+## The chain that produces the remaining two components
 
-Already done and gated: MIT `LICENSE` with the dataset-licence notice, no CI workflows,
-`.env` untracked, no corpora committed, and
-`tests/unit/test_publication_preflight.py` (10 tests) asserting all of it — no developer
-home paths, no private key material, no secret-shaped literals in shipped code, the
-`RUN_SALT` value in no tracked file, and one code licence named everywhere.
-
-```bash
-# from the repository root — the remote repo ALREADY EXISTS (private, main), so this is a
-# push and a visibility flip, not a create. `gh repo create oxbow` would fail on the name.
-git ls-files | wc -l                       # sanity: what leaves this machine
-uv run python -m pytest tests/unit/test_publication_preflight.py -q   # must be green first
-git log --format='%s' origin/main..HEAD | head -60   # scan the 57 commits for anything that
-                                       # must not go public: secrets, salt-shaped literals,
-                                       # and absolute developer home paths in messages or diffs
-git push origin main                       # stays a human act
-gh repo edit BROCKUGANDA/oxbow --visibility public   # only after the scan above
-```
-
-Nothing is pushed by this repository's own tooling; the push stays a human act.
-
-## 06 — screenshots
+Screenshots (06) and video (03) both need **landed evidence in Postgres**. Nothing here has been
+faked: `scripts/demo_seed.py --create` refuses until `score`, `backtest_fold` and `decision` are
+all non-empty, and it was right to.
 
 ```bash
-cd apps/web
-OXBOW_DATA_MODE=fixture node node_modules/next/dist/bin/next start --port 3100 &
-node scripts/capture-screens.mjs     # -> docs/screens/*.png, 8 routes, 2x scale
+cd /c/Users/HP/Desktop/OXBOW
+docker compose up -d postgres                      # the ONLY service needed; ~5 s once the engine is up
+set -a && . ./.env && set +a
+export DATABASE_URL="postgresql+psycopg://oxbow:${POSTGRES_PASSWORD}@127.0.0.1:5433/oxbow"
+export OXBOW_WAREHOUSE=postgres
+uv run alembic -c apps/api/alembic.ini upgrade head    # must read 0004_mc_interval_optional (head)
 ```
 
-Verified working. Current set shows the read-only warehouse (real provenance in the header,
-skeletons in the panes) — **re-run after the demo snapshot lands** for submission-quality
-images.
+1. **Fresh score run** — `uv run oxbow score --max-events 40000`. A new run id is required because
+   `01M3H8WG436R394NZT2GS1KG69` is frozen `state=complete` over an empty `score` table, and the
+   0002 immutability trigger correctly refuses to amend or delete it. Plan §13 says rescoring
+   *creates a new run*; that is the honest route, not an edit.
+2. **Walk-forward on the new corpus** — `uv run oxbow backtest --corpus out/score/<run>/backtest_corpus.parquet`.
+   This is what produces `fold_windows`, hence `backtest_fold` rows, hence a snapshottable demo.
+   The previous attempt exited 0 having **written nothing**: folds 2 and 3 ran degraded
+   (`scorecard_and_rules_only`), so `gbm_no_graph` had no number and DEV-027's guard raised
+   instead of borrowing the full stack's. That refusal is kept; the fix makes an unavailable
+   channel a reportable state rather than an abort (DEV-033).
+3. **Land** — `uv run python scripts/land_warehouse.py --run-id <run>`. It is not a CLI verb
+   because 01 §D pins the CLI to four verbs, so this script is the documented driver for the
+   fifth stage `jobs.PIPELINE_STAGES` already names. Report per-table counts *and* the refusal
+   text for every table that stays empty.
+4. **Case, decision, audit** — start the API and open a real case on the top-ranked alert:
+   ```bash
+   uv run uvicorn main:app --app-dir apps/api --port 8123      # port 8000 is Windows PID 4
+   TOKEN=$(curl -s -X POST http://127.0.0.1:8123/api/auth/demo-token \
+            -H 'Content-Type: application/json' \
+            -d '{"subject":"analyst@oxbow.dev","roles":["analyst"]}' | ... )
+   ```
+   Then `POST /api/cases`, `POST /api/cases/{id}/decisions` with a genuine free-text reason about
+   that account's actual evidence, and `uv run python scripts/verify_audit.py` — which must walk
+   a chain, not report `NOTHING VERIFIED`. Its `AS subject AS subject` defect was fixed in
+   `63cedca`; that fix has never been exercised against populated tables, so this is its first
+   real test.
+5. **Snapshot** — `uv run python scripts/demo_seed.py --create` then
+   `--restore --boot-budget 90`.
+6. **Screenshots** — rebuild the web app with the API origin baked in (`next.config.ts` reads it
+   at config time), start it, then:
+   ```bash
+   cd apps/web && bun run build          # with OXBOW_API_ORIGIN=http://127.0.0.1:8123
+   node node_modules/next/dist/bin/next start --port 3100 &
+   OXBOW_DEMO_ACCOUNT_KEY=<key> OXBOW_DEMO_CASE_ID=<id> node scripts/capture-screens.mjs
+   ```
+   The script now **exits 1** if it cannot name a real case and account, and asserts each route
+   rendered evidence before writing it (`a04e7c3`). Do not defeat that guard: the previous set of
+   eleven committed images showed the state gallery rather than the product precisely because
+   taking a picture cannot fail.
+7. **Video** — narration is already synthesized and slot-timed (`out/narr/timeline.wav`, 206.6 s,
+   seven beats measured against their own slots, generated from `SUBMISSION.md` §03 so the voice
+   cannot drift from the words a judge reads). Then:
+   ```bash
+   cd apps/web
+   OXBOW_LIVE_WEB_BASE_URL=http://127.0.0.1:3100 OXBOW_DEMO_CASE_ID=<id> \
+   OXBOW_DEMO_ACCOUNT_KEY=<key> node node_modules/@playwright/test/cli.js test demo-tour.spec.ts
+   cd ../.. && uv run python scripts/make_demo_video.py
+   ```
+   Not Playwright's `video: 'on'` — that needs a private ffmpeg build this project never
+   downloads. Frames + system ffmpeg instead. The tour **skips by design** until a live origin
+   serving landed numbers exists, because a tour of the bundled fixture would demonstrate the
+   fixture.
 
-## 03 — demo video
+## Do not do these, even for time
 
-Narration is generated locally: no download, no cloud voice, nothing to authenticate.
-`scripts/make_narration.py` reads the beat table out of `SUBMISSION.md` §03 — that table is
-the only copy of the words, so the voice cannot drift from the script the judge reads — and
-synthesizes one WAV per beat through `scripts/speak.ps1`, then pads them onto one timeline at
-their own slot offsets.
+- Do not lower `config/model.yaml`'s `min_positives_for_calibration` to obtain a reliability
+  curve. Every fold refuses it on arithmetic, and the product now ships labelled uncalibrated
+  instead — that is the specified behaviour (03 §H), and a card that says so is worth more than
+  one that does not.
+- Do not catch `ProfileUnavailableError` and fill an ablation cell with another channel's number,
+  or with `None` rendered as zero. That is the exact substitution DEV-027 removed.
+- Do not let `economics_rows` coalesce a null exposure to zero. The §3.2 cap
+  `min(outflow, inflow)` is degenerate on PaySim — **0 of 43,720 accounts both receive and send
+  inside the same window** — which is why DEV-032 points at the measured `exposure_minor` in
+  `backtest_corpus.parquet` (40,001 accounts non-zero) instead of the reconstruction.
+- Do not capture in fixture mode and caption it as the product.
 
-```bash
-uv run python scripts/make_narration.py            # 7 beats + timeline.wav + beats.txt
-uv run python scripts/make_narration.py --check    # re-measure existing waves only
-```
+## Honest state if time runs out
 
-Measured on this host, Microsoft Zira Desktop at `Rate = -1`, 22,050 Hz:
-
-| beat | slot | audio | fits |
-|---|---|---|---|
-| 1 Command strip | 0:00–0:20 | 14.8 s | yes |
-| 2 Scorecard | 0:20–0:50 | 21.8 s | yes |
-| 3 Network | 0:50–1:25 | 17.9 s | yes |
-| 4 Queue + capacity | 1:25–2:00 | 23.5 s | yes |
-| 5 Case workspace | 2:00–2:35 | 27.5 s | yes |
-| 6 Validation / ablation | 2:35–3:00 | 20.0 s | yes |
-| 7 Limitations | 3:00–3:30 | 26.6 s | yes |
-
-Total spoken audio **2:32**; `out/narr/timeline.wav` is **206.6 s** with each beat starting at
-its own slot, so the voiceover is cut against the script's clock rather than re-timed by hand.
-Both are inside the 2–5 minute Devpost ceiling. Every beat was checked for actual signal, not
-just file size: RMS 2,795–3,757 and peak 25,412 of 32,767, and the timeline carries audio at
-all seven slot offsets.
-
-`speak.ps1` uses `SetOutputToWaveFile` — `SetWaveFile` does not exist on this API and fails at
-runtime, not at parse time.
-
-Screen capture: **not** Playwright's `video: 'on'`. That option needs Playwright's private ffmpeg
-build under the browser cache (`ms-playwright/ffmpeg-1010/ffmpeg-win64.exe`), and this project
-installs no browsers and downloads nothing — enabling it fails with
-`Executable doesn't exist`, which is the kind of failure that arrives on the day of filming. So
-`tests/states/demo-tour.spec.ts` screenshots the tour on a 500 ms timer into
-`out/video/frames/`, and `scripts/make_demo_video.py` assembles the sequence with the system
-ffmpeg that is actually installed.
-
-```bash
-cd apps/web
-# needs OXBOW_LIVE_WEB_BASE_URL and OXBOW_DEMO_CASE_ID set, or it skips with the reason
-node node_modules/@playwright/test/cli.js test demo-tour.spec.ts   # ~420 JPEG frames
-cd ../..
-uv run python scripts/make_demo_video.py --check-only              # verify inputs, no encode
-uv run python scripts/make_demo_video.py                           # out/oxbow-demo.mp4
-```
-
-`make_demo_video.py` derives the frame rate from `frames / narration_seconds` rather than
-declaring one, so the picture ends when the last word is spoken; it then reads the container's
-duration back with ffprobe and fails if it disagrees with the narration by more than 2 seconds.
-Verified: the guard fires with 0 frames ("only 0 frames in out\video\frames — run the tour
-first", exit 1), `probe_seconds` returns 3.0 s on a real file and `None` on a missing one, and a
-three-still sequence assembles into h264 with this ffmpeg. The full 206-second encode has not been
-run, because a 3:30 encode cannot finish while the score run holds the machine's remaining
-memory — do it after the numbers land, with nothing else running.
-
-`demo-tour.spec.ts` exists and is wired to the beat slots, but it **skips until the demo
-snapshot below exists** — it needs a live origin serving landed numbers and a case id carrying a
-landed decision, because a tour of the bundled fixture would demonstrate the fixture.
-
-## What the video needs first: real evidence
-
-Both component 03 and component 06 are gated on the same thing — landed evidence in
-Postgres:
-
-```bash
-uv run python scripts/demo_seed.py --create     # refuses until score + fold + decision exist
-```
-
-Measured refusal today: `the warehouse holds no evidence to snapshot: scored rows: 0 in
-score; backtest folds: 0 in backtest_fold; a landed reviewer decision: 0 in decision`. The
-seeder refusing is correct — a blank demo is worse than no demo.
-
-## Order that gets all six done in four days
-
-1. **Real five folds** — **done.** All five folds fitted and scored on the landed corpus, the
-   walk-forward completed (`out/backtest/real40k/ablation_results.json`, 9 variants at
-   `provenance: real_corpus`), and the fold plan agrees with the corpus's own fold column on
-   all 79,998 rows. What cost four attempts was DEV-026: a fold booking one account's analyst
-   minutes once per scored row, caught by its own capacity postcondition.
-2. **Regenerate the cards** — **done.** `uv run oxbow eval` publishes the real run; `grep -c
-   fake_harness` over README, ARCHITECTURE, MODEL_CARD, ECONOMICS_CARD and LIMITATIONS is 0.
-   The cards now disclose the two things the table does not measure: the honest rows share one
-   fitted stack, and no fold cleared the calibration floor (DEV-024).
-3. **Land the demo** — open. Decision through the API, then `demo_seed --create`, then
-   `demo_seed --restore --boot-budget 90`. Blocked on rows in Postgres, which is the analytical
-   handoff now being landed; the score rows themselves wait on a run that calibrates.
-4. **Re-capture screenshots** and write/record `demo-tour.spec.ts` — open. The spec exists, is
-   wired to the beat slots and skips with a named reason until step 3 lands, because a tour of
-   the bundled fixture would demonstrate the fixture.
-5. **`gh auth login`**, publish, paste the six components into Devpost — open, and owner-only:
-   the tree stays private until the push is said yes to.
+Ship the six components with the engineering sections as they are and say plainly in the video's
+last beat which screens are serving landed evidence and which are waiting on the walk-forward.
+A submission that names its own gap reads as rigor; a screenshot of a skeleton reads as a bug, and
+a judge can open the repo and diff the two.
