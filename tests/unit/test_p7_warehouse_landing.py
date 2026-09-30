@@ -433,7 +433,10 @@ def test_an_account_whose_current_row_is_uncalibrated_is_not_rescued_by_an_older
             # refuses that union, and the row this test is about is exactly the pair.
             _scored(fold=0, as_of_ts=T0),
             _uncalibrated(fold=2, as_of_ts=T0 + 30 * DAY, band="C", score_points=800),
-        ]
+        ],
+        # The pair this test is about is exactly the Null/String union a strict vertical concat
+        # refuses, so the frames are relaxed the way the three tests above relax theirs.
+        how="vertical_relaxed",
     )
     rows, refused = score_rows(frames)
 
