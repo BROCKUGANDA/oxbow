@@ -1494,3 +1494,37 @@ how to refuse on — the shape `test_the_landed_40k_run_refuses...` and the eval
 refusal-surfacing change already establish. Then `fold_windows`, `backtest_fold` and the
 re-run's curve points land, which is what `demo_seed --create` and the `/model` rigor
 fields have been waiting on since DEV-031.
+
+## DEV-034 — the queue's exposure is a 30-day measure while the assumptions file declares 24 hours. **Recorded; the row carries its own basis, the card does not yet.**
+
+DEV-032's fix moved `E_i` onto the run's measured `exposure_minor`, which made the ranking move
+with real money for the first time — 21,743 non-zero exposures against 43,046 rows, median 211,369
+minor, three accounts clearing positive expected value. It also inherited a definition the
+reconstruction had been quietly avoiding.
+
+`cli.py` builds `exposure_minor` as `amount_out_30d_minor`, null-filled: a **30-day** outflow.
+`config/economics.yaml` declares `exposure.window_hours: 24`, and plan §3.2 defines exposure at
+risk as what is still interceptable *inside the recovery window*. So the shipped figure and the
+assumption rendered beside it describe different clocks.
+
+This is not a reason to go back. Capping the measured column by `amount_in_24h_minor` leaves **1
+non-zero row of 43,046**, and by `amount_in_30d_minor` leaves **2** — the all-zero queue again
+under a new name, because PaySim accounts are one-directional within any short window. The
+walk-forward's published economics price the same column, so the queue and the backtest agree with
+each other and both disagree with the declared window. Agreement with the measurement is the
+better of the two errors, provided the discrepancy is stated.
+
+Where it is stated: each corpus-priced row's `assumptions` carries an `exposure_corpus_basis`
+sentence naming the artifact, the stamp, the window it actually measures and why no cap was
+applied, and `exposure_source` distinguishes it from a reconstruction row. Where it is **not**
+yet stated: `ECONOMICS_CARD.md`'s exposure-at-risk paragraph, which is generated, still reads as
+though every figure obeys `window_hours`. Until the generator emits both sentences, the card is
+one step ahead of the product. **Not fixed here** because it means changing the generator and the
+config's own vocabulary, and the deadline is a day away; named instead of smoothed over.
+
+**Also recorded, because DECISIONS.md promised a thing that does not exist:** DEV-029 and this
+file's later entries refer to a `pricing_basis` column. There is no such field. The structural
+equivalent actually shipped is `assumptions.{calibration_kind, probability_is_uncalibrated,
+probability_source_column, confidence_label}` — which does the same job, and is pinned by tests.
+DEV-034 adds the parallel `exposure_source` key for the money side. Anyone reading DEV-029
+literally would look for a column that was never written.

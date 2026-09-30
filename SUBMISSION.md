@@ -79,7 +79,16 @@ ratio and a tail comparison exist in this build precisely so that we cannot hide
 policy that beats another on average while losing on the tail is a policy a desk has to
 choose knowingly.
 
-**Impact is bounded by an assumption, and we say which one.** Every currency figure above is a
+**Impact is bounded by an assumption, and we say which one.** Every one of these figures also inherits a second
+honesty we found this week and have not papered over: the exposure column the run actually
+measures is a **30-day** outflow, while `config/economics.yaml` declares a 24-hour recovery
+window. Capping the measured column at 24 hours leaves one non-zero row of 43,046, because
+PaySim accounts are one-directional inside any short window, so we price the measurement and
+print `exposure_source` and the basis sentence on every row rather than the cap the definition
+assumed. `DECISIONS.md` DEV-034 records the discrepancy and the fact that the economics card
+still describes only one of the two clocks.
+
+** Every currency figure above is a
 function of a 0.35 recovery rate swept over 0.20 / 0.35 / 0.50, a 24-hour recovery window,
 UGX 150 per analyst-minute and UGX 25,000 of friction cost per wrongly-touched legitimate
 customer. No money figure appears anywhere in this product — UI, packet, report or slide —
