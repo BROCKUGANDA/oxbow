@@ -37,11 +37,12 @@ from oxbow.backtest.ablation import (
     check_leakage_control,
 )
 from oxbow.backtest.config_io import BacktestConfig, load_backtest_config
-from oxbow.backtest.harness import VariantResult, assemble_run, validate_corpus
+from oxbow.backtest.harness import BacktestRun, VariantResult, assemble_run, validate_corpus
 from oxbow.backtest.interfaces import (
     COL_ACCOUNT_KEY,
     COL_AS_OF_TS,
     AccountScore,
+    ChannelUnavailable,
     FoldError,
     RuleHit,
     ScoreResult,
@@ -327,13 +328,18 @@ ABLATION_PROFILES: dict[str, str] = {
 }
 
 
-def _ablation_caveat() -> str:
+def _ablation_caveat(variants: Sequence[VariantResult] | None = None) -> str:
     """The caveat, generated from the profile table so it cannot disagree with the run.
 
     A hand-written sentence about what the table measures goes stale the moment a row changes,
     and a stale disclosure is worse than none: it teaches a reviewer to ignore the paragraph.
     These rows are read off :data:`ABLATION_PROFILES` and :data:`_REAL_POLICIES_BY_ROW` on
     every run, so the only way to change what this says is to change what the rows do.
+
+    Given the finished variants, it also says — in the run's own words, from the refusals the
+    producer returned — which rows measured fewer folds than the plan and which measured none
+    (DEV-033). A table where ``gbm_no_graph`` covers three folds and ``gbm_with_graph`` covers
+    five, with nothing saying so, invites exactly the reading DEV-027 was written about.
     """
     from oxbow.models.scorer import PROFILES
 
@@ -345,7 +351,7 @@ def _ablation_caveat() -> str:
         )
     )
     distinct = {PROFILES[profile] for profile in ABLATION_PROFILES.values()}
-    return (
+    text = (
         f"Each row is scored by the column its label names, of {len(distinct)} distinct fitted "
         f"channels: {', '.join(f'{row}={ABLATION_PROFILES[row]}' for row in ROW_IDS)}. "
         "Scorecard, GBM-with-graph and GBM-without-graph are three separate models — the "
@@ -360,6 +366,61 @@ def _ablation_caveat() -> str:
         "The rules-only row has no probability of its own: its queue is ordered by rule "
         "severity, and its p column is the full stack's."
     )
+    availability = _availability_sentences(variants)
+    if availability:
+        text += " " + availability
+    return text
+
+
+def _availability_sentences(variants: Sequence[VariantResult] | None) -> str:
+    """The rows that did not measure every fold, named with the producer's reason (DEV-033).
+
+    Generated from the finished variants only, so a run where every fold answered gets the base
+    caveat untouched — and no run can be published with a partial row the sentence does not name.
+    """
+    if not variants:
+        return ""
+    partial = [v for v in variants if v.availability.get("status") == "partial"]
+    unavailable = [v for v in variants if v.availability.get("status") == "unavailable"]
+    if not partial and not unavailable:
+        return ""
+    parts: list[str] = []
+    if unavailable:
+        listed = "; ".join(
+            f"{v.row_id} (channel {v.availability.get('profile')!r}, "
+            f"{v.availability.get('unavailable_count')} of "
+            f"{v.availability.get('folds_expected')} folds refused; first reason: "
+            f"{str((v.availability.get('folds_unavailable') or [{}])[0].get('reason', ''))[:220]}"
+            f")"
+            for v in unavailable
+        )
+        parts.append(
+            f"NOT MEASURED AT ALL on this corpus: {listed}. Those rows publish no metric — "
+            "an absent cell is the finding, and no number in this table was borrowed into it"
+        )
+    if partial:
+        listed = "; ".join(
+            f"{v.row_id} over {v.availability.get('measured_count')} of "
+            f"{v.availability.get('folds_expected')} folds "
+            f"(measured {v.availability.get('folds_measured')}, refused "
+            f"{_refused_fold_indexes(v.availability)})"
+            for v in partial
+        )
+        parts.append(
+            "PARTIALLY MEASURED — the discrimination columns below are pooled over fewer folds "
+            "than the plan, so a row covering fewer folds is not comparable to one covering all "
+            f"of them: {listed}"
+        )
+    return ". ".join(parts) + "."
+
+
+def _refused_fold_indexes(availability: Mapping[str, Any]) -> list[Any]:
+    """The fold indexes an unavailable channel names, for the caveat's own sentence."""
+    return [
+        entry.get("fold_index")
+        for entry in (availability.get("folds_unavailable") or [])
+        if isinstance(entry, Mapping)
+    ]
 
 
 # The artifact the score stage writes next to the feature matrix, and the only place the
@@ -636,6 +697,21 @@ class ProfileScorer:
     row's profile is bound here rather than threaded through the harness — which keeps the
     harness free of model-layer vocabulary and keeps the mapping from label to fitted object
     visible in one line of ``run_real``.
+
+    THE ONE CONVERSION, AND WHY IT IS HERE (DEV-033). A fold that never fitted this row's
+    channel refuses by name — that guard is DEV-027's and stays exactly where it is, inside
+    :class:`oxbow.models.scorer.WalkForwardScorer`. What changed is what happens *after* the
+    refusal: this harness seam turns a :class:`ChannelUnavailableError` into a
+    ``ScoreResult`` carrying the producer's own reason, which the harness publishes as the
+    row's unavailable cell and keeps walking. The conversion is here, at the seam, and not in
+    the guard, because the guard has no idea a table is being built; and it catches only that
+    one class, so a feature-spec mismatch, a null probability or a ``bad allocation`` still
+    aborts the run rather than becoming a cell.
+
+    What it never does is answer with another channel's number. The refused result carries no
+    scores at all: an unavailable row's PR-AUC is *undefined with a count behind it*, not the
+    full stack's PR-AUC wearing this row's label — which is the exact substitution DEV-027
+    shipped once and DEV-033 refused twice.
     """
 
     def __init__(self, runs: SharedFoldRuns, profile: str) -> None:
@@ -651,14 +727,32 @@ class ProfileScorer:
         feature_spec_hash: str,
         seed: int,
     ) -> Any:
-        return self._runs.score(
-            profile=self.profile,
-            train=train,
-            validation=validation,
-            scored=scored,
-            feature_spec_hash=feature_spec_hash,
-            seed=seed,
-        )
+        from oxbow.models.scorer import ChannelUnavailableError
+
+        try:
+            return self._runs.score(
+                profile=self.profile,
+                train=train,
+                validation=validation,
+                scored=scored,
+                feature_spec_hash=feature_spec_hash,
+                seed=seed,
+            )
+        except ChannelUnavailableError as exc:
+            if not exc.is_reportable:
+                raise
+            return ScoreResult(
+                scores={},
+                model_version="",
+                feature_spec_hash=feature_spec_hash,
+                channel_unavailable=ChannelUnavailable(
+                    profile=str(exc.profile),
+                    reason=str(exc),
+                    scoring_mode=str(exc.scoring_mode),
+                    channel_skips=dict(exc.channel_skips),
+                    fold_index=exc.fold,
+                ),
+            )
 
 
 def _slice_identity(frame: pl.DataFrame, name: str) -> tuple[Any, ...]:
@@ -783,27 +877,32 @@ def run_real(
         mlflow_uri=mlflow_uri,
     )
     control = check_leakage_control(variants, expect_outperforms=config.leakage_expect_outperforms)
-    payload = run.to_dict()
-    payload["leakage_control"] = {
-        "detected": control.detected,
-        "control_label": control.control_label,
-        "control_pr_auc": control.control_pr_auc,
-        "best_honest_label": control.honest_label,
-        "best_honest_pr_auc": control.best_honest_pr_auc,
-        "message": control.message,
-    }
-    payload["ablation_caveat"] = _ablation_caveat()
-    payload["ablation_profiles"] = dict(ABLATION_PROFILES)
-    payload["provenance_note"] = (
-        "Figures came from a real per-account corpus run through the P4b scorer, the P5 "
-        "allocator and the ONE splits module; provenance=real_corpus."
+    payload = build_real_payload(
+        run=run,
+        variants=variants,
+        control=control,
+        plan=plan,
+        plan_report=plan_report,
+        fold_column_report=fold_column_report,
+        fits=shared_scores.fits,
     )
-    payload["fold_plan_window"] = plan_report
-    # The fold windows the ONE splits module computed and the harness applied, written out so a
-    # consumer can state which dates a fold covered. They were never absent by design: `splits`
-    # owns the arithmetic and nothing else may recompute it, so serialising the answer is the only
-    # way a downstream table can hold the boundary without becoming a second source of it.
-    payload["fold_windows"] = [
+    ablation_path = out_dir / "ablation_results.json"
+    card_path = out_dir / "model_card.json"
+    serialize.write_json(payload, ablation_path)
+    serialize.write_json(build_model_card_payload(run), card_path)
+    _print_real(variants, control, config, plan, plan_report, fold_column_report)
+    return {"ablation": str(ablation_path.resolve()), "model_card": str(card_path.resolve())}
+
+
+def fold_windows(plan: Any) -> list[dict[str, Any]]:
+    """The fold windows the ONE splits module computed, as the artifact must state them.
+
+    Written out so a consumer can name a boundary without becoming a second source of fold
+    arithmetic: ``splits`` owns the computation and nothing downstream may recompute it, so
+    serialising the answer is the only honest way the ``backtest_fold`` table can hold the five
+    NOT NULL window bounds (DEV-013, and the 45 refusals ``demo_seed`` hits without them).
+    """
+    return [
         {
             "fold_index": fold.index,
             "train_start": fold.train_start_ts.isoformat(),
@@ -817,15 +916,82 @@ def run_real(
         }
         for fold in plan.folds
     ]
-    payload["corpus_fold_column_check"] = fold_column_report
-    payload["honest_model_fits"] = shared_scores.fits
+
+
+def build_real_payload(
+    *,
+    run: BacktestRun,
+    variants: Sequence[VariantResult],
+    control: Any,
+    plan: Any,
+    plan_report: Mapping[str, Any],
+    fold_column_report: Mapping[str, Any],
+    fits: int,
+) -> dict[str, Any]:
+    """The artifact the ``--corpus`` path writes: the run, plus everything only the run knows.
+
+    Extracted from :func:`run_real` because the completion path is the thing that has to be
+    provable: DEV-033's failure was a fold chain that raised and left ``out/backtest/<run>/``
+    empty, so "the run finished" and "the artifact landed" must be testable together without
+    fitting a booster. The fold windows, the generated caveat and the channel-availability
+    tally are written here on every completing run — a degraded fold cannot skip them.
+    """
+    payload = run.to_dict()
+    payload["leakage_control"] = {
+        "detected": control.detected,
+        "control_label": control.control_label,
+        "control_pr_auc": control.control_pr_auc,
+        "best_honest_label": control.honest_label,
+        "best_honest_pr_auc": control.best_honest_pr_auc,
+        "message": control.message,
+    }
+    payload["ablation_caveat"] = _ablation_caveat(variants)
+    payload["ablation_profiles"] = dict(ABLATION_PROFILES)
+    payload["provenance_note"] = (
+        "Figures came from a real per-account corpus run through the P4b scorer, the P5 "
+        "allocator and the ONE splits module; provenance=real_corpus."
+    )
+    payload["fold_plan_window"] = dict(plan_report)
+    # The fold windows the ONE splits module computed and the harness applied, written out so a
+    # consumer can state which dates a fold covered. They were never absent by design: `splits`
+    # owns the arithmetic and nothing else may recompute it, so serialising the answer is the only
+    # way a downstream table can hold the boundary without becoming a second source of it.
+    payload["fold_windows"] = fold_windows(plan)
+    payload["corpus_fold_column_check"] = dict(fold_column_report)
+    payload["honest_model_fits"] = int(fits)
     payload["honest_ablation_rows"] = sum(1 for _ in ABLATION_ROWS)
-    ablation_path = out_dir / "ablation_results.json"
-    card_path = out_dir / "model_card.json"
-    serialize.write_json(payload, ablation_path)
-    serialize.write_json(build_model_card_payload(run), card_path)
-    _print_real(variants, control, config, plan, plan_report, fold_column_report)
-    return {"ablation": str(ablation_path.resolve()), "model_card": str(card_path.resolve())}
+    #: DEV-033 as a document-level tally, beside the per-row block: how many rows measured every
+    #: fold, how many measured fewer, how many measured nothing. A reader who never opens the
+    #: per-row object still cannot mistake an unavailable cell for a zero-performing model, and
+    #: `ablation_caveat` above carries the same counts in prose.
+    payload["ablation_channel_availability"] = {
+        "rows": [
+            {
+                "row_id": variant.row_id,
+                "label": variant.label,
+                "profile": ABLATION_PROFILES.get(variant.row_id),
+                "status": variant.availability.get("status", "measured"),
+                "folds_measured": variant.availability.get("folds_measured", []),
+                "folds_unavailable": [
+                    {
+                        "fold_index": entry.get("fold_index"),
+                        "scoring_mode": entry.get("scoring_mode"),
+                        "reason": entry.get("reason"),
+                    }
+                    for entry in (variant.availability.get("folds_unavailable") or [])
+                ],
+            }
+            for variant in variants
+        ],
+        "measured_rows": sum(
+            1 for v in variants if v.availability.get("status", "measured") == "measured"
+        ),
+        "partial_rows": [v.row_id for v in variants if v.availability.get("status") == "partial"],
+        "unavailable_rows": [
+            v.row_id for v in variants if v.availability.get("status") == "unavailable"
+        ],
+    }
+    return payload
 
 
 def _p5_allocator(economics: object) -> Any:
@@ -879,16 +1045,29 @@ def _print_real(
     )
     print(plan.as_report_line())
     print()
-    header = f"{'variant':38} {'policy':14} {'PR-AUC':>8} {'net_benefit_minor':>18}"
+    header = f"{'variant':38} {'policy':14} {'PR-AUC':>8} {'folds':>7} {'net_benefit_minor':>18}"
     print(header)
     print("-" * len(header))
     for variant in variants:
+        marker = " [CONTROL]" if variant.is_control else ""
+        if not variant.policies:
+            # DEV-033: a row whose channel no fold fitted prints as unavailable, on the same
+            # surface the numbers print on. `_fmt` would answer "undefined" — true of the metric
+            # and useless to an operator, who would read a blank row as a broken terminal. The
+            # fold count and the producer's reason go to the console because nothing here may
+            # leave an unavailable cell looking like a model that scored zero.
+            coverage = f"0/{variant.fold_count}"
+            print(
+                f"{variant.label[:37]:38} {'—':14} {'—':>8} {coverage:>7} " f"UNAVAILABLE{marker}"
+            )
+            continue
         for name, agg in variant.policies.items():
-            marker = " [CONTROL]" if variant.is_control else ""
+            coverage = f"{len(agg.folds)}/{variant.fold_count}"
             print(
                 f"{variant.label[:37]:38} {name:14} {_fmt(agg.pr_auc):>8} "
-                f"{agg.net_benefit_total_minor:>18}{marker}"
+                f"{coverage:>7} {agg.net_benefit_total_minor:>18}{marker}"
             )
+    _print_availability(variants)
     print()
     print(f"LEAKAGE CONTROL: {control.message}")
     full = next((v for v in variants if v.row_id == "full_calibrated"), None)
@@ -901,6 +1080,39 @@ def _print_real(
                 f"{primary.max_drawdown_minor} minor | risk-adjusted benefit ratio "
                 f"{primary.risk_adjusted_ratio:.3f} (is_sharpe_ratio="
                 f"{primary.risk_adjusted_ratio_is_sharpe})"
+            )
+
+
+def _print_availability(variants: Sequence[VariantResult]) -> None:
+    """Print which rows were measured and which were refused, with the producer's reason.
+
+    The artifact's self-disclosure has to reach the terminal too: DEV-033's run exited 0 with
+    nothing written, and the run before it wrote a table whose rows were one measurement. Both
+    were invisible unless someone compared columns. This block names, per row, the folds that
+    answered and the folds that refused, so an operator reads the gap before the card does.
+    """
+    flagged = [
+        variant
+        for variant in variants
+        if variant.availability.get("status") in ("partial", "unavailable")
+    ]
+    if not flagged:
+        print("ROW AVAILABILITY: every row measured on every fold of the plan.")
+        return
+    print("ROW AVAILABILITY — a row below is NOT a zero-performing model:")
+    for variant in flagged:
+        status = variant.availability.get("status")
+        print(
+            f"  {variant.row_id} [{status}] channel "
+            f"{variant.availability.get('profile')!r}: "
+            f"measured {variant.availability.get('measured_count')} of "
+            f"{variant.availability.get('folds_expected')} folds "
+            f"{variant.availability.get('folds_measured')}"
+        )
+        for entry in variant.availability.get("folds_unavailable") or []:
+            print(
+                f"    fold {entry.get('fold_index')} scoring_mode="
+                f"{entry.get('scoring_mode')!r}: {entry.get('reason')}"
             )
 
 

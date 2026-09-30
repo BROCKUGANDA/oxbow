@@ -32,12 +32,17 @@ def _ablation_table(run: BacktestRun) -> list[dict[str, Any]]:
     The table is rendered from ``run.variants`` so it always has exactly the eight rows
     (plus any control arm) that actually ran — the ablation and the model card cannot
     disagree because there is a single source.
+
+    DEV-033 keeps that promise on a corpus whose folds degrade. A row whose fitted channel no
+    fold produced still gets a row here, with ``pr_auc: null`` and its ``channel_status`` /
+    ``channel_availability`` naming the folds that refused and why. Dropping the row would
+    narrow a never-cut table quietly; filling it with another channel's number is the
+    substitution DEV-027 removed. A consumer that needs a number must read the status first.
     """
     rows: list[dict[str, Any]] = []
     for variant in run.variants:
         primary = variant.policies.get("ev_greedy") or variant.policies.get("score_threshold")
-        if primary is None:
-            continue
+        availability = dict(variant.availability)
         rows.append(
             {
                 "row_id": variant.row_id,
@@ -47,16 +52,59 @@ def _ablation_table(run: BacktestRun) -> list[dict[str, Any]]:
                 "provenance": variant.provenance,
                 "is_control": variant.is_control,
                 "control_note": variant.control_note,
-                "pr_auc": primary.pr_auc,
-                "pr_auc_ci_low": primary.pr_auc_ci_low,
-                "pr_auc_ci_high": primary.pr_auc_ci_high,
-                "auroc_comparability_only": primary.auroc,
-                "brier": primary.brier,
-                "net_benefit_total_minor": primary.net_benefit_total_minor,
+                "pr_auc": None if primary is None else primary.pr_auc,
+                "pr_auc_ci_low": None if primary is None else primary.pr_auc_ci_low,
+                "pr_auc_ci_high": None if primary is None else primary.pr_auc_ci_high,
+                "auroc_comparability_only": None if primary is None else primary.auroc,
+                "brier": None if primary is None else primary.brier,
+                "net_benefit_total_minor": (
+                    None if primary is None else primary.net_benefit_total_minor
+                ),
                 "currency": run.config.currency,
+                # The count beside the number: a partial row's PR-AUC is pooled over fewer folds
+                # than the plan, and the card says so on the row itself rather than only in the
+                # fold detail a reader has to open.
+                "folds_reported": 0 if primary is None else len(primary.folds),
+                "folds_expected": variant.fold_count,
+                "channel_status": availability.get("status", "measured"),
+                "channel_availability": availability,
             }
         )
     return rows
+
+
+def _availability_summary(run: BacktestRun) -> dict[str, Any]:
+    """Which rows were measured, which were partial, which measured nothing — with the reasons.
+
+    Generated from the variants, never typed: the card is the surface a reviewer reads, and a
+    table whose unavailable cell looks like a zero-performing model is the failure DEV-033 was
+    written to stop.
+    """
+    flagged = [
+        variant
+        for variant in run.variants
+        if variant.availability.get("status") in ("partial", "unavailable")
+    ]
+    return {
+        "rows_expected": len(run.variants),
+        "rows_measured_on_every_fold": len(run.variants) - len(flagged),
+        "rows_partially_measured": [
+            str(variant.row_id)
+            for variant in flagged
+            if variant.availability.get("status") == "partial"
+        ],
+        "rows_unavailable": [
+            str(variant.row_id)
+            for variant in flagged
+            if variant.availability.get("status") == "unavailable"
+        ],
+        "detail": [variant.availability for variant in flagged],
+        "note": (
+            "A row listed as partially measured or unavailable published no metric for the folds "
+            "its producer refused. Those cells are absent, not zero: no fold's refusal was "
+            "answered with another channel's number."
+        ),
+    }
 
 
 def build_model_card_payload(run: BacktestRun) -> dict[str, Any]:
@@ -104,6 +152,15 @@ def build_model_card_payload(run: BacktestRun) -> dict[str, Any]:
         "currency": config.currency,
         "economics_assumption_line": _assumption_line(config),
         "ablation_table": _ablation_table(run),
+        # DEV-033: the card that prints the table also prints which of its rows are measurements.
+        # A reader who scrolls to the numbers gets the caveat with the numbers, not as a footnote
+        # in a JSON file nobody opens.
+        "ablation_row_availability": _availability_summary(run),
+        "ablation_availability_note": (
+            "Rows with channel_status 'partial' or 'unavailable' have null metric cells for the "
+            "folds their producer refused; the count and the reason are on the row. An "
+            "unavailable cell is never another channel's number, and never a zero."
+        ),
         "per_typology_recall": _typology_block(headline),
         "fairness": headline.fairness if headline else {},
         "perturbations": headline.perturbations if headline else {},
@@ -133,12 +190,23 @@ def _primary_policy_name(variant: Any) -> str:
 
 
 def _headline_variant(run: BacktestRun) -> Any:
+    """The arm the card headlines: the declared configuration that actually measured something.
+
+    DEV-033's fold-level refusals can leave a row with no policy aggregate at all. Such a row is
+    still in the table — that is the point — but it cannot be the headline, because the headline
+    block reads ``policies[…]`` positionally and an empty aggregate would either crash the card
+    or publish a null as the run's one figure. The next declared configuration that did measure
+    takes the slot, and the unavailable row stays visible beside it with its reason.
+    """
     honest = [v for v in run.variants if not v.is_control]
     for want_id in ("full_calibrated", "gbm_with_graph", "threshold_vs_ev"):
         for variant in honest:
-            if variant.row_id == want_id:
+            if variant.row_id == want_id and variant.policies:
                 return variant
-    return honest[0] if honest else (run.variants[0] if run.variants else None)
+    measurable = [v for v in honest if v.policies]
+    if measurable:
+        return measurable[0]
+    return None
 
 
 def _headline_block(variant: Any, config: Any) -> dict[str, Any]:

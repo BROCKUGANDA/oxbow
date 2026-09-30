@@ -26,9 +26,9 @@ note.
 from __future__ import annotations
 
 from collections.abc import Iterator, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Protocol, runtime_checkable
+from typing import Any, Protocol, runtime_checkable
 
 import polars as pl
 
@@ -163,6 +163,37 @@ class AccountScore:
 
 
 @dataclass(frozen=True, slots=True)
+class ChannelUnavailable:
+    """A producer's refusal, as a reportable state instead of an aborted run (DEV-033).
+
+    One fold, one model channel: the fitted stack says it never produced the probability this
+    row's label names, and it names why (its ``scoring_mode`` and the channel skip it recorded
+    while fitting). The harness carries this to the artifact instead of letting it unwind past
+    the write, because a fold that cannot support one channel is a true fact about the corpus —
+    what it must NOT do is become a number. The cell stays empty, with the reason and the count
+    beside it, and the row's other channels keep their measurements.
+
+    This is the same shape the harness already uses for a fold with no alerts above the cutoff
+    (``FoldResult.skipped_reason`` beside a ``None`` precision): undefined, named, counted.
+    """
+
+    profile: str
+    reason: str
+    scoring_mode: str | None = None
+    channel_skips: Mapping[str, str] = field(default_factory=dict)
+    fold_index: int | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "profile": self.profile,
+            "reason": self.reason,
+            "scoring_mode": self.scoring_mode,
+            "channel_skips": dict(self.channel_skips),
+            "fold_index": self.fold_index,
+        }
+
+
+@dataclass(frozen=True, slots=True)
 class ScoreResult:
     """A fold's calibrated output: per-account p, band evidence, model provenance.
 
@@ -171,18 +202,38 @@ class ScoreResult:
     hash it was fitted against — the harness re-checks the fold's frame carries the
     same hash, which is the seam that refuses "trained on one feature set, scored
     with another".
+
+    `channel_unavailable` is the one case where the producer answers with *no* scores: this
+    fold never fitted the channel the row asks for. It is a refusal the harness reports, not a
+    result it prices — see :class:`ChannelUnavailable`. A non-empty `scores` and a marker
+    together would be an account priced twice, so a marked result carries no scores at all.
     """
 
     scores: Mapping[str, AccountScore]
     model_version: str
     feature_spec_hash: str
+    channel_unavailable: ChannelUnavailable | None = None
+
+    def __post_init__(self) -> None:
+        if self.channel_unavailable is not None and self.scores:
+            raise BacktestError(
+                "a ScoreResult that reports an unavailable channel cannot also carry scores: "
+                "the fold either refused this channel or priced the accounts, never both"
+            )
 
     def p_of(self, account_key: str) -> float:
         """Calibrated probability for one account, refusing a silent zero.
 
         03 §A rule 2: never let an unknown become a zero. A missing account is a
-        contract break, not a low score.
+        contract break, not a low score. An unavailable channel raises the same way rather
+        than answering with the zero a caller could accidentally price.
         """
+        if self.channel_unavailable is not None:
+            raise BacktestError(
+                f"channel {self.channel_unavailable.profile!r} reports no score for "
+                f"{account_key!r}: {self.channel_unavailable.reason} — reading it as p=0 would "
+                "book an unfitted model as a model that earned nothing."
+            )
         try:
             return self.scores[account_key].p_calibrated
         except KeyError as exc:
@@ -208,6 +259,12 @@ class Scorer(Protocol):
     passes the fold frame's declared `feature_spec_hash` and expects the scorer to
     refuse if it disagrees with what it trained on — the harness does not paper over
     that by catching and continuing.
+
+    MAY answer with a :class:`ScoreResult` whose ``channel_unavailable`` is set: the fold
+    ran and this row's fitted channel is not among the columns it published. That is a
+    reportable state (DEV-033), not a failure — the harness records it on the row with the
+    producer's reason and keeps walking. Any other exception still aborts the run: a scorer
+    that swallowed its own contract break would put a wrong number in the never-cut table.
     """
 
     def score(
@@ -374,6 +431,7 @@ __all__ = [
     "AllocationResult",
     "Allocator",
     "BacktestError",
+    "ChannelUnavailable",
     "FoldError",
     "FoldProvider",
     "FoldWindow",

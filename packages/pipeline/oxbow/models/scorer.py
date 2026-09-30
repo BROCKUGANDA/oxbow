@@ -37,6 +37,7 @@ the frame it reads is already queue-ordered by ``(-p_fused, account_key)``.
 from __future__ import annotations
 
 import math
+from collections.abc import Mapping
 from typing import Final
 
 import polars as pl
@@ -230,7 +231,59 @@ DEFAULT_PROFILE: Final = "calibrated"
 
 
 class ProfileUnavailableError(FrameContractViolationError):
-    """The fold did not produce the column a profile asked for, so the row is not measurable."""
+    """The fold did not produce the column a profile asked for, so the row is not measurable.
+
+    Kept as a raised type (DEV-027, DEV-033): a caller that needs a probability for this row
+    aborts rather than borrowing another channel's number. What changed is that the refusal now
+    carries *which* channel it refused, structured, so the ablation harness can report the row
+    as unavailable instead of letting the fold chain unwind past the artifact write.
+    """
+
+    def __init__(self, message: str) -> None:
+        super().__init__(message)
+        self.profile: str | None = None
+        self.column: str | None = None
+        self.fold: int | None = None
+        self.scoring_mode: str | None = None
+        self.channel_skips: dict[str, str] = {}
+
+    @property
+    def is_reportable(self) -> bool:
+        """True when this refusal names a fold's missing channel rather than a caller's mistake.
+
+        An unknown profile or a corrupted column is a build fault and must still abort the run;
+        a fold that legitimately never fitted this channel is a fact about the corpus and is
+        reportable as an unavailable cell (DEV-033).
+        """
+        return self.fold is not None and self.column is not None
+
+
+class ChannelUnavailableError(ProfileUnavailableError):
+    """One fold's honest statement: this channel was never fitted here, and here is why.
+
+    Raised by :meth:`WalkForwardScorer._account_scores` when the fold did not publish the column
+    the profile names. The guard is the whole point of DEV-027 and is unchanged — no fallback,
+    no borrowed number — but the refusal now carries the fold's ``scoring_mode`` and its recorded
+    ``channel_skips``, so a harness can publish the row as *unavailable with the producer's
+    reason* and keep walking the remaining folds.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        profile: str,
+        column: str,
+        fold: int,
+        scoring_mode: str,
+        channel_skips: Mapping[str, str],
+    ) -> None:
+        super().__init__(message)
+        self.profile = profile
+        self.column = column
+        self.fold = fold
+        self.scoring_mode = scoring_mode
+        self.channel_skips = dict(channel_skips)
 
 
 class WalkForwardScorer:
@@ -393,11 +446,16 @@ class WalkForwardScorer:
                 "was fit but never scored is a contract break, not an empty result"
             )
         if column not in run.scored.columns:
-            raise ProfileUnavailableError(
+            raise ChannelUnavailableError(
                 f"fold {run.fold}: profile {profile!r} asks for {column!r} and the fold did not "
                 f"publish it. Its scoring_mode is {run.mode!r} and it recorded "
                 f"{dict(run.channel_skips) or 'no channel skips'} — the channels it refused are "
-                "reported, not replaced with another channel's number"
+                "reported, not replaced with another channel's number",
+                profile=profile,
+                column=column,
+                fold=run.fold,
+                scoring_mode=run.mode,
+                channel_skips=dict(run.channel_skips),
             )
         entries: dict[str, AccountScore] = {}
         for row in evaluation.iter_rows(named=True):

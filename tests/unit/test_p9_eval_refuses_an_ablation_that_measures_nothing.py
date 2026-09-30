@@ -159,3 +159,106 @@ def test_a_missing_discrimination_column_does_not_count_as_agreement() -> None:
         agg["brier"] = None
         agg["auroc_comparability_only"] = None
     _refuse_an_ablation_table_whose_model_rows_do_not_differ(_document([first, second]))
+
+
+# ---------------------------------------------------------------------------
+# DEV-033: a fold that could not fit one channel publishes an UNAVAILABLE row. The gate has to
+# keep refusing a real collision in that table, and must not turn an honest absence into one.
+
+
+def _unavailable_variant(row_id: str) -> dict[str, Any]:
+    """The shape the harness writes when no fold fitted this row's channel.
+
+    No policy aggregate at all, and the row's own ledger naming every fold that refused. If a
+    future change "helpfully" filled those cells with the full stack's numbers, the tests below
+    are the ones that catch it — the artifact would look complete and be DEV-027 again.
+    """
+    return {
+        "row_id": row_id,
+        "is_control": False,
+        "channel_availability": {
+            "status": "unavailable",
+            "profile": row_id,
+            "folds_measured": [],
+            "unavailable_count": 5,
+        },
+        "policies": {},
+    }
+
+
+def test_an_unavailable_row_does_not_excuse_two_measured_rows_that_report_one_number() -> None:
+    """The gate still fires beside the new state: absence elsewhere is not a licence to collide."""
+    document = _document(
+        [
+            _variant("scorecard_only", pr_auc=0.059115),
+            _variant("gbm_with_graph", pr_auc=0.059115),
+            _unavailable_variant("gbm_no_graph"),
+        ]
+    )
+
+    with pytest.raises(FileNotFoundError) as caught:
+        _refuse_an_ablation_table_whose_model_rows_do_not_differ(document)
+
+    message = str(caught.value)
+    assert "scorecard_only" in message and "gbm_with_graph" in message
+    assert "gbm_no_graph" not in message, "the unavailable row is not a party to the collision"
+
+
+def test_a_row_marked_unavailable_that_still_carries_another_channel_s_number_is_refused() -> None:
+    """The catch-and-fill fix DEV-033 rejected, caught by the publisher rather than by a reader.
+
+    A row that declares itself unavailable and then publishes the calibrated column's PR-AUC is
+    the imitation in its newest costume: the ledger says "not measured" while the table prints a
+    borrowed measurement. The columns disagree with the label, so the pair is refused.
+    """
+    borrowed = _variant("gbm_no_graph", pr_auc=0.059115)
+    borrowed["channel_availability"] = {
+        "status": "unavailable",
+        "profile": "gbm_no_graph",
+        "folds_measured": [],
+        "unavailable_count": 5,
+    }
+    document = _document(
+        [
+            borrowed,
+            _variant("full_calibrated", pr_auc=0.059115),
+        ]
+    )
+
+    with pytest.raises(FileNotFoundError) as caught:
+        _refuse_an_ablation_table_whose_model_rows_do_not_differ(document)
+    message = str(caught.value)
+    assert "gbm_no_graph" in message and "full_calibrated" in message, message
+
+
+def test_honest_unavailable_rows_are_published_without_a_refusal() -> None:
+    """The gate cannot be the reason a degraded fold is refused publication: absence is not agreement.
+
+    Two rows both unavailable report no measurement, and the gate's own rule is that a null is
+    not a shared number. If this test ever fails, the gate has become an equality detector on
+    nothing and operators will delete it.
+    """
+    _refuse_an_ablation_table_whose_model_rows_do_not_differ(
+        _document(
+            [
+                _unavailable_variant("gbm_no_graph"),
+                _unavailable_variant("gbm_with_graph"),
+                _variant("scorecard_only", pr_auc=0.0591),
+            ]
+        )
+    )
+
+
+def test_a_partial_row_is_judged_on_the_numbers_it_did_measure() -> None:
+    """A 3-of-5 row and a 5-of-5 row reporting one PR-AUC is still one fit, and still refused."""
+    partial = _variant("gbm_no_graph", pr_auc=0.059115)
+    partial["channel_availability"] = {
+        "status": "partial",
+        "profile": "gbm_no_graph",
+        "folds_measured": [0, 1, 4],
+        "unavailable_count": 2,
+    }
+    with pytest.raises(FileNotFoundError):
+        _refuse_an_ablation_table_whose_model_rows_do_not_differ(
+            _document([partial, _variant("full_calibrated", pr_auc=0.059115)])
+        )
