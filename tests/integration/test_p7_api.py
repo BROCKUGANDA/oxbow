@@ -387,6 +387,7 @@ def _seed_warehouse(engine: Any, run_id: str, keys: list[str]) -> dict[str, Any]
                     "p_scorecard": 0.5,
                     "p_gbm": 0.52,
                     "anomaly_norm": 0.3,
+                    "calibration_kind": "calibrated_band",
                     "calibrated_probability": 0.61,
                     "calibration_band": "0.6-0.7",
                     "observed_rate": 0.63,
