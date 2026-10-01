@@ -37,6 +37,46 @@ IBM-AML does have one: median account degree 10 (source: `data/ibm_graph_measure
 
 All money derives from `config/economics.yaml` plus observed data: recovery rate 0.35 (source: `config/economics.yaml#/recovery.rate` · provenance: `declared in config/`) swept over 0.2; 0.35; 0.5 (source: `config/economics.yaml#/recovery.sensitivity_band` · provenance: `declared in config/`); exposure over downstream_hops=1, window_hours=24; review priced at 15,000 (source: `config/economics.yaml#/analyst.cost_per_minute_minor` · provenance: `declared in config/`) minor units per analyst-minute (UGX, 100 minor per major unit, integer minor units end to end, divided only at render time); friction 2,500,000 (source: `config/economics.yaml#/friction_cost_minor` · provenance: `declared in config/`) minor; capacity default_alerts_reviewed=200, review_minutes_per_period=12,000, sweep_max_minutes=30,000, sweep_min_minutes=0, sweep_points=31. **These are illustrative assumptions**, and the UI, the packet and these documents print the assumption block beside the figure rather than summarising it.
 
+## Running the demo
+
+Needs Docker with the Compose v2 plugin, `uv`, and Bun; the full stack takes about 4 GB
+of free RAM while the pipeline runs. The edge is `http://localhost:8080` (Caddy), the
+API alone is `:8000`, the web dev server `:3000`, and Compose publishes Postgres on
+`:5433` because a native installation often owns `:5432` on Windows hosts.
+
+**From a clone, all the way through:**
+
+```bash
+make bootstrap          # uv sync, bun install, pre-commit hooks
+make data               # fetch PaySim + IBM-AML, verify each SHA-256 against the card
+make up                 # Postgres, Redis, MinIO, MLflow, Keycloak, the webhook echo
+make pipeline           # ingest -> graph -> score -> backtest, as one streamed run
+make eval               # regenerate eval.json and re-render these documents
+make up-full            # api, worker, web and the caddy edge on :8080
+```
+
+Then open `http://localhost:8080`. Sign in with the demo analyst: the API prints a
+`/api/auth/demo-token` endpoint and the shell labels every session it issues as
+`source=local-jwt`, because no OIDC issuer is configured in this build.
+
+**What is on screen.** The queue and the case workspace render the landed run: ranked
+accounts, the capacity cutoff with the budget that drew it, money figures with their
+assumption lines beside them, and the decision rail with its hash chain. The command
+view, the scorecard studio and validation answer 503 and name the artifact they are
+waiting for (`policy_summary`, `scorecard_spec`, `backtest_fold`) rather than composing
+a figure from the counts they do have. That is the intended behaviour of a prototype
+with a partial deployment, not a broken page.
+
+**Offline in under two minutes** — `make demo` restores `data/snapshots/demo.dump` and
+boots the stack with no corpus download. The dump is *not committed*: it is a
+`pg_dump` of a warehouse that already holds evidence, made with
+`uv run python scripts/demo_seed.py --create`. That command refuses to write a dump
+unless the warehouse holds a scored run, at least one backtest fold and a landed
+reviewer decision, because a dump of a partial warehouse restores to a blank UI and
+looks like a working demo while it is not one. On the run landed in this repository
+today it refuses for the second of those three: the walk-forward folds never
+completed, which is the same absence validation reports on screen.
+
 ## Commands
 
 | command | what it does |
@@ -75,16 +115,16 @@ A stale document is detectable: run `make eval` and diff these digests.
 
 | artifact | stage | state | bytes | sha256 |
 | ---| ---| ---| ---| --- |
-| `data/graph_measurement.json` | P1a | present | 2,073 | `b3b009856c1ef7d0…` |
-| `data/ibm_graph_measurement.json` | P1a | present | 2,431 | `feafd509443283b5…` |
-| `data/ibm_cycle_measurement.json` | P3a | present | 4,521 | `7663116be7a271ac…` |
-| `data/processed/ibm_typologies.parquet` | P1b | present | 9,357 | `faf682effbf58107…` |
-| `data/download_manifest.json` | P0 | present | 816 | `7496669571de0af7…` |
-| `out/backtest/model_card.json` | P6 | present | 13,078 | `5ecbbbf1a85ca3a3…` |
-| `out/backtest/ablation_results.json` | P6 | present | 226,704 | `f6fe7305783ef9b4…` |
-| `out/p4/scored_rows.parquet` | P4b | **absent** | - files | `absent` |
-| `out/warehouse/drift_period` | P4b | **absent** | - files | `absent` |
-| `out/warehouse/curve_point` | P5 | **absent** | - files | `absent` |
 | `out/audit/audit.jsonl` | P7 | **absent** | - files | `absent` |
+| `out/backtest/ablation_results.json` | P6 | present | 226,704 | `f6fe7305783ef9b4…` |
+| `out/backtest/model_card.json` | P6 | present | 13,078 | `5ecbbbf1a85ca3a3…` |
+| `out/warehouse/curve_point` | P5 | **absent** | - files | `absent` |
+| `data/download_manifest.json` | P0 | present | 816 | `7496669571de0af7…` |
+| `out/warehouse/drift_period` | P4b | **absent** | - files | `absent` |
+| `data/ibm_cycle_measurement.json` | P3a | present | 4,521 | `7663116be7a271ac…` |
+| `data/ibm_graph_measurement.json` | P1a | present | 2,431 | `feafd509443283b5…` |
+| `data/processed/ibm_typologies.parquet` | P1b | present | 9,357 | `faf682effbf58107…` |
+| `data/graph_measurement.json` | P1a | present | 2,073 | `b3b009856c1ef7d0…` |
 | `out/warehouse/runs.jsonl` | P7 | present | 39,363 | `4322d0c8eaab6875…` |
+| `out/p4/scored_rows.parquet` | P4b | **absent** | - files | `absent` |
 

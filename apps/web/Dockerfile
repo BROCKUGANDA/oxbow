@@ -30,10 +30,13 @@ COPY --chown=bun:bun package.json bun.lock ./
 ENV NEXT_TELEMETRY_DISABLED=1
 RUN bun install --frozen-lockfile
 
-# Explicit paths, not `COPY . .`: this repository has no .dockerignore, and `apps/web/` carries a
-# host-built node_modules (Windows binaries, including the @tailwindcss/oxide native package),
-# `.next/` and `tsconfig.tsbuildinfo`. Copying the directory would put those in the image, and the
-# failure would look like a code defect rather than a context error.
+# Explicit paths, not `COPY . .`, and a `.dockerignore` beside this file. Both are needed and
+# neither is redundant: `apps/web/` carries a host-built node_modules (Windows binaries,
+# including the @tailwindcss/oxide native package), `.next/` and `tsconfig.tsbuildinfo`, and
+# copying the directory would put those in the image, where the failure would look like a code
+# defect rather than a context error. The ignore list keeps the *context* from being sent at
+# all; the explicit COPY keeps the image's contents from depending on what the ignore list
+# happens to cover the day someone adds a new build directory.
 COPY --chown=bun:bun src ./src
 COPY --chown=bun:bun public ./public
 COPY --chown=bun:bun next.config.ts biome.json postcss.config.mjs tsconfig.json package.json ./

@@ -87,6 +87,12 @@ desktop.ini
 
 # --- agent plan scratch --------------------------------------------------
 .hermes/
+.claude/
+.qoder/
+
+# The last-day runbook: which shells to open, what only the owner can do, and the
+# state of the local GitHub credential. Repository content it is not.
+SUBMISSION-CHECKLIST.md
 
 # Playwright run artifacts (traces, failure screenshots) -- local evidence, not source.
 apps/web/.test-output/

@@ -157,8 +157,8 @@ is the same sin as widening a leakage guard to get past it.
 holds the commands, all verified working: the TTS path (first beat renders 14.9 s at
 rate -1), `apps/web/scripts/capture-screens.mjs`, and ffmpeg 9.0.1.
 
-Three things only the owner can do, and two of them are hard blockers: `gh auth
-login -h github.com` (the keyring token for `BROCKUGANDA` is invalid, and component
+Three things only the owner can do, and two of them are hard blockers: `gh auth login -h github.com` on the owner's machine (the local credential helper holds no
+valid token for the account, and component
 02 requires a public repo link); the real team names for component 05; and
 confirming the **students only / companies excluded** eligibility rule applies,
 since late entries are rejected outright.
@@ -288,7 +288,7 @@ restoring the exit-139 segfault (DEV-021).
 4. Postgres needs score + fold + decision rows or `demo_seed.py --create` will keep refusing
    — correctly. Then `--restore --boot-budget 90`, re-capture `docs/screens/`, and only then
    film.
-5. Owner-only: `gh auth login`, the public repo push, team names for component 05, and
+5. Owner-only: the interactive GitHub login, the public repo push, team names for component 05, and
    rotating the Autonoma credentials pasted into chat on 2026-09-27.
 6. `make lint` is not green: `ruff check .` and `ruff format --check .` now report zero
    findings (67 findings and 42 unformatted files, cleared by hand — see the lint commit), but

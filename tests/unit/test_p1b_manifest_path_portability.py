@@ -1,7 +1,7 @@
 """Recorded artifact paths must survive being written by one checkout and read by another.
 
 The container image runs the pipeline with its repo at ``/srv`` and the host runs the same
-commands at ``C:\\Users\\HP\\Desktop\\OXBOW``. Both read and write the same
+commands at the repository root on the author's machine. Both read and write the same
 ``data/interim/<source>/run_manifest.json`` through a bind mount, so a manifest written
 inside the container is read by the host and vice versa. That only works if the path
 recorded per batch is relative to the repo root.

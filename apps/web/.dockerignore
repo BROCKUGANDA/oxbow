@@ -1,0 +1,27 @@
+# Docker build context for the web image (compose builds it with `context: ./apps/web`).
+#
+# The Dockerfile copies an explicit path list, so none of this is needed for correctness; it is
+# needed because the daemon tars and sends the whole context before the first RUN, and
+# `apps/web` holds two directories that make that absurd: `node_modules` (~400 MB) and `.next`
+# (a build produced by whatever host last ran it). Sending the latter is worse than slow — a
+# `.next` built on the host would be a bundle whose platform, environment variables and
+# `OXBOW_API_ORIGIN` were decided outside the image, and the image would then claim a build it
+# did not perform.
+
+node_modules/
+.next/
+out/
+.turbo/
+.test-output/
+playwright-report/
+coverage/
+*.tsbuildinfo
+.env
+.env.*
+!.env.example
+src/**/*.test.ts
+src/**/*.test.tsx
+tests/
+scripts/
+CONTRACT-GAPS.md
+Dockerfile

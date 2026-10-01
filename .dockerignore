@@ -1,0 +1,82 @@
+# Docker build context — what never leaves the host.
+#
+# The images already copy an explicit path list rather than `COPY . .` (see
+# apps/api/Dockerfile), so nothing here is load-bearing for *correctness*. It is load-bearing
+# for reproducibility and for the two failure modes a context directory actually causes:
+#
+#   1. Size. `.venv`, `node_modules`, `apps/web/.next` and the corpora under `data/` are
+#      hundreds of MB to gigabytes. The daemon tars the context and sends it before the first
+#      RUN executes, so an unbounded context makes every build slow and every CI cache useless.
+#   2. Staleness. A host `.venv` or a `.next` built by a different platform copied into an
+#      image wins over the image's own `uv sync` / `bun install`, and the image then reports
+#      a dependency set that no lockfile describes. Excluded, the build can only be what
+#      `pyproject.toml` + `uv.lock` + `bun.lock` say it is.
+#
+# Secrets are excluded as a second line of defence: `.env` is already untracked and refused by
+# tests/unit/test_publication_preflight.py, and no Dockerfile takes it as a build arg.
+
+# --- secrets and local identity -------------------------------------------------------------
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+credentials/
+secrets/
+
+# --- python environments and caches ---------------------------------------------------------
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.hypothesis/
+.import_linter_cache/
+.coverage
+coverage.xml
+htmlcov/
+build/
+dist/
+*.egg-info/
+
+# --- js environment and build output (apps/web has its own ignore for its own context) ------
+node_modules/
+apps/web/node_modules/
+apps/web/.next/
+apps/web/out/
+apps/web/.turbo/
+apps/web/.test-output/
+apps/web/playwright-report/
+*.tsbuildinfo
+
+# --- generated artifacts and corpora: rebuilt or fetched, never baked -----------------------
+out/
+artifacts/
+mlruns/
+data/raw/
+data/interim/
+data/snapshots/
+data/processed/
+
+# --- editor, agent and OS state -------------------------------------------------------------
+.git/
+.github/
+.hermes/
+.claude/
+.qoder/
+.idea/
+.vscode/
+*.swp
+.DS_Store
+Thumbs.db
+notebooks/
+*.canvas.data.json
+
+# --- not repository content -----------------------------------------------------------------
+# The last-day runbook is untracked now, so it is absent from a clone already; listed here so
+# it cannot ride into a build context from a working directory that still has it.
+SUBMISSION-CHECKLIST.md

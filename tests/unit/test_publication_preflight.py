@@ -36,6 +36,7 @@ TEXT_SUFFIXES = frozenset(
         ".html",
         ".sh",
         ".ps1",
+        ".ipynb",
         ".cfg",
         ".ini",
         ".example",
@@ -160,14 +161,14 @@ def _carries_developer_path(name: str, text: str) -> bool:
     macOS branches still apply everywhere, which `test_the_home_path_rule_is_narrow` proves.
     """
     if re.search(
-        r"(?:[A-Za-z]:[\\/](?:Users|Documents and Settings)[\\/]\w+|/Users/\w{3,}/)", text
+        r"(?:[A-Za-z]:[\\/]{1,2}(?:Users|Documents and Settings)[\\/]{1,2}\w+|/Users/\w{3,}/)", text
     ):
         return True
     return bool(re.search(r"/home/\w{3,}/", text)) and not name.startswith("Dockerfile")
 
 
 def test_no_developer_home_path_is_committed() -> None:
-    """`C:\\Users\\name\\...` is a username, and it is a path that exists on one machine.
+    """A `C:`-drive Users path is a username, and it is a path that exists on one machine.
 
     Found here for real: apps/web/playwright.config.ts defaulted its browser binary to one
     author's cache directory, which leaked the username into a tree meant for judges and
@@ -203,6 +204,15 @@ def test_the_home_path_rule_is_narrow_but_still_catches() -> None:
         "playwright.config.ts", "/" + "Users/someone/Library/Caches/ms-playwright"
     )
     assert _carries_developer_path("settings.py", "/" + "home/someone/.cache/pip")
+    # The shape a notebook actually leaks. A captured path inside JSON is double-escaped, and
+    # the single-backslash rule passed straight over `notebooks/02_features.ipynb` for nine
+    # days -- `.ipynb` in TEXT_SUFFIXES alone would not have fixed it. Assembled at runtime for
+    # the same reason as its neighbours: this module is one of the files the scan reads.
+    _bs = chr(92)
+    assert _carries_developer_path(
+        "02_features.ipynb", "C:" + _bs * 2 + "Users" + _bs * 2 + "someone" + _bs * 2 + "repo"
+    )
+    assert _carries_developer_path("paths.py", "C:/" + "Users/someone/repo")
     # The one shape exempted: a container-internal home, in the file kind that defines containers.
     assert not _carries_developer_path("Dockerfile", "/home/" + "bun/app")
     # Same string, ordinary file -- the exemption is the filename, not the path.
