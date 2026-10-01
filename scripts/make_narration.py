@@ -6,9 +6,9 @@ its slot budget live in one place — the beat table under `## 03 · Demo video`
 beats get reworded, the video is re-shot against the old words, and the submission ships a
 voiceover that contradicts its own written script.
 
-So this reads the table, synthesizes one WAV per beat with `scripts/speak.ps1` (Windows
-`System.Speech`, `SetOutputToWaveFile` — `SetWaveFile` does not exist on that API), and then
-reports each beat's *measured* audio length against the slot the table allocates for it.
+So this reads the table, synthesizes one WAV per beat with a neural voice through `edge-tts`
+(fetched with `uvx --from edge-tts`, so nothing is added to the project's dependencies), and
+then reports each beat's *measured* audio length against the slot the table allocates for it.
 That last part is the reason the script exists as a program rather than as a comment: TTS
 length is not what a prose reading time suggests, and a 3:30 plan whose beats actually total
 4:50 fails the Devpost limit only after the video has been cut.
@@ -22,6 +22,7 @@ The beats are joined for `ffmpeg -f concat` by the `beats.txt` this writes besid
 from __future__ import annotations
 
 import argparse
+import os
 import re
 import subprocess
 import sys
@@ -30,8 +31,13 @@ from pathlib import Path, PurePosixPath
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SCRIPT_SOURCE = REPO_ROOT / "SUBMISSION.md"
-SPEAK_PS1 = REPO_ROOT / "scripts" / "speak.ps1"
 OUT_DIR = REPO_ROOT / "out" / "narr"
+
+#: Microsoft's Kenyan English neural voice. `en-KE-AsiliaNeural`/`ChilembaNeural` are the two
+#: `en-KE` voices on the service; Asilia is the clearer of the pair on technical prose.
+VOICE: str = "en-KE-AsiliaNeural"
+#: The voice's own pace. A slowed read overruns the script's beat slots (see `synthesize`).
+RATE: str = "+0%"
 
 #: Matches `| 1 | 0:00-0:20 | Command strip | "narration" |`. The slot column is written with
 #: an en dash (U+2013) in `SUBMISSION.md` and the header row uses an ordinary hyphen, so both
@@ -145,26 +151,73 @@ def paths_to_wav(rows: list[dict[str, object]], out_dir: Path) -> list[Path]:
     return [out_dir / f"beat{row['number']}.wav" for row in rows]
 
 
-def synthesize(beat: dict[str, object], out: Path) -> None:
+def _tool_env() -> dict[str, str]:
+    """This process's environment with the Python locators stripped.
+
+    `uv run python scripts/make_narration.py` exports `PYTHONHOME`, `PYTHONPATH`,
+    `VIRTUAL_ENV` and `UV_PROJECT_ENVIRONMENT` for *this* interpreter, and `uvx` honours them
+    when it resolves the tool's own interpreter -- which is a different Python. The failure is
+    `Could not import runpy._run_module_as_main`, and it looks like a broken install rather
+    than an inherited variable, so the strip is named here rather than left to the next reader.
+    """
+    drop = {"PYTHONHOME", "PYTHONPATH", "VIRTUAL_ENV", "UV_PROJECT_ENVIRONMENT", "PYTHONEXECUTABLE"}
+    return {key: value for key, value in os.environ.items() if key not in drop}
+
+
+def synthesize(beat: dict[str, object], out: Path, *, voice: str = VOICE) -> None:
+    """One beat, spoken by a neural voice, landed as the canonical WAV the timeline splices.
+
+    `edge-tts` rather than `scripts/speak.ps1`: the local `System.Speech` synthesis is the
+    desktop SAPI voice, which is intelligible and unmistakably a 2010 screen reader, and a
+    submission's only audio is the one thing a judge cannot skim. The voice is Kenyan English
+    for the same reason the interface prints East Africa Time and UGX — this is a mobile-money
+    network in that region, and a generic American voice would be the first thing that made
+    the framing look like set dressing.
+
+    Rate is `+0%`. The earlier plan called for a slightly slowed read; measured against the
+    beat slots, a slowed voice overruns the 3:30 script and the last beat lands on a frozen
+    frame, so the pace is the voice's own and the *slots* absorb the difference.
+
+    The MP3 is transcoded to 24 kHz mono 16-bit because `build_timeline` refuses to splice two
+    beats whose sample formats differ, and it would rather refuse than concatenate silence into
+    the wrong place.
+    """
+    mp3 = out.with_suffix(".mp3")
+    if mp3.is_file():
+        mp3.unlink()
     result = subprocess.run(
         [
-            "powershell",
-            "-NoProfile",
-            "-ExecutionPolicy",
-            "Bypass",
-            "-File",
-            str(SPEAK_PS1),
-            "-Text",
+            "uvx",
+            "--from",
+            "edge-tts",
+            "edge-tts",
+            "--voice",
+            voice,
+            "--rate",
+            RATE,
+            "--text",
             str(beat["narration"]),
-            "-Out",
-            str(out),
+            "--write-media",
+            str(mp3),
         ],
+        capture_output=True,
+        text=True,
+        check=False,
+        env=_tool_env(),
+    )
+    if not mp3.is_file() or mp3.stat().st_size < 1_024:
+        raise SystemExit(
+            f"beat {beat['number']}: {voice} produced no audio. "
+            f"{(result.stderr or result.stdout)[:400]}"
+        )
+    converted = subprocess.run(
+        ["ffmpeg", "-y", "-loglevel", "error", "-i", str(mp3), "-ar", "24000", "-ac", "1", str(out)],
         capture_output=True,
         text=True,
         check=False,
     )
     if not out.is_file():
-        raise SystemExit(f"beat {beat['number']}: no wave written\n{result.stderr[:400]}")
+        raise SystemExit(f"beat {beat['number']}: ffmpeg could not write {out.name}: {converted.stderr[:400]}")
 
 
 def write_concat_list(paths: list[Path]) -> Path:

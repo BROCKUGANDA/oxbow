@@ -47,17 +47,17 @@ const ACCOUNT_KEY = process.env.OXBOW_DEMO_ACCOUNT_KEY;
 const FRAMES_DIR = process.env.OXBOW_DEMO_FRAMES_DIR ?? 'out/video/frames';
 
 /** How often a frame is taken, in milliseconds. At 500 ms a 3:30 tour is roughly 420 frames. */
-const FRAME_EVERY_MS = 500;
+const FRAME_EVERY_MS = 150;
 
 /** Beat slots, ending on the second `SUBMISSION.md` §03 and the narration timeline agree on. */
 const BEATS: readonly { number: number; label: string; path: string; to: number }[] = [
-  { number: 1, label: 'command', path: '/dashboard', to: 20 },
-  { number: 2, label: 'scorecard', path: '/scorecard', to: 50 },
-  { number: 3, label: 'network', path: '/network?account=DEMO_ACCOUNT&hops=2', to: 85 },
-  { number: 4, label: 'queue', path: '/alerts', to: 120 },
-  { number: 5, label: 'case', path: '/cases/DEMO_CASE', to: 155 },
-  { number: 6, label: 'validation', path: '/model', to: 180 },
-  { number: 7, label: 'closing', path: '/dashboard', to: 210 },
+  { number: 1, label: 'queue', path: '/alerts', to: 55 },
+  { number: 2, label: 'case', path: '/cases/DEMO_CASE', to: 105 },
+  { number: 3, label: 'network', path: '/network?account=DEMO_ACCOUNT&hops=2', to: 135 },
+  { number: 4, label: 'command-refusal', path: '/dashboard', to: 150 },
+  { number: 5, label: 'scorecard-refusal', path: '/scorecard', to: 165 },
+  { number: 6, label: 'validation-refusal', path: '/model', to: 190 },
+  { number: 7, label: 'closing', path: '/alerts', to: 205 },
 ];
 
 /** Why the tour cannot be filmed yet, or null when it can. Computed at collection so a missing
@@ -144,8 +144,23 @@ test.describe('the demo tour', () => {
 
     console.log(`[tour] ${frame} frames into ${FRAMES_DIR}`);
     expect(existsSync(join(FRAMES_DIR, 'frame000001.jpg')), 'the first frame is missing').toBe(true);
-    // Fewer than ~200 frames means the clock was not held: the loop exited early and the video
-    // would run out of picture while the narration is still speaking.
-    expect(frame, 'a 3:30 tour at one frame per 500 ms').toBeGreaterThan(200);
+    // The gate is the clock, not a frame count tuned to an older cut. A take that exited early
+    // would run out of picture while the narration is still speaking, so what has to be proven
+    // is that the tour ran to the end of its last slot, and that it framed what it held.
+    const elapsedMs = Date.now() - started;
+    const last = BEATS.at(-1);
+    if (last === undefined) throw new Error('the tour script has no beats');
+    expect(
+      elapsedMs,
+      `the tour stopped at ${(elapsedMs / 1000).toFixed(0)} s, short of beat ${last.number}`,
+    ).toBeGreaterThanOrEqual(last.to * 1000 - 2_000);
+    // One frame every two seconds is the floor the encoder can be given without the slow pan
+    // strobing. A screenshot of a 2880-by-1800 page costs more than `FRAME_EVERY_MS` to write,
+    // which is why the cadence is asserted against the seconds actually held rather than
+    // against `FRAME_EVERY_MS` itself.
+    expect(
+      frame,
+      `${frame} frames over ${(elapsedMs / 1000).toFixed(0)} s is under one frame every two seconds`,
+    ).toBeGreaterThanOrEqual(Math.floor(elapsedMs / 2_000));
   });
 });

@@ -277,19 +277,25 @@ no corpus bytes committed, and every `license:` in `config/sources.yaml` named i
 
 ## 03 · Demo video — script and narration
 
-Target length **3:30** (limit 2–5 min). Capture at 1440×900, device scale 2, from the live app
-serving landed evidence; narration is generated with the local TTS voice at a slightly slowed
-rate (see `SUBMISSION-CHECKLIST.md` for the exact commands).
+Target length **3:25** (limit 2–5 min). Capture at 1440×900, device scale 2, from the live app
+serving landed evidence; narration is a neural text-to-speech read at its own pace (see
+`SUBMISSION-CHECKLIST.md` for the exact commands), and the slots below are the clock the video
+is cut to — `scripts/make_narration.py` measures every beat's real audio length against them.
+
+The cut is the deployment's own honesty, in order: the two screens that serve a landed run, the
+screen that reports an absent graph, and then the three that refuse. The refusals are beats, not
+cropped out.
 
 | # | Beat | On screen | Narration (read as written) |
 |---|---|---|---|
-| 1 | 0:00–0:20 | Command strip | "OXBOW is a financial-crime analytics tool for mobile money networks. It scores accounts, it explains every score twice, and it prices the review queue against the analyst capacity that actually exists." |
-| 2 | 0:20–0:50 | Scorecard route | "Two models run side by side. On the left, a weight-of-evidence scorecard: whole-number points per feature, and the points sum exactly to the score, so a human can recalculate it. On the right, a gradient boosted model with per-account SHAP. Where the two disagree is its own work queue." |
-| 3 | 0:50–1:25 | Network explorer | "The graph layer only counts a cycle if it respects time. Each hop has to move value forward, and the loop has to close inside the window. A two-hop round trip from an account back to itself is excluded on purpose — that is reinvestment, not a network." |
-| 4 | 1:25–2:00 | Queue + capacity line | "This dashed line is the capacity cutoff, and it is the part most tooling leaves out. Above it, what the team can review this period at the configured analyst minutes. Below it, the alerts that will not be looked at, and the money that consciously goes unexamined. Choosing not to look is on the record rather than implied by a scrollbar." |
-| 5 | 2:00–2:35 | Case workspace | "Opening a case: the score, the evidence, the counterparty subgraph, and the decision. Each decision writes three rows in one transaction — the decision itself, a link in a SHA-256 hash chain, and an outbox row that carries the bundle onward. Reversals are new rows, never edits, and the export packet re-walks the chain and refuses to render if a link is broken." |
-| 6 | 2:35–3:00 | Validation / ablation | "Every number is produced by five expanding walk-forward windows with a thirty-day embargo, asserted equal to the longest feature lookback, and shuffling is forbidden by the schema. The ablation table includes a deliberately leaking control row, so the harness is proven to be capable of catching leakage." |
-| 7 | 3:00–3:30 | Limitations + disclaimer | "PaySim, the standard simulator in this space, has no network at all — median degree one, and zero time-respecting cycles. We pre-committed that test before writing graph code, it failed, and it changed the architecture. Twelve named weaknesses are in the limitations file, and every currency figure on this site is a function of one assumptions file, printed beside it." |
+| 1 | 0:00–0:55 | Queue + capacity line | "OXBOW scores mobile money accounts for financial crime, and then prices the review queue against the analyst time that actually exists. This is a live deployment over a landed run. Forty three thousand accounts scored, half a million rule hits, and the dashed line across the screen is the capacity cutoff. Above it, three accounts are funded at twelve thousand analyst minutes. Below it, the rest of the queue, which will not be looked at. Every card states its band, its score, its exposure and its expected value, and beside every money figure sits the list of assumptions that figure is a function of. This one says the probability is uncalibrated, because the validation fold held eighteen positives and the floor is fifty. It prints that, instead of showing you a rate it does not have." |
+| 2 | 0:55–1:45 | Case workspace | "Opening the top account. The score comes apart into the rules that fired, the evidence events behind them, and the transactions themselves. A decision here is not an edit. Escalating writes the decision row, a link in a SHA two fifty six hash chain, and an outbox row, in one transaction, and this case is held for a second reviewer because the exposure crosses the four eyes threshold. The banner across the top is the deployment naming which optional components are not running, and it stays on screen while they are not. Nothing on this page is composed out of a count when the measurement is missing." |
+| 3 | 1:45–2:15 | Network explorer | "The network explorer walks two hops from an account. This one has no stored edge at two hops, and the screen says so, rather than drawing one node on an empty canvas to look like a graph. That is a deliberate finding. The standard simulator in this space has a median degree of one and no time respecting cycles at all. We pre committed that test before writing any graph code, it failed, and it changed the architecture." |
+| 4 | 2:15–2:30 | Command view, refusing | "The command view answers fifty three. This run stored no policy summary, so there are no money tiles to show. Every tile on that screen is a stored measurement, and none of them is composed here from counts." |
+| 5 | 2:30–2:45 | Scorecard studio, refusing | "The scorecard studio refuses the same way. It will not print points without the scaling constants those points were built from, because that would leave the reader to guess the units." |
+| 6 | 2:45–3:10 | Validation, refusing, and what was measured | "And validation reports that no backtest folds landed, instead of drawing empty axes that would read as the model having found nothing. What was measured is still on the record. Five expanding walk forward windows with a thirty day embargo, asserted equal to the longest feature lookback, and an expected shortfall on the unreviewed remainder that got worse by seven and a half million." |
+| 7 | 3:10–3:25 | Closing on the queue | "Twelve named weaknesses in the limitations file, and every currency figure on this site is a function of one assumptions file, printed beside it. OXBOW is a research prototype over historical, de identified data." |
+
 
 **Required on-screen at all times:** the research-prototype disclaimer is in the footer of
 every route and on page one of every exported packet — asserted by
@@ -359,19 +365,28 @@ entries are rejected outright, so this is worth settling before the deadline.
 Eight interface captures, produced by `node apps/web/scripts/capture-screens.mjs` into
 `docs/screens/` (2× device scale, 1440×900):
 
-| File | Route | What it shows |
-|---|---|---|
-| `01-dashboard.png` | Command | headline loss avoided with its assumption line, band distribution, latest patterns |
-| `02-alerts-queue.png` | Queue | virtualised alert table, the capacity cutoff line and the value below it |
-| `03-network-explorer.png` | Network | Cytoscape subgraph with cycle/flagged/velocity overlays and a keyboard route into the canvas |
-| `04-scorecard.png` | Scorecard | WOE points per feature, the disagreement queue, PSI drift |
-| `05-case-workspace.png` | Case | score header, SHAP, evidence, four-eyes decision write with the audit hash |
-| `06-policy-frontier.png` | Policy | threshold-versus-EV frontier in money, greedy against CP-SAT |
-| `07-model-validation.png` | Validation | walk-forward folds, ablation table, fairness and perturbation |
-| `08-state-gallery.png` | `/dev/states` | every state the app can be in: 5 empty states, 4 error tiers, matched-geometry skeletons, degraded banners |
+| File | Route | Source | What it shows |
+|---|---|---|---|
+| `01-dashboard.png` | Command | **live run** | the refusal, and its reason: this run stored no policy summary, so there are no money tiles to compose from counts |
+| `02-alerts-queue.png` | Queue | **live run** | 43,046 scored accounts, three funded at 12,000 analyst-minutes, the capacity cutoff drawn at rank 3, and every money figure with its assumption lines beside it |
+| `03-network-explorer.png` | Network | **live run** | an account with no stored edge at two hops, stated as an empty state with the window it was measured over and controls to widen it |
+| `04-scorecard.png` | Scorecard | fixture build | WOE points per feature, the disagreement queue, PSI drift |
+| `05-case-workspace.png` | Case | **live run** | score 0.554 held for four-eyes at 7.4m UGX, its reason codes, its evidence, and one hash-chained decision already written |
+| `06-policy-frontier.png` | Policy | fixture build | threshold-versus-EV frontier in money, greedy against CP-SAT |
+| `07-model-validation.png` | Validation | **live run** | the refusal, and its reason: no backtest folds landed, which is not the same claim as empty axes |
+| `08-state-gallery.png` | `/dev/states` | fixture build | every state the app can be in: 5 empty states, 4 error tiers, matched-geometry skeletons, degraded banners |
 
-**Status of the current set:** they are honest but not yet persuasive — they were captured
-against the read-only warehouse, so the header carries real provenance while the panes show
-skeletons and one pane correctly says *"policy_summary does not exist in the null-file
-warehouse … needs Postgres"*. Re-capture after the demo snapshot lands (component 03 depends
-on the same thing). The `08-state-gallery.png` set is already submission-quality.
+**Status of the set.** Five images are the live deployment serving the landed run
+(`01M3H8WG436R394NZT2GS1KG69`), and two of those five show a pane refusing — deliberately. The
+other three are the bundled fixture, labelled as such in the table, because the scorecard,
+policy and state-gallery screens have no landed evidence to render yet: `scorecard_spec` has
+no producer that writes it, `policy`/`policy_summary` are not declared in
+`oxbow.ports.warehouse.WAREHOUSE_TABLES`, and the walk-forward folds for this run were never
+completed. Each of those routes answers 503 naming the missing artifact on the live
+deployment, which is what `01` and `07` photograph.
+
+The degraded banners visible across the live captures are the deployment listing the optional
+components that are not running here (redis, mlflow, the CP-SAT solver, the narrative
+summariser, OIDC). They are printed on every pane because the response says so; the product
+does not hide a partial deployment behind a clean-looking screen.
+

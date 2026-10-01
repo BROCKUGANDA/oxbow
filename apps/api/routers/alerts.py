@@ -42,6 +42,7 @@ from api.routers.common import (
     assumption_lines,
     build_meta,
     build_page_meta,
+    reason_lines,
 )
 from api.schemas.catalog import AlertFacets, AlertQueue, AlertRow
 from api.schemas.common import Envelope, ObjectPageEnvelope, envelope
@@ -156,7 +157,7 @@ def list_alerts(
                     "observed_rate": row["observed_rate"],
                     "calibration_n": row["calibration_n"],
                     "predicted_typology": row.get("predicted_typology"),
-                    "reasons": _reasons(row.get("reason_codes")),
+                    "reasons": reason_lines(row.get("reason_codes"), limit=3),
                     "exposure": money(
                         row.get("exposure_minor"), row.get("currency"), decimals=decimals
                     ),
@@ -404,32 +405,6 @@ def _required_datetime(row: dict[str, Any], field: str, *, key: str) -> datetime
         f"alert row for account {key!r} has no usable {field!r} (got {value!r}); the queue "
         "will not show an activity window it did not measure"
     )
-
-
-def _reasons(raw: Any) -> list[dict[str, Any]]:
-    """The top reason codes, as objects, so the card renders label plus points.
-
-    Stored in two shapes across pipeline versions — a list of strings and a list of
-    ``{code,label,points}`` maps. Both are read; a reason with no points is reported
-    with ``points`` null rather than zero, because zero points is a claim about the
-    scorecard and null is a claim about the record.
-    """
-    if not isinstance(raw, list):
-        return []
-    reasons: list[dict[str, Any]] = []
-    for item in raw:
-        if isinstance(item, dict):
-            points = item.get("points")
-            reasons.append(
-                {
-                    "code": str(item.get("code") or item.get("reason_code") or "unspecified"),
-                    "label": str(item.get("label") or item.get("description") or ""),
-                    "points": None if points is None else int(points),
-                }
-            )
-        else:
-            reasons.append({"code": str(item), "label": "", "points": None})
-    return reasons[:3]
 
 
 def _parse_bands(values: list[str] | None) -> list[str] | None:

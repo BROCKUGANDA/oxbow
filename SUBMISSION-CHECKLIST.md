@@ -79,19 +79,35 @@ uv run alembic -c apps/api/alembic.ini upgrade head    # must read 0004_mc_inter
    rendered evidence before writing it (`a04e7c3`). Do not defeat that guard: the previous set of
    eleven committed images showed the state gallery rather than the product precisely because
    taking a picture cannot fail.
-7. **Video** — narration is already synthesized and slot-timed (`out/narr/timeline.wav`, 206.6 s,
-   seven beats measured against their own slots, generated from `SUBMISSION.md` §03 so the voice
-   cannot drift from the words a judge reads). Then:
+7. **Video** — `out/oxbow-demo.mp4`, 204.1 s (3:24), 1440×900, verified by reading the
+   container back with ffprobe. Three steps, in this order, because each one measures the last:
    ```bash
+   # 1. Narration. The beat table in SUBMISSION.md §03 is the only script; this reads it,
+   #    speaks each beat with a neural voice (en-KE-AsiliaNeural through `uvx --from edge-tts`,
+   #    at its own pace — not a slowed read, which overran the slots), and FAILS on any beat
+   #    whose measured audio does not fit its own slot.
+   uv run python scripts/make_narration.py
+
+   # 2. Frames. Run from apps/web, and note that `FRAMES_DIR` is relative to the cwd: either
+   #    set OXBOW_DEMO_FRAMES_DIR or move out/video/frames up to the repo root before encoding.
    cd apps/web
    OXBOW_LIVE_WEB_BASE_URL=http://127.0.0.1:3100 OXBOW_DEMO_CASE_ID=<id> \
    OXBOW_DEMO_ACCOUNT_KEY=<key> node node_modules/@playwright/test/cli.js test demo-tour.spec.ts
-   cd ../.. && uv run python scripts/make_demo_video.py
+
+   # 3. Encode. fps is derived from the frame count over the narration's own duration.
+   cd .. && uv run python scripts/make_demo_video.py
    ```
    Not Playwright's `video: 'on'` — that needs a private ffmpeg build this project never
    downloads. Frames + system ffmpeg instead. The tour **skips by design** until a live origin
    serving landed numbers exists, because a tour of the bundled fixture would demonstrate the
-   fixture.
+   fixture. The seven beats are the queue, the case, the empty graph, and three refusals — the
+   refusals are in the film on purpose, and the narration says what each one is refusing for.
+   Two screens are unfilmable on this deployment today (`/policy` answers 404 for want of an
+   active policy row, `/network` draws no canvas because the run stored no edges), and the
+   degraded banners on every pane are the deployment naming redis, mlflow, the solver, the
+   summariser and OIDC as not running. Starting those containers was not attempted: another
+   project on this machine holds port 6379, and bouncing shared infrastructure to make a demo
+   look better is not a trade worth making the day of.
 
 ## Do not do these, even for time
 

@@ -52,7 +52,11 @@ def frames() -> list[Path]:
 
 def run(argv: list[str]) -> int:
     print("$ " + " ".join(part.replace("\\", "/") for part in argv))
-    return subprocess.call(argv, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    # Output inherited, not piped. `subprocess.PIPE` with nobody reading it fills the OS buffer
+    # after a few hundred frames of ffmpeg's per-frame progress, ffmpeg blocks writing, and the
+    # call hangs until something kills it -- which reports as exit 143 and looks like an
+    # encoding failure rather than a full pipe.
+    return subprocess.call(argv)
 
 
 def probe_seconds(path: Path) -> float | None:

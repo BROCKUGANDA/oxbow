@@ -44,6 +44,7 @@ from api.routers.common import (
     build_meta,
     build_page_meta,
     page_params,
+    reason_lines,
 )
 from api.schemas.case import (
     CalibrationBand,
@@ -107,9 +108,24 @@ def case_detail(
         )
     economic = economic_rows[0]
 
+    # Every one of these reads names its columns. The row schemas below are
+    # `extra="forbid"`, and each of these tables carries `run_id`/`account_key` -- the keys
+    # the read was already filtered by, and already stated on the case header -- plus an
+    # internal `id`. Passing the whole row through `model_validate` made
+    # `GET /api/cases/{case_id}` a 500 on any account with a rule hit, which is every
+    # account in a landed run; `routers/alerts.py` documents the same trap for its own join.
     points, _ = source.select(
         "scorecard_point",
         where={"run_id": run_id, "account_key": account_key},
+        columns=[
+            "attribute",
+            "bin_label",
+            "points",
+            "woe",
+            "reason_code",
+            "population_share",
+            "bad_rate",
+        ],
         order="points",
         descending=False,
         allow_missing=True,
@@ -117,18 +133,25 @@ def case_detail(
     shap, _ = source.select(
         "shap_contribution",
         where={"run_id": run_id, "account_key": account_key},
+        columns=["feature", "shap", "feature_value", "rank", "evidence_txn_ids"],
         order="rank",
         allow_missing=True,
     )
     rule_hits, _ = source.select(
         "rule_hit",
         where={"run_id": run_id, "account_key": account_key},
+        columns=["rule_id", "rule_name", "typology", "fired", "observed", "threshold", "detail"],
         order="rule_id",
         allow_missing=True,
     )
     evidence, _ = source.select(
         "evidence_event",
         where={"run_id": run_id, "account_key": account_key},
+        # Named, not `*`: `EvidenceRow` is `extra="forbid"`, and the row carries the two
+        # keys it was selected *by*, which are already on the case header. Splatting the
+        # whole row into the schema made `GET /api/cases/{id}` a 500 on any run that has
+        # evidence -- the same failure `routers/alerts.py` documents for its own join.
+        columns=["id", "occurred_at", "kind", "label", "txn_id", "rule_id", "object_key", "detail"],
         order="occurred_at",
         descending=True,
         limit=EVIDENCE_CAP,
@@ -169,7 +192,7 @@ def case_detail(
         ),
         predicted_typology=score.get("predicted_typology"),
         model_version=str(score["model_version"]),
-        reason_codes=list(score.get("reason_codes") or []),
+        reason_codes=reason_lines(score.get("reason_codes")),
         rule_ids=list(score.get("rule_ids") or []),
         economics=_economics_block(
             economic, decimals=decimals, assumptions_config=container.economics
@@ -334,6 +357,30 @@ def _decisions(container: Container, case_id: str) -> list[dict[str, Any]]:
     return out
 
 
+def _assumption_value(value: Any) -> float | int | str:
+    """A stored assumption knob, in the one shape `AssumptionLine.value` admits.
+
+    The economics row keeps the run's whole config copy as JSONB, so the values arriving here
+    are not all scalars: `recovery.sensitivity_band` is a list, `review_minutes_by_band` is a
+    dict, and a knob the run left unset is null. The schema allows float, int or str because
+    a reader sees this beside a money figure, so the structured ones are rendered in the
+    words the rest of the API already uses for them, and an unset one is *named as unset*
+    rather than dropped or replaced by a zero -- the rule that an unknown must never become
+    a zero applies to an assumption line exactly as it does to a measurement.
+    """
+    if value is None:
+        return "not set in the run's economics copy"
+    if isinstance(value, bool):
+        return str(value).lower()
+    if isinstance(value, int | float | str):
+        return value
+    if isinstance(value, list | tuple):
+        return ", ".join(str(item) for item in value)
+    if isinstance(value, dict):
+        return ", ".join(f"{key}={item}" for key, item in sorted(value.items()))
+    return str(value)
+
+
 def _economics_block(
     economic: dict[str, Any], *, decimals: int, assumptions_config: Any
 ) -> EconomicsBlock:
@@ -360,7 +407,7 @@ def _economics_block(
         assumptions=[
             {
                 "key": str(key),
-                "value": value,
+                "value": _assumption_value(value),
                 "source": f"economics row (run copy) / config key {key}",
                 "note": "stored with the run so a later edit of economics.yaml cannot "
                 "reinterpret this money",

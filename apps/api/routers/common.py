@@ -141,6 +141,36 @@ def build_page_meta(
     )
 
 
+def reason_lines(raw: Any, *, limit: int | None = None) -> list[dict[str, Any]]:
+    """The stored reason codes, as objects, so a card renders label plus points.
+
+    Stored in two shapes across pipeline versions — a list of strings and a list of
+    ``{code,label,points}`` maps. Both are read; a reason with no points is reported with
+    ``points`` null rather than zero, because zero points is a claim about the scorecard and
+    null is a claim about the record.
+
+    Shared by the queue and the case workspace because the two shapes are a property of the
+    data, not of a screen: an implementation in one router left the other to 500 on the
+    string shape, which is every row a landed run writes.
+    """
+    if not isinstance(raw, list):
+        return []
+    reasons: list[dict[str, Any]] = []
+    for item in raw:
+        if isinstance(item, dict):
+            points = item.get("points")
+            reasons.append(
+                {
+                    "code": str(item.get("code") or item.get("reason_code") or "unspecified"),
+                    "label": str(item.get("label") or item.get("description") or ""),
+                    "points": None if points is None else int(points),
+                }
+            )
+        else:
+            reasons.append({"code": str(item), "label": "", "points": None})
+    return reasons if limit is None else reasons[:limit]
+
+
 def assumption_lines(economics: Economics) -> list[AssumptionLine]:
     """The four assumptions every money figure on this response depends on.
 
